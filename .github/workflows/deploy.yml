@@ -1,0 +1,24 @@
+name: Vercel Deploy
+
+on:
+  push:
+    branches:
+      - master
+      - Testing
+
+jobs:
+  deploy-production:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Production Deployment
+        run: |
+          curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK_MASTER }}
+
+  deploy-preview:
+    if: github.ref == 'refs/heads/Testing'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel Preview Deployment
+        run: |
+          curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK_TESTING }}

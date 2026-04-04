@@ -1,0 +1,29 @@
+name: Scheduled Fleet Intelligence Analysis
+
+on:
+  schedule:
+    # Runs every hour (at minute 0)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  analyze_fleet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Trip Detection
+        run: |
+          curl -X POST "https://${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co/functions/v1/fleet-intelligence?action=detect-trips" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+          -H "Content-Type: application/json"
+
+      - name: Trigger Driver Scoring
+        run: |
+          curl -X POST "https://${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co/functions/v1/fleet-intelligence?action=calculate-scores" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+          -H "Content-Type: application/json"
+
+      - name: Trigger Insight Generation
+        run: |
+          curl -X POST "https://${{ secrets.SUPABASE_PROJECT_ID }}.supabase.co/functions/v1/fleet-intelligence?action=generate-insights" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+          -H "Content-Type: application/json"

@@ -1,0 +1,58 @@
+name: vehicle_telemetry
+description: A Flutter mobile app for real-time vehicle telemetry monitoring via OBD-II
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Supabase
+  supabase_flutter: ^2.5.0
+
+  # Local storage
+  shared_preferences: ^2.2.2
+
+  # Push notifications
+  flutter_local_notifications: ^17.0.0
+
+  # State management
+  provider: ^6.1.1
+
+  # UI components
+  cupertino_icons: ^1.0.6
+  syncfusion_flutter_gauges: ^25.1.35
+
+  # Utilities
+  permission_handler: ^11.3.0
+  uuid: ^4.3.3
+  flutter_dotenv: ^5.1.0
+  
+  # Deep Linking
+  app_links: ^6.3.2
+
+  # HTTP client (used by invite_accept_screen to call edge functions)
+  http: ^1.2.0
+
+  # GPS location tracking (background route recording)
+  geolocator: ^12.0.0
+
+  # Network connectivity detection (heartbeat classification)
+  connectivity_plus: ^5.0.2
+
+  # Charts
+  fl_chart: ^0.69.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - .env
