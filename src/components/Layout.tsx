@@ -1,8 +1,10 @@
 import { ReactNode } from 'react';
-import { Car, Activity, AlertTriangle, BarChart3, LogOut } from 'lucide-react';
+import {
+  Car, Activity, AlertTriangle, BarChart3, LogOut,
+  Route, Fuel, Users, DollarSign, Wrench, Zap,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
-
-type Page = 'overview' | 'vehicles' | 'alerts' | 'analytics';
+import type { Page } from '../App';
 
 interface LayoutProps {
   children: ReactNode;
@@ -10,61 +12,89 @@ interface LayoutProps {
   onNavigate: (page: Page) => void;
 }
 
+const fleetNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
+  { id: 'overview',  label: 'Fleet Overview', icon: Car },
+  { id: 'vehicles',  label: 'Vehicles',        icon: Activity },
+  { id: 'alerts',    label: 'Alerts',           icon: AlertTriangle },
+];
+
+const intelligenceNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
+  { id: 'analytics',      label: 'Driver Analytics',  icon: BarChart3 },
+  { id: 'trips',          label: 'Trips',              icon: Route },
+  { id: 'fuel',           label: 'Fuel Analytics',     icon: Fuel },
+  { id: 'driver-scoring', label: 'Driver Scoring',     icon: Users },
+  { id: 'cost',           label: 'Cost Analytics',     icon: DollarSign },
+  { id: 'maintenance',    label: 'Maintenance',        icon: Wrench },
+  { id: 'anomalies',      label: 'Anomaly Feed',       icon: Zap },
+];
+
 export default function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     window.location.reload();
   };
 
-  const navItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
-    { id: 'overview', label: 'Fleet Overview', icon: Car },
-    { id: 'vehicles', label: 'Vehicles', icon: Activity },
-    { id: 'alerts', label: 'Alerts', icon: AlertTriangle },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  ];
+  const NavItem = ({ item }: { item: typeof fleetNavItems[0] }) => {
+    const Icon = item.icon;
+    const active = currentPage === item.id;
+    return (
+      <button
+        onClick={() => onNavigate(item.id)}
+        className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors text-left ${
+          active
+            ? 'bg-blue-600 text-white'
+            : 'text-gray-400 hover:text-white hover:bg-gray-800'
+        }`}
+      >
+        <Icon className="w-4 h-4 flex-shrink-0" />
+        <span className="text-sm font-medium truncate">{item.label}</span>
+      </button>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      <nav className="bg-gray-900 border-b border-gray-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-8">
-              <div className="flex items-center space-x-3">
-                <Car className="w-8 h-8 text-blue-500" />
-                <span className="text-xl font-bold text-white">Fleet Telemetry</span>
-              </div>
-              <div className="flex space-x-1">
-                {navItems.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => onNavigate(item.id)}
-                      className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                        currentPage === item.id
-                          ? 'bg-blue-600 text-white'
-                          : 'text-gray-400 hover:text-white hover:bg-gray-800'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span className="text-sm font-medium">{item.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="flex items-center space-x-2 px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="text-sm font-medium">Logout</span>
-            </button>
+    <div className="min-h-screen bg-gray-950 flex">
+      <aside className="w-56 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
+        <div className="px-4 py-5 border-b border-gray-800 flex items-center space-x-3">
+          <div className="p-1.5 bg-blue-600 rounded-lg">
+            <Car className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <p className="text-white font-bold text-sm leading-tight">Fleet</p>
+            <p className="text-blue-400 text-xs">Telemetry</p>
           </div>
         </div>
-      </nav>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {children}
+
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
+          <div>
+            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Fleet</p>
+            <div className="space-y-1">
+              {fleetNavItems.map(item => <NavItem key={item.id} item={item} />)}
+            </div>
+          </div>
+          <div>
+            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Intelligence</p>
+            <div className="space-y-1">
+              {intelligenceNavItems.map(item => <NavItem key={item.id} item={item} />)}
+            </div>
+          </div>
+        </nav>
+
+        <div className="px-3 py-4 border-t border-gray-800">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <LogOut className="w-4 h-4 flex-shrink-0" />
+            <span className="text-sm font-medium">Logout</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          {children}
+        </div>
       </main>
     </div>
   );

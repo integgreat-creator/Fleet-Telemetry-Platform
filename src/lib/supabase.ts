@@ -123,3 +123,31 @@ export interface CostInsight {
   is_resolved: boolean;
   created_at: string;
 }
+
+export interface CostPrediction {
+  id: string;
+  vehicle_id: string;
+  forecast_period: 'monthly' | 'quarterly' | 'yearly';
+  estimated_fuel_cost: number;
+  estimated_maintenance_cost: number;
+  estimated_insurance_cost: number;
+  estimated_total_cost: number;
+  confidence_score: number;
+  factors: {
+    driving_impact: string;
+    historical_trend: string;
+  };
+  created_at: string;
+}
+
+export interface MaintenancePrediction {
+  id: string;
+  vehicle_id: string;
+  component: string;
+  prediction_type: string;
+  confidence_score: number;
+  predicted_date: string;
+  miles_remaining?: number;
+  status: 'critical' | 'scheduled' | 'monitoring';
+  created_at: string;
+}

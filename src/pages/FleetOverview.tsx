@@ -9,6 +9,31 @@ export default function FleetOverview() {
 
   useEffect(() => {
     loadData();
+    // Kick off the analytics pipeline immediately, then every 5 minutes.
+    // Runs silently in the background — errors are swallowed so UI is unaffected.
+    const runIntelligence = async () => {
+      const base = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fleet-intelligence`;
+      const headers = {
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      };
+      const actions = [
+        'detect-trips',
+        'populate-behavior',
+        'calculate-scores',
+        'predict-fuel',
+        'predict-costs',
+        'generate-insights',
+      ];
+      for (const action of actions) {
+        try {
+          await fetch(`${base}?action=${action}`, { method: 'POST', headers });
+        } catch { /* silent */ }
+      }
+    };
+    runIntelligence();
+    const timer = setInterval(runIntelligence, 5 * 60 * 1000);
+    return () => clearInterval(timer);
   }, []);
 
   const loadData = async () => {

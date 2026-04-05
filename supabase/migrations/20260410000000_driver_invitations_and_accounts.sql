@@ -2,8 +2,12 @@
 -- Driver invitations & driver accounts
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Drop old versions so schema changes apply cleanly
+DROP TABLE IF EXISTS driver_accounts CASCADE;
+DROP TABLE IF EXISTS invitations     CASCADE;
+
 -- ── invitations ──────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS invitations (
+CREATE TABLE invitations (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   fleet_id       UUID NOT NULL REFERENCES fleets(id) ON DELETE CASCADE,
   fleet_name     TEXT NOT NULL,
@@ -31,7 +35,7 @@ CREATE POLICY "managers_manage_invitations"
   WITH CHECK (fleet_id IN (SELECT id FROM fleets WHERE manager_id = auth.uid()));
 
 -- ── driver_accounts ───────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS driver_accounts (
+CREATE TABLE driver_accounts (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   fleet_id   UUID NOT NULL REFERENCES fleets(id) ON DELETE CASCADE,
