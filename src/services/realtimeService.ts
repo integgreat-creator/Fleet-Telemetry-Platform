@@ -41,17 +41,29 @@ class RealtimeService {
     };
   }
 
-  subscribeToAlerts(callback: AlertCallback) {
+  /**
+   * Subscribe to real-time alerts scoped to the caller's vehicles only.
+   * BUG FIX: was subscribing to ALL alerts in the DB (no filter), leaking
+   * data across fleet accounts.
+   *
+   * @param vehicleIds  Vehicle UUIDs the current user owns or manages.
+   */
+  subscribeToAlerts(vehicleIds: string[], callback: AlertCallback) {
+    if (vehicleIds.length === 0) return () => {};
+
     this.alertCallbacks.push(callback);
 
+    const filter = `vehicle_id=in.(${vehicleIds.join(',')})`;
+
     const channel = supabase
-      .channel('alerts')
+      .channel(`alerts:scoped:${vehicleIds[0]}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'alerts',
+          filter,
         },
         (payload) => {
           callback(payload.new);

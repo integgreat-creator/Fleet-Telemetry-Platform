@@ -22,7 +22,15 @@ class VehicleProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    _vehicles = await _supabaseService.getVehicles();
+    // N+1 FIX: single joined query fetches vehicles + all their thresholds
+    final vehiclesWithThresholds =
+        await _supabaseService.getVehiclesWithThresholds();
+
+    _vehicles = vehiclesWithThresholds.keys.toList();
+    // Cache thresholds for every vehicle in one shot
+    for (final entry in vehiclesWithThresholds.entries) {
+      _thresholds[entry.key.id] = entry.value;
+    }
 
     if (_vehicles.isNotEmpty && _selectedVehicle == null) {
       await _loadSelectedVehicle();
@@ -45,9 +53,7 @@ class VehicleProvider extends ChangeNotifier {
       _selectedVehicle = _vehicles.first;
     }
 
-    if (_selectedVehicle != null) {
-      await loadThresholds(_selectedVehicle!.id);
-    }
+    // Thresholds already loaded by loadVehicles() — no extra query needed
   }
 
   /// Selects a vehicle by its ID. Used after invite acceptance and driver login.

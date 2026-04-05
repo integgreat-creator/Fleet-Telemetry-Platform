@@ -12,30 +12,35 @@ export default function AlertsPage() {
 
   useEffect(() => {
     loadAlerts();
-
-    const unsubscribe = realtimeService.subscribeToAlerts((newAlert) => {
-      setAlerts((prev) => [newAlert as Alert, ...prev]);
-    });
-
-    return () => {
-      unsubscribe();
-    };
   }, []);
 
   const loadAlerts = async () => {
     try {
+      // Load alerts (RLS ensures only caller's fleet vehicles are returned)
       const { data, error } = await supabase
         .from('alerts')
         .select('*, vehicles(name, vin)')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      if (data) setAlerts(data);
+      if (data) {
+        setAlerts(data);
+
+        // BUG FIX: subscribe with vehicle filter so only the user's fleet
+        // alerts arrive via realtime — not every alert in the database
+        const vehicleIds = [...new Set(data.map((a: Alert) => a.vehicle_id))];
+        const unsubscribe = realtimeService.subscribeToAlerts(vehicleIds, (newAlert) => {
+          setAlerts((prev) => [newAlert as Alert, ...prev]);
+        });
+        // Store cleanup so it runs on unmount
+        return unsubscribe;
+      }
     } catch (error) {
       console.error('Error loading alerts:', error);
     } finally {
       setLoading(false);
     }
+    return () => {};
   };
 
   const handleAcknowledge = async (alertId: string) => {
