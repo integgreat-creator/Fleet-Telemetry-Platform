@@ -41,8 +41,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<VehicleProvider>().loadVehicles();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final vehicleProvider = context.read<VehicleProvider>();
+      final authProvider    = context.read<AuthProvider>();
+      await vehicleProvider.loadVehicles();
+      // Path B (Create Driver): auto-select the vehicle assigned to this driver
+      if (authProvider.isDriver && authProvider.driverVehicleId != null) {
+        await vehicleProvider.selectVehicleById(authProvider.driverVehicleId!);
+      }
     });
   }
 

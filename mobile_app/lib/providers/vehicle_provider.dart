@@ -50,6 +50,14 @@ class VehicleProvider extends ChangeNotifier {
     }
   }
 
+  /// Selects a vehicle by its ID. Used after invite acceptance and driver login.
+  Future<void> selectVehicleById(String vehicleId) async {
+    final idx = _vehicles.indexWhere((v) => v.id == vehicleId);
+    if (idx != -1) {
+      await selectVehicle(_vehicles[idx]);
+    }
+  }
+
   Future<void> selectVehicle(Vehicle vehicle) async {
     _selectedVehicle = vehicle;
 
