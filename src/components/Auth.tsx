@@ -31,24 +31,41 @@ export default function Auth() {
         // 1. Create the auth user (email pre-confirmed)
         // 2. Create the fleet record atomically
         // 3. Sign in and return a session
-        const res = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fleet-signup`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-            },
-            body: JSON.stringify({
-              email:      email.trim().toLowerCase(),
-              password,
-              fleet_name: fleetName.trim(),
-            }),
-          }
-        );
+        let res: Response;
+        try {
+          res = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/fleet-signup`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({
+                email:      email.trim().toLowerCase(),
+                password,
+                fleet_name: fleetName.trim(),
+              }),
+            }
+          );
+        } catch {
+          throw new Error('Cannot reach the server. Please check your internet connection.');
+        }
 
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error || 'Sign up failed');
+        let body: any;
+        try {
+          body = await res.json();
+        } catch {
+          throw new Error(`Server error (HTTP ${res.status}). The fleet-signup function may not be deployed yet.`);
+        }
+
+        if (!res.ok) {
+          throw new Error(body?.error || `Sign up failed (HTTP ${res.status})`);
+        }
+
+        if (!body?.session) {
+          throw new Error('Sign up succeeded but no session was returned. Please try logging in.');
+        }
 
         const { error: sessionError } = await supabase.auth.setSession(body.session);
         if (sessionError) throw sessionError;
