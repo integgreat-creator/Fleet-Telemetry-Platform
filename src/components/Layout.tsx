@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
+  Settings, Bug,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Page } from '../App';
@@ -26,6 +27,11 @@ const intelligenceNavItems: Array<{ id: Page; label: string; icon: typeof Car }>
   { id: 'cost',           label: 'Cost Analytics',     icon: DollarSign },
   { id: 'maintenance',    label: 'Maintenance',        icon: Wrench },
   { id: 'anomalies',      label: 'Anomaly Feed',       icon: Zap },
+];
+
+const systemNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
+  { id: 'admin', label: 'Admin',       icon: Settings },
+  { id: 'debug', label: 'Debug Tools', icon: Bug },
 ];
 
 export default function Layout({ children, currentPage, onNavigate }: LayoutProps) {
@@ -76,6 +82,12 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
             <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Intelligence</p>
             <div className="space-y-1">
               {intelligenceNavItems.map(item => <NavItem key={item.id} item={item} />)}
+            </div>
+          </div>
+          <div>
+            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">System</p>
+            <div className="space-y-1">
+              {systemNavItems.map(item => <NavItem key={item.id} item={item} />)}
             </div>
           </div>
         </nav>

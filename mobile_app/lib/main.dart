@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vehicle_telemetry/config/supabase_config.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
+import 'package:vehicle_telemetry/providers/connectivity_provider.dart';
 import 'package:vehicle_telemetry/providers/invite_provider.dart';
 import 'package:vehicle_telemetry/providers/sensor_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
@@ -37,6 +38,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => VehicleProvider()),
         ChangeNotifierProvider(create: (_) => SensorProvider()),
         ChangeNotifierProvider(create: (_) => InviteProvider()),
+        ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
       ],
       child: MaterialApp(
         title: 'Vehicle Telemetry',

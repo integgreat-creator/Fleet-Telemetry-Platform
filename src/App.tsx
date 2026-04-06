@@ -13,6 +13,8 @@ import DriverScoringPage from './pages/DriverScoringPage';
 import CostAnalyticsPage from './pages/CostAnalyticsPage';
 import MaintenancePage from './pages/MaintenancePage';
 import AnomalyFeedPage from './pages/AnomalyFeedPage';
+import AdminPage from './pages/AdminPage';
+import DebugToolsPage from './pages/DebugToolsPage';
 import { realtimeService } from './services/realtimeService';
 
 export type Page =
@@ -25,7 +27,9 @@ export type Page =
   | 'driver-scoring'
   | 'cost'
   | 'maintenance'
-  | 'anomalies';
+  | 'anomalies'
+  | 'admin'
+  | 'debug';
 
 function App() {
   const [user, setUser] = useState<any>(null);
@@ -89,6 +93,8 @@ function App() {
           {currentPage === 'cost'           && <CostAnalyticsPage />}
           {currentPage === 'maintenance'    && <MaintenancePage />}
           {currentPage === 'anomalies'      && <AnomalyFeedPage />}
+          {currentPage === 'admin'          && <AdminPage />}
+          {currentPage === 'debug'          && <DebugToolsPage />}
         </>
       )}
     </Layout>
