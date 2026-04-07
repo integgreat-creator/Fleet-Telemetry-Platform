@@ -41,6 +41,15 @@ Deno.serve(async (req: Request) => {
     if (action === 'predict-costs') {
       return await handleCostPrediction(supabase);
     }
+    if (action === 'detect-anomalies') {
+      return json(await handleAnomalyDetection(supabase));
+    }
+    if (action === 'detect-gaps') {
+      return json(await handleGapDetection(supabase));
+    }
+    if (action === 'score-trip-data') {
+      return json(await handleTripScoring(supabase));
+    }
 
     return new Response(JSON.stringify({ error: 'Action not found' }), {
       status: 404,
@@ -418,4 +427,226 @@ function ok(message: string) {
   return new Response(JSON.stringify({ success: true, message }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
+}
+
+function json(data: unknown) {
+  return new Response(JSON.stringify(data), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+// ── Anomaly Detection ────────────────────────────────────────────────────────
+async function handleAnomalyDetection(admin: any) {
+  const results: string[] = [];
+
+  // Get all active vehicles with recent logs
+  const since = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // last 30 min
+  const { data: vehicles } = await admin
+    .from('vehicles')
+    .select('id, name, vin, fleet_id')
+    .eq('is_active', true);
+
+  for (const vehicle of (vehicles ?? [])) {
+    const { data: logs } = await admin
+      .from('vehicle_logs')
+      .select('latitude, longitude, speed, ignition_status, timestamp, is_mock_gps')
+      .eq('vehicle_id', vehicle.id)
+      .gte('timestamp', since)
+      .order('timestamp', { ascending: true });
+
+    if (!logs || logs.length < 2) continue;
+
+    for (let i = 1; i < logs.length; i++) {
+      const prev = logs[i - 1];
+      const curr = logs[i];
+
+      const timeDiffMin = (new Date(curr.timestamp).getTime() - new Date(prev.timestamp).getTime()) / 60000;
+      if (timeDiffMin > 5) continue; // skip if too far apart
+
+      // Calculate distance between consecutive points (Haversine)
+      const dist = haversineKm(prev.latitude, prev.longitude, curr.latitude, curr.longitude);
+
+      // GPS speed=0 but position changed significantly
+      if (curr.speed < 2 && dist > 0.1) {
+        await admin.from('vehicle_events').insert({
+          vehicle_id:  vehicle.id,
+          fleet_id:    vehicle.fleet_id,
+          event_type:  'device_tamper',
+          severity:    'warning',
+          title:       `GPS Anomaly: ${vehicle.name}`,
+          description: `Vehicle speed reported as 0 but position changed by ${(dist * 1000).toFixed(0)}m.`,
+          metadata:    { prev_lat: prev.latitude, prev_lng: prev.longitude, curr_lat: curr.latitude, curr_lng: curr.longitude, distance_m: Math.round(dist * 1000) },
+        }).eq('created_at', new Date().toISOString()); // avoid duplicates with upsert not available - just insert
+
+        results.push(`GPS anomaly for vehicle ${vehicle.id}`);
+      }
+
+      // Ignition OFF but location changed > 200m
+      if (!curr.ignition_status && !prev.ignition_status && dist > 0.2) {
+        // Check if we already have an unauthorized movement event in last 10 min
+        const { data: existing } = await admin
+          .from('vehicle_events')
+          .select('id')
+          .eq('vehicle_id', vehicle.id)
+          .eq('event_type', 'unauthorized_movement')
+          .gte('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
+          .maybeSingle();
+
+        if (!existing) {
+          await admin.from('vehicle_events').insert({
+            vehicle_id:  vehicle.id,
+            fleet_id:    vehicle.fleet_id,
+            event_type:  'unauthorized_movement',
+            severity:    'critical',
+            title:       `Unauthorized Movement: ${vehicle.name}`,
+            description: `Vehicle moved ${(dist * 1000).toFixed(0)}m with ignition OFF.`,
+            metadata:    { distance_m: Math.round(dist * 1000), prev_lat: prev.latitude, prev_lng: prev.longitude },
+          });
+
+          // Trigger WhatsApp alert for unauthorized movement
+          const { data: fleet } = await admin.from('fleets').select('whatsapp_number').eq('id', vehicle.fleet_id).single();
+          if (fleet?.whatsapp_number) {
+            await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/whatsapp-alerts`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}` },
+              body: JSON.stringify({
+                vehicle_name: vehicle.name, vehicle_vin: vehicle.vin,
+                event_type: 'unauthorized_movement',
+                description: `Vehicle moved ${(dist * 1000).toFixed(0)}m with ignition OFF.`,
+                whatsapp_number: fleet.whatsapp_number,
+              }),
+            }).catch(() => null);
+          }
+
+          results.push(`Unauthorized movement for vehicle ${vehicle.id}`);
+        }
+      }
+    }
+  }
+
+  return { detected: results.length, results };
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── Trip Gap Detection ───────────────────────────────────────────────────────
+async function handleGapDetection(admin: any) {
+  const results: string[] = [];
+
+  const { data: activeTrips } = await admin
+    .from('trips')
+    .select('id, vehicle_id, start_time, fleet_id:vehicles(fleet_id)')
+    .eq('status', 'active');
+
+  for (const trip of (activeTrips ?? [])) {
+    const { data: logs } = await admin
+      .from('vehicle_logs')
+      .select('timestamp')
+      .eq('vehicle_id', trip.vehicle_id)
+      .gte('timestamp', trip.start_time)
+      .order('timestamp', { ascending: true });
+
+    if (!logs || logs.length < 2) continue;
+
+    let totalGapMinutes = 0;
+    let gapCount = 0;
+
+    for (let i = 1; i < logs.length; i++) {
+      const gapMin = (new Date(logs[i].timestamp).getTime() - new Date(logs[i-1].timestamp).getTime()) / 60000;
+      if (gapMin > 5) {
+        totalGapMinutes += gapMin;
+        gapCount++;
+
+        // Create trip_gap event
+        const { data: existing } = await admin
+          .from('vehicle_events')
+          .select('id')
+          .eq('vehicle_id', trip.vehicle_id)
+          .eq('event_type', 'trip_gap')
+          .gte('created_at', logs[i-1].timestamp)
+          .lte('created_at', logs[i].timestamp)
+          .maybeSingle();
+
+        if (!existing) {
+          const fleetId = trip['fleet_id']?.fleet_id ?? null;
+          await admin.from('vehicle_events').insert({
+            vehicle_id:  trip.vehicle_id,
+            fleet_id:    fleetId,
+            event_type:  'trip_gap',
+            severity:    'warning',
+            title:       'Trip Data Gap Detected',
+            description: `${gapMin.toFixed(0)}-minute data gap detected during trip.`,
+            metadata:    {
+              trip_id:        trip.id,
+              gap_start:      logs[i-1].timestamp,
+              gap_end:        logs[i].timestamp,
+              gap_minutes:    gapMin,
+            },
+          });
+          results.push(`Gap of ${gapMin.toFixed(0)}min for trip ${trip.id}`);
+        }
+      }
+    }
+
+    // Update trip with gap summary
+    if (gapCount > 0) {
+      await admin.from('trips').update({
+        gap_count:            gapCount,
+        gap_duration_minutes: totalGapMinutes,
+      }).eq('id', trip.id);
+    }
+  }
+
+  return { gaps_found: results.length, results };
+}
+
+// ── Trip Data Confidence Scoring ─────────────────────────────────────────────
+async function handleTripScoring(admin: any) {
+  const results: string[] = [];
+
+  // Score recently completed trips that don't have a confidence score yet
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { data: trips } = await admin
+    .from('trips')
+    .select('id, vehicle_id, start_time, end_time, gap_count, gap_duration_minutes')
+    .eq('status', 'completed')
+    .is('data_confidence_score', null)
+    .gte('end_time', since);
+
+  for (const trip of (trips ?? [])) {
+    const gapCount   = trip.gap_count ?? 0;
+    const gapMinutes = trip.gap_duration_minutes ?? 0;
+
+    // Count anomaly events for this trip
+    const { count: anomalyCount } = await admin
+      .from('vehicle_events')
+      .select('*', { count: 'exact', head: true })
+      .eq('vehicle_id', trip.vehicle_id)
+      .gte('created_at', trip.start_time)
+      .lte('created_at', trip.end_time ?? new Date().toISOString())
+      .in('event_type', ['device_tamper', 'mock_gps_detected', 'ignition_no_data']);
+
+    // Score formula:
+    // 100 base
+    // -5 per gap
+    // -2 per gap minute
+    // -10 per anomaly
+    // minimum 0
+    let score = 100;
+    score -= (gapCount * 5);
+    score -= (gapMinutes * 2);
+    score -= ((anomalyCount ?? 0) * 10);
+    score = Math.max(0, Math.min(100, score));
+
+    await admin.from('trips').update({ data_confidence_score: score }).eq('id', trip.id);
+    results.push(`Trip ${trip.id} scored: ${score}`);
+  }
+
+  return { scored: results.length, results };
 }

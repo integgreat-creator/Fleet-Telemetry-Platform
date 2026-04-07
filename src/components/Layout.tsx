@@ -16,7 +16,7 @@ interface LayoutProps {
 const fleetNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
   { id: 'overview',  label: 'Fleet Overview', icon: Car },
   { id: 'vehicles',  label: 'Vehicles',        icon: Activity },
-  { id: 'alerts',    label: 'Alerts',           icon: AlertTriangle },
+  { id: 'alerts',    label: 'Alerts & Events',  icon: AlertTriangle },
 ];
 
 const intelligenceNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [

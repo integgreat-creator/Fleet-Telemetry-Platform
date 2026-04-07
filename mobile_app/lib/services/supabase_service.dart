@@ -336,4 +336,91 @@ class SupabaseService {
       print('Error updating device health: $e');
     }
   }
+
+  // ── VEHICLE LOGS (GPS heartbeat) ──────────────────────────────────────────
+
+  /// Saves a GPS + ignition heartbeat to vehicle_logs.
+  /// Called every 15 seconds from SensorProvider when monitoring is active.
+  Future<void> saveVehicleLog({
+    required String vehicleId,
+    required double latitude,
+    required double longitude,
+    double accuracy = 0,
+    double altitude = 0,
+    double speed = 0,
+    bool ignitionStatus = false,
+    bool isMockGps = false,
+  }) async {
+    final payload = {
+      'vehicle_id':      vehicleId,
+      'speed':           speed,
+      'ignition_status': ignitionStatus,
+      'latitude':        latitude,
+      'longitude':       longitude,
+      'accuracy_metres': accuracy,
+      'altitude':        altitude,
+      'is_mock_gps':     isMockGps,
+      'timestamp':       DateTime.now().toIso8601String(),
+    };
+
+    try {
+      await _client.from('vehicle_logs').insert(payload);
+    } catch (e) {
+      print('saveVehicleLog error: $e');
+      // Queue offline — separate low-priority queue
+      await _enqueueOfflineLog(payload);
+    }
+  }
+
+  static const _offlineLogQueueKey = 'vehicle_log_offline_queue';
+
+  Future<void> _enqueueOfflineLog(Map<String, dynamic> payload) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_offlineLogQueueKey) ?? [];
+    raw.add(jsonEncode(payload));
+    if (raw.length > 200) raw.removeAt(0); // lower cap than sensor queue
+    await prefs.setStringList(_offlineLogQueueKey, raw);
+  }
+
+  Future<void> flushOfflineLogQueue() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_offlineLogQueueKey) ?? [];
+    if (raw.isEmpty) return;
+    final failed = <String>[];
+    for (final item in raw) {
+      try {
+        await _client.from('vehicle_logs').insert(jsonDecode(item));
+      } catch (_) {
+        failed.add(item);
+      }
+    }
+    await prefs.setStringList(_offlineLogQueueKey, failed);
+  }
+
+  // ── VEHICLE EVENTS (system events) ───────────────────────────────────────
+
+  /// Creates a system event record (device offline, tamper, unauthorized movement, etc.)
+  Future<void> createVehicleEvent({
+    required String vehicleId,
+    required String fleetId,
+    required String eventType,
+    required String title,
+    required String description,
+    String severity = 'warning',
+    Map<String, dynamic> metadata = const {},
+  }) async {
+    try {
+      await _client.from('vehicle_events').insert({
+        'vehicle_id':  vehicleId,
+        'fleet_id':    fleetId,
+        'event_type':  eventType,
+        'severity':    severity,
+        'title':       title,
+        'description': description,
+        'metadata':    metadata,
+      });
+    } catch (e) {
+      print('createVehicleEvent error: $e');
+    }
+  }
 }

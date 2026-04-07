@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Car, Activity, AlertTriangle, TrendingUp } from 'lucide-react';
+import { Car, Activity, AlertTriangle, TrendingUp, Wifi, WifiOff, Shield } from 'lucide-react';
 import { supabase, type Vehicle, type Alert } from '../lib/supabase';
 
 export default function FleetOverview() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [vehicleEvents, setVehicleEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,6 +25,9 @@ export default function FleetOverview() {
         'predict-fuel',
         'predict-costs',
         'generate-insights',
+        'detect-anomalies',
+        'detect-gaps',
+        'score-trip-data',
       ];
       for (const action of actions) {
         try {
@@ -38,7 +42,7 @@ export default function FleetOverview() {
 
   const loadData = async () => {
     try {
-      const [vehiclesRes, alertsRes] = await Promise.all([
+      const [vehiclesRes, alertsRes, eventsRes] = await Promise.all([
         supabase.from('vehicles').select('*'),
         supabase
           .from('alerts')
@@ -46,10 +50,17 @@ export default function FleetOverview() {
           .eq('acknowledged', false)
           .order('created_at', { ascending: false })
           .limit(10),
+        supabase
+          .from('vehicle_events')
+          .select('*')
+          .eq('acknowledged', false)
+          .order('created_at', { ascending: false })
+          .limit(5),
       ]);
 
       if (vehiclesRes.data) setVehicles(vehiclesRes.data);
       if (alertsRes.data) setAlerts(alertsRes.data);
+      if (eventsRes.data) setVehicleEvents(eventsRes.data);
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -63,6 +74,23 @@ export default function FleetOverview() {
   const avgHealthScore = vehicles.length > 0
     ? vehicles.reduce((sum, v) => sum + v.health_score, 0) / vehicles.length
     : 0;
+
+  // Derived counters from vehicle_events
+  const offlineVehicleIds = new Set(
+    vehicleEvents.filter(e => e.event_type === 'device_offline').map(e => e.vehicle_id)
+  );
+  const tamperVehicleIds = new Set(
+    vehicleEvents.filter(e => e.event_type === 'device_tamper').map(e => e.vehicle_id)
+  );
+  const offlineVehicles = offlineVehicleIds.size;
+  const tamperAlerts = tamperVehicleIds.size;
+
+  // Per-vehicle status helper
+  const getVehicleStatus = (vehicleId: string) => {
+    if (tamperVehicleIds.has(vehicleId)) return 'tampered';
+    if (offlineVehicleIds.has(vehicleId)) return 'offline';
+    return 'online';
+  };
 
   const stats = [
     {
@@ -170,30 +198,64 @@ export default function FleetOverview() {
 
         <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
           <h2 className="text-xl font-bold text-white mb-4">Fleet Status</h2>
+          {(offlineVehicles > 0 || tamperAlerts > 0) && (
+            <div className="flex gap-3 mb-4 flex-wrap">
+              {offlineVehicles > 0 && (
+                <div className="flex items-center gap-1.5 text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded-full">
+                  <WifiOff className="w-3 h-3 text-red-400" />
+                  {offlineVehicles} offline
+                </div>
+              )}
+              {tamperAlerts > 0 && (
+                <div className="flex items-center gap-1.5 text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded-full">
+                  <Shield className="w-3 h-3 text-yellow-400" />
+                  {tamperAlerts} tamper alert{tamperAlerts !== 1 ? 's' : ''}
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-4">
-            {vehicles.slice(0, 5).map((vehicle) => (
-              <div key={vehicle.id} className="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-3 h-3 rounded-full ${vehicle.is_active ? 'bg-green-500' : 'bg-gray-600'}`} />
-                  <div>
-                    <p className="text-white font-medium text-sm">{vehicle.name}</p>
-                    <p className="text-gray-400 text-xs">{vehicle.make} {vehicle.model}</p>
+            {vehicles.slice(0, 5).map((vehicle) => {
+              const status = getVehicleStatus(vehicle.id);
+              return (
+                <div key={vehicle.id} className="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    {status === 'online' && vehicle.is_active
+                      ? <Wifi className="w-4 h-4 text-green-500 flex-shrink-0" />
+                      : status === 'offline'
+                      ? <WifiOff className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      : status === 'tampered'
+                      ? <Shield className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                      : <div className="w-3 h-3 rounded-full bg-gray-600 flex-shrink-0" />
+                    }
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-white font-medium text-sm">{vehicle.name}</p>
+                        {status === 'tampered' && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400">Tampered</span>
+                        )}
+                        {status === 'offline' && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Offline</span>
+                        )}
+                      </div>
+                      <p className="text-gray-400 text-xs">{vehicle.make} {vehicle.model}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-sm font-bold ${
+                      vehicle.health_score >= 80
+                        ? 'text-green-500'
+                        : vehicle.health_score >= 60
+                        ? 'text-yellow-500'
+                        : 'text-red-500'
+                    }`}>
+                      {vehicle.health_score.toFixed(0)}%
+                    </p>
+                    <p className="text-xs text-gray-500">Health</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className={`text-sm font-bold ${
-                    vehicle.health_score >= 80
-                      ? 'text-green-500'
-                      : vehicle.health_score >= 60
-                      ? 'text-yellow-500'
-                      : 'text-red-500'
-                  }`}>
-                    {vehicle.health_score.toFixed(0)}%
-                  </p>
-                  <p className="text-xs text-gray-500">Health</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {vehicles.length === 0 && (
               <p className="text-gray-400 text-center py-8">No vehicles yet</p>
             )}
