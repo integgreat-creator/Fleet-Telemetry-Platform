@@ -240,13 +240,18 @@ class SupabaseService {
 
   // ── SENSOR DATA ───────────────────────────────────────────────────────────
 
-  Future<bool> saveSensorData(String vehicleId, SensorData sensorData) async {
-    final payload = {
+  Future<bool> saveSensorData(
+    String vehicleId,
+    SensorData sensorData, {
+    String? driverAccountId,   // MOB-2: optional driver attribution
+  }) async {
+    final payload = <String, dynamic>{
       'vehicle_id':   vehicleId,
       'sensor_type':  sensorData.type.name,
       'value':        sensorData.value,
       'unit':         sensorData.unit,
       'timestamp':    sensorData.timestamp.toIso8601String(),
+      if (driverAccountId != null) 'driver_account_id': driverAccountId,
     };
 
     // Primary path: edge function (handles anomaly detection + threshold checks)
@@ -350,8 +355,9 @@ class SupabaseService {
     double speed = 0,
     bool ignitionStatus = false,
     bool isMockGps = false,
+    String? driverAccountId,   // MOB-2: optional driver attribution
   }) async {
-    final payload = {
+    final payload = <String, dynamic>{
       'vehicle_id':      vehicleId,
       'speed':           speed,
       'ignition_status': ignitionStatus,
@@ -361,6 +367,7 @@ class SupabaseService {
       'altitude':        altitude,
       'is_mock_gps':     isMockGps,
       'timestamp':       DateTime.now().toIso8601String(),
+      if (driverAccountId != null) 'driver_account_id': driverAccountId,
     };
 
     try {

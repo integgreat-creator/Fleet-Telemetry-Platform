@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/invite_provider.dart';
 
@@ -15,25 +16,28 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailController    = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _formKey            = GlobalKey<FormState>();
-  bool  _obscurePassword    = true;
+  final _identifierController = TextEditingController(); // email or phone
+  final _passwordController   = TextEditingController();
+  final _formKey              = GlobalKey<FormState>();
+  bool  _obscurePassword      = true;
+  bool  _usePhone             = false;   // MOB-3: toggle email/phone
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _identifierController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
-    final auth = context.read<AuthProvider>();
-    await auth.signIn(
-      _emailController.text.trim(),
-      _passwordController.text,
-    );
+    final auth  = context.read<AuthProvider>();
+    final value = _identifierController.text.trim();
+    if (_usePhone) {
+      await auth.signInWithPhone(value, _passwordController.text);
+    } else {
+      await auth.signIn(value, _passwordController.text);
+    }
     // Navigation is handled by the Consumer in main.dart
   }
 
@@ -71,17 +75,56 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 40),
 
-                  // Email
+                  // Email / Phone toggle row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(
+                        _usePhone ? 'Use email instead' : 'Use phone instead',
+                        style: TextStyle(
+                          color: Colors.blue.shade300,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Switch(
+                        value: _usePhone,
+                        onChanged: (v) {
+                          setState(() {
+                            _usePhone = v;
+                            _identifierController.clear();
+                          });
+                          context.read<AuthProvider>().clearError();
+                        },
+                        activeColor: Colors.blue,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+
+                  // Email or Phone field
                   TextFormField(
-                    controller: _emailController,
-                    decoration: const InputDecoration(
-                      labelText:  'Email',
-                      prefixIcon: Icon(Icons.email),
+                    controller: _identifierController,
+                    decoration: InputDecoration(
+                      labelText:  _usePhone ? 'Phone Number' : 'Email',
+                      prefixIcon: Icon(
+                        _usePhone ? Icons.phone : Icons.email,
+                      ),
+                      hintText: _usePhone ? '+91 98765 43210' : null,
                     ),
-                    keyboardType: TextInputType.emailAddress,
+                    keyboardType: _usePhone
+                        ? TextInputType.phone
+                        : TextInputType.emailAddress,
                     validator: (v) {
-                      if (v == null || v.trim().isEmpty) return 'Email is required';
-                      if (!v.contains('@')) return 'Enter a valid email';
+                      if (v == null || v.trim().isEmpty) {
+                        return _usePhone
+                            ? 'Phone number is required'
+                            : 'Email is required';
+                      }
+                      if (!_usePhone && !v.contains('@')) {
+                        return 'Enter a valid email';
+                      }
                       return null;
                     },
                   ),
@@ -165,7 +208,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   OutlinedButton.icon(
                     onPressed: () => _scanQr(context),
                     icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR Invite'),
+                    label: const Text('Scan QR Code'),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
@@ -198,9 +241,17 @@ class _LoginScreenState extends State<LoginScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (sheetCtx) => _QrScannerSheet(
-        onTokenDetected: (token) {
+        onTokenDetected: (raw) {
           Navigator.of(sheetCtx).pop();
-          context.read<InviteProvider>().setPendingToken(token);
+          // vehiclesense://auth?token=<one-time-token>  → exchange for email + auto-login
+          // vehiclesense://join?token=<invite-token>    → existing QR invite flow
+          // vehiclesense://auth?data=<base64>           → legacy format
+          if (raw.startsWith('vehiclesense://auth?token=')) {
+            final token = raw.substring('vehiclesense://auth?token='.length);
+            _exchangeOneTimeToken(context, token);
+          } else {
+            context.read<InviteProvider>().setPendingToken(raw);
+          }
         },
         onManualEntry: () {
           Navigator.of(sheetCtx).pop();
@@ -208,6 +259,49 @@ class _LoginScreenState extends State<LoginScreen> {
         },
       ),
     );
+  }
+
+  /// Exchanges a one-time token from the welcome email QR for an email address,
+  /// then auto-fills the email field so the driver just needs to enter password.
+  Future<void> _exchangeOneTimeToken(BuildContext context, String token) async {
+    try {
+      final supabaseUrl  = const String.fromEnvironment('SUPABASE_URL',
+          defaultValue: '');
+      final anonKey      = const String.fromEnvironment('SUPABASE_ANON_KEY',
+          defaultValue: '');
+
+      // Read from dotenv via the existing supabase config
+      final client = Supabase.instance.client;
+      final res = await client.functions.invoke(
+        'driver-management',
+        body: {'action': 'exchange_token', 'token': token},
+      );
+
+      final email = res.data?['email'] as String?;
+      if (email != null && email.isNotEmpty && mounted) {
+        setState(() {
+          _usePhone = false;
+          _identifierController.text = email;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Email pre-filled from QR — enter your password to sign in'),
+            backgroundColor: const Color(0xFF00BFA5),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not read QR code — enter your credentials manually'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   void _showManualTokenDialog(BuildContext context) async {
@@ -335,7 +429,7 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
                 Icon(Icons.qr_code_scanner, color: Color(0xFF00BFA5), size: 22),
                 SizedBox(width: 10),
                 Text(
-                  'Scan QR Invite',
+                  'Scan QR Code',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 18,
@@ -349,7 +443,7 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              'Point your camera at the QR code provided by your fleet manager.',
+              'Scan the QR code from your welcome email to pre-fill your login, or scan a fleet invite QR.',
               style: TextStyle(color: Colors.grey[400], fontSize: 13),
             ),
           ),

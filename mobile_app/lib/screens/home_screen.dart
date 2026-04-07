@@ -96,14 +96,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _startMonitoring() {
     final vehicleProvider = context.read<VehicleProvider>();
-    final sensorProvider = context.read<SensorProvider>();
-    final vehicle = vehicleProvider.selectedVehicle;
+    final sensorProvider  = context.read<SensorProvider>();
+    final authProvider    = context.read<AuthProvider>();
+    final vehicle         = vehicleProvider.selectedVehicle;
 
     if (vehicle != null) {
       sensorProvider.startMonitoring(
         vehicle.id,
         vehicle.name,
         vehicleProvider.selectedVehicleThresholds,
+        driverAccountId: authProvider.driverAccountId,  // MOB-2: attribute data to driver
       );
     }
   }
