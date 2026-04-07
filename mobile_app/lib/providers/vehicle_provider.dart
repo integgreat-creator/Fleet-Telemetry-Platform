@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/models/threshold.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
@@ -11,6 +12,9 @@ class VehicleProvider extends ChangeNotifier {
   Vehicle? _selectedVehicle;
   Map<String, List<Threshold>> _thresholds = {};
   bool _isLoading = false;
+
+  /// Supabase Realtime channel for live threshold updates on the selected vehicle.
+  RealtimeChannel? _thresholdChannel;
 
   List<Vehicle> get vehicles => _vehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
@@ -71,7 +75,49 @@ class VehicleProvider extends ChangeNotifier {
     await prefs.setString('selected_vehicle_id', vehicle.id);
 
     await loadThresholds(vehicle.id);
+
+    // Start Realtime subscription so threshold changes on the web dashboard
+    // are pushed to the mobile app automatically (within ~1 second).
+    _subscribeToThresholdUpdates(vehicle.id);
+
     notifyListeners();
+  }
+
+  // ── Realtime threshold subscription ──────────────────────────────────────
+
+  /// Subscribes to INSERT/UPDATE/DELETE events on the thresholds table
+  /// for the given vehicle. Re-fetches thresholds on any change.
+  void _subscribeToThresholdUpdates(String vehicleId) {
+    _unsubscribeThresholds(); // cancel any previous subscription first
+
+    _thresholdChannel = Supabase.instance.client
+        .channel('thresholds:vehicle:$vehicleId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'thresholds',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'vehicle_id',
+            value: vehicleId,
+          ),
+          callback: (_) async {
+            // Re-load thresholds whenever the fleet manager changes them
+            await loadThresholds(vehicleId);
+          },
+        )
+        .subscribe();
+  }
+
+  void _unsubscribeThresholds() {
+    _thresholdChannel?.unsubscribe();
+    _thresholdChannel = null;
+  }
+
+  @override
+  void dispose() {
+    _unsubscribeThresholds();
+    super.dispose();
   }
 
   Future<bool> createVehicle(Vehicle vehicle) async {

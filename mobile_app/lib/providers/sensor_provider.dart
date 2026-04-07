@@ -55,13 +55,13 @@ class SensorProvider extends ChangeNotifier {
         id: '',
         vehicleId: '',
         sensorType: sensorData.type,
-        enabled: false,
+        alertEnabled: false,
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       ),
     );
 
-    if (threshold.enabled && threshold.isViolated(sensorData.value)) {
+    if (threshold.alertEnabled && threshold.isViolated(sensorData.value)) {
       final updatedSensorData = sensorData.copyWith(isWarning: true);
       _latestSensorData[sensorData.type] = updatedSensorData;
 

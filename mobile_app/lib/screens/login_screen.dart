@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/invite_provider.dart';
@@ -188,12 +189,28 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _scanQr(BuildContext context) async {
-    // Show a simple dialog to paste a token manually as fallback
-    // (full camera QR scanning requires a camera plugin which we keep
-    //  out of this baseline to avoid build complexity — the fleet manager
-    //  can share the vehiclesense:// link directly via WhatsApp/SMS and
-    //  the app_links package will intercept it)
+  void _scanQr(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => _QrScannerSheet(
+        onTokenDetected: (token) {
+          Navigator.of(sheetCtx).pop();
+          context.read<InviteProvider>().setPendingToken(token);
+        },
+        onManualEntry: () {
+          Navigator.of(sheetCtx).pop();
+          _showManualTokenDialog(context);
+        },
+      ),
+    );
+  }
+
+  void _showManualTokenDialog(BuildContext context) async {
     final controller = TextEditingController();
     await showDialog(
       context: context,
@@ -230,6 +247,198 @@ class _LoginScreenState extends State<LoginScreen> {
               }
             },
             child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// QR Scanner bottom-sheet widget
+// ---------------------------------------------------------------------------
+
+class _QrScannerSheet extends StatefulWidget {
+  final void Function(String token) onTokenDetected;
+  final VoidCallback onManualEntry;
+
+  const _QrScannerSheet({
+    required this.onTokenDetected,
+    required this.onManualEntry,
+  });
+
+  @override
+  State<_QrScannerSheet> createState() => _QrScannerSheetState();
+}
+
+class _QrScannerSheetState extends State<_QrScannerSheet> {
+  final MobileScannerController _scannerController = MobileScannerController();
+  bool _scanned = false;
+  bool _permissionDenied = false;
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_scanned) return;
+
+    for (final barcode in capture.barcodes) {
+      final raw = barcode.rawValue;
+      if (raw == null) continue;
+
+      String? token;
+
+      // Pattern 1: vehiclesense://join?token=<token>
+      if (raw.startsWith('vehiclesense://join?token=')) {
+        token = raw.substring('vehiclesense://join?token='.length);
+      }
+      // Pattern 2: vehiclesense://auth?data=<base64url>
+      else if (raw.startsWith('vehiclesense://auth?data=')) {
+        token = raw.substring('vehiclesense://auth?data='.length);
+      }
+
+      if (token != null && token.isNotEmpty) {
+        _scanned = true;
+        widget.onTokenDetected(token);
+        return;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+
+    return SizedBox(
+      height: screenHeight * 0.85,
+      child: Column(
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.only(top: 10, bottom: 16),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Title
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Row(
+              children: [
+                Icon(Icons.qr_code_scanner, color: Color(0xFF00BFA5), size: 22),
+                SizedBox(width: 10),
+                Text(
+                  'Scan QR Invite',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              'Point your camera at the QR code provided by your fleet manager.',
+              style: TextStyle(color: Colors.grey[400], fontSize: 13),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Scanner viewport
+          Expanded(
+            child: _permissionDenied
+                ? _buildPermissionDenied()
+                : ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(12),
+                      bottom: Radius.circular(12),
+                    ),
+                    child: Stack(
+                      children: [
+                        MobileScanner(
+                          controller: _scannerController,
+                          onDetect: _onDetect,
+                          errorBuilder: (context, error, child) {
+                            // Camera permission denied or unavailable
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) {
+                                setState(() => _permissionDenied = true);
+                              }
+                            });
+                            return const SizedBox.shrink();
+                          },
+                        ),
+                        // Scan-frame overlay
+                        Center(
+                          child: Container(
+                            width: 220,
+                            height: 220,
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: const Color(0xFF00BFA5),
+                                width: 2.5,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Manual entry fallback
+          TextButton.icon(
+            onPressed: widget.onManualEntry,
+            icon: Icon(Icons.keyboard, color: Colors.grey[400], size: 18),
+            label: Text(
+              'Enter token manually',
+              style: TextStyle(color: Colors.grey[400], fontSize: 14),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPermissionDenied() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.no_photography_outlined, size: 56, color: Colors.grey[600]),
+          const SizedBox(height: 16),
+          Text(
+            'Camera permission is required to scan QR codes.',
+            style: TextStyle(color: Colors.grey[400], fontSize: 14),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await _scannerController.start();
+              if (mounted) setState(() => _permissionDenied = false);
+            },
+            icon: const Icon(Icons.camera_alt),
+            label: const Text('Grant Permission'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00BFA5),
+            ),
           ),
         ],
       ),

@@ -4,9 +4,8 @@ import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:vehicle_telemetry/providers/invite_provider.dart';
-import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
-import 'package:vehicle_telemetry/screens/home_screen.dart';
 
 class InviteAcceptScreen extends StatefulWidget {
   final String token;
@@ -23,17 +22,7 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
   bool _loadingInvite = true;
   String? _loadError;
 
-  // Form controllers
-  final _formKey = GlobalKey<FormState>();
-  final _vinController   = TextEditingController();
-  final _makeController  = TextEditingController();
-  final _modelController = TextEditingController();
-  final _yearController  = TextEditingController(
-    text: DateTime.now().year.toString(),
-  );
-
   bool _submitting = false;
-  String? _submitError;
 
   String get _supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
   String get _anonKey     => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
@@ -42,15 +31,6 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
   void initState() {
     super.initState();
     _fetchInviteDetails();
-  }
-
-  @override
-  void dispose() {
-    _vinController.dispose();
-    _makeController.dispose();
-    _modelController.dispose();
-    _yearController.dispose();
-    super.dispose();
   }
 
   Future<void> _fetchInviteDetails() async {
@@ -87,8 +67,7 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
   }
 
   Future<void> _acceptInvite() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() { _submitting = true; _submitError = null; });
+    setState(() => _submitting = true);
 
     try {
       final uri = Uri.parse('$_supabaseUrl/functions/v1/invite-api');
@@ -102,60 +81,74 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
         body: jsonEncode({
           'action': 'accept',
           'token':  widget.token,
-          'vin':    _vinController.text.trim().toUpperCase(),
-          'make':   _makeController.text.trim(),
-          'model':  _modelController.text.trim(),
-          'year':   int.parse(_yearController.text.trim()),
         }),
       );
 
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode != 200) {
-        setState(() {
-          _submitError = body['error'] as String? ?? 'Failed to join fleet';
-          _submitting  = false;
-        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(body['error'] as String? ?? 'Failed to join fleet'),
+            backgroundColor: Colors.red[700],
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+        setState(() => _submitting = false);
         return;
       }
 
-      final vehicleId = body['vehicle_id'] as String;
-      final fleetId   = body['fleet_id']   as String;
+      final fleetId      = body['fleet_id']   as String?;
+      final sessionData  = body['session']    as Map<String, dynamic>?;
+      final accessToken  = sessionData?['access_token']  as String?;
+      final refreshToken = sessionData?['refresh_token'] as String?;
 
-      // Persist vehicle + fleet selections
+      // Persist fleet_id
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('vehicle_id', vehicleId);
-      await prefs.setString('fleet_id',   fleetId);
-
-      // Load vehicles in provider and select this one
-      if (mounted) {
-        final vehicleProvider = context.read<VehicleProvider>();
-        await vehicleProvider.loadVehicles();
-        await vehicleProvider.selectVehicleById(vehicleId);
-
-        // Clear the pending token
-        context.read<InviteProvider>().clearToken();
-
-        // Navigate to HomeScreen
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-          (route) => false,
-        );
+      if (fleetId != null) {
+        await prefs.setString('fleet_id', fleetId);
       }
+
+      // Set Supabase session from returned tokens
+      if (accessToken != null && refreshToken != null) {
+        await Supabase.instance.client.auth.setSession(accessToken);
+        // Persist the refresh token separately so the session survives app restarts
+        final prefs2 = await SharedPreferences.getInstance();
+        await prefs2.setString('refresh_token', refreshToken);
+      }
+
+      if (!mounted) return;
+
+      // Clear the pending invite token
+      context.read<InviteProvider>().clearToken();
+
+      // Navigate to HomeScreen
+      Navigator.pushReplacementNamed(context, '/home');
     } catch (e) {
-      setState(() {
-        _submitError = 'Unexpected error: $e';
-        _submitting  = false;
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Unexpected error: $e'),
+          backgroundColor: Colors.red[700],
+          behavior: SnackBarBehavior.floating,
+        ));
+        setState(() => _submitting = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF12121F),
       appBar: AppBar(
-        title: const Text('Join Fleet'),
+        backgroundColor: const Color(0xFF1A1A2E),
+        elevation: 0,
+        title: const Text(
+          'Join Fleet',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         leading: BackButton(
+          color: Colors.white,
           onPressed: () {
             context.read<InviteProvider>().clearToken();
             Navigator.of(context).pop();
@@ -163,200 +156,277 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
         ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: _loadingInvite
-              ? const Center(child: CircularProgressIndicator())
-              : _loadError != null
-                  ? _buildError()
-                  : _buildForm(),
-        ),
+        child: _loadingInvite
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00BFA5),
+                ),
+              )
+            : _loadError != null
+                ? _buildError()
+                : _buildContent(),
       ),
     );
   }
 
   Widget _buildError() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const SizedBox(height: 48),
-        const Icon(Icons.error_outline, size: 64, color: Colors.red),
-        const SizedBox(height: 16),
-        Text(
-          _loadError!,
-          style: const TextStyle(color: Colors.red),
-          textAlign: TextAlign.center,
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_outline, size: 44, color: Colors.red),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              _loadError!,
+              style: const TextStyle(color: Colors.red, fontSize: 15),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+            OutlinedButton.icon(
+              onPressed: () {
+                context.read<InviteProvider>().clearToken();
+                Navigator.of(context).pop();
+              },
+              icon: const Icon(Icons.arrow_back, color: Colors.white70),
+              label: const Text(
+                'Go Back',
+                style: TextStyle(color: Colors.white70),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.white24),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 24),
-        ElevatedButton(
-          onPressed: () {
-            context.read<InviteProvider>().clearToken();
-            Navigator.of(context).pop();
-          },
-          child: const Text('Go Back'),
-        ),
-      ],
+      ),
     );
   }
 
-  Widget _buildForm() {
-    return Form(
-      key: _formKey,
+  Widget _buildContent() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Invite info banner
+          const SizedBox(height: 16),
+
+          // VehicleSense branding header
+          Center(
+            child: Column(
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00BFA5).withOpacity(0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF00BFA5).withOpacity(0.4),
+                      width: 2,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.directions_car,
+                    size: 36,
+                    color: Color(0xFF00BFA5),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'VehicleSense',
+                  style: TextStyle(
+                    color: Color(0xFF00BFA5),
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          // Invite card
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              color: const Color(0xFF1E1E2E),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: const Color(0xFF00BFA5).withOpacity(0.3),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF00BFA5).withOpacity(0.08),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  "You've been invited to join a fleet",
-                  style: TextStyle(
-                    color: Colors.blue,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.mail_outline,
+                      color: Color(0xFF00BFA5),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      "Fleet Invitation",
+                      style: TextStyle(
+                        color: Color(0xFF00BFA5),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                _infoRow('Fleet',   _fleetName   ?? '—'),
-                _infoRow('Vehicle', _vehicleName ?? '—'),
+                const SizedBox(height: 16),
+                _inviteRow(
+                  icon: Icons.business,
+                  label: 'Fleet',
+                  value: _fleetName ?? '—',
+                ),
+                const SizedBox(height: 10),
+                _inviteRow(
+                  icon: Icons.directions_car_outlined,
+                  label: 'Assigned Vehicle',
+                  value: _vehicleName ?? '—',
+                ),
               ],
             ),
           ),
+
           const SizedBox(height: 24),
 
-          const Text(
-            'Enter your vehicle details',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'These details will be stored and visible to the fleet manager.',
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-
-          // VIN
-          TextFormField(
-            controller: _vinController,
-            decoration: const InputDecoration(
-              labelText: 'VIN *',
-              hintText:  'e.g. 1HGBH41JXMN109186',
-              prefixIcon: Icon(Icons.confirmation_number),
+          // Info text
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(10),
             ),
-            textCapitalization: TextCapitalization.characters,
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'VIN is required';
-              if (v.trim().length < 11) return 'VIN must be at least 11 characters';
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
-
-          // Make
-          TextFormField(
-            controller: _makeController,
-            decoration: const InputDecoration(
-              labelText:  'Make *',
-              hintText:   'e.g. Toyota',
-              prefixIcon: Icon(Icons.directions_car),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.grey[500], size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Accepting this invitation will add you to the fleet and grant access to telemetry features.',
+                    style: TextStyle(
+                      color: Colors.grey[400],
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            validator: (v) =>
-                v == null || v.trim().isEmpty ? 'Make is required' : null,
           ),
-          const SizedBox(height: 16),
 
-          // Model
-          TextFormField(
-            controller: _modelController,
-            decoration: const InputDecoration(
-              labelText:  'Model *',
-              hintText:   'e.g. Hilux',
-              prefixIcon: Icon(Icons.car_rental),
-            ),
-            validator: (v) =>
-                v == null || v.trim().isEmpty ? 'Model is required' : null,
-          ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 32),
 
-          // Year
-          TextFormField(
-            controller: _yearController,
-            decoration: const InputDecoration(
-              labelText:  'Year *',
-              hintText:   '2020',
-              prefixIcon: Icon(Icons.calendar_today),
-            ),
-            keyboardType: TextInputType.number,
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'Year is required';
-              final y = int.tryParse(v.trim());
-              if (y == null || y < 1980 || y > DateTime.now().year + 1) {
-                return 'Enter a valid year';
-              }
-              return null;
-            },
-          ),
-          const SizedBox(height: 24),
-
-          if (_submitError != null) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.withOpacity(0.3)),
-              ),
-              child: Text(
-                _submitError!,
-                style: const TextStyle(color: Colors.red, fontSize: 13),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-
+          // Accept button
           ElevatedButton(
             onPressed: _submitting ? null : _acceptInvite,
             style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00BFA5),
+              disabledBackgroundColor: const Color(0xFF00BFA5).withOpacity(0.4),
               padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
             ),
             child: _submitting
                 ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    height: 22,
+                    width: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.white,
+                    ),
                   )
                 : const Text(
                     'Accept & Join Fleet',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
                   ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // Decline / go back
+          TextButton(
+            onPressed: _submitting
+                ? null
+                : () {
+                    context.read<InviteProvider>().clearToken();
+                    Navigator.of(context).pop();
+                  },
+            child: Text(
+              'Decline',
+              style: TextStyle(color: Colors.grey[500], fontSize: 14),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          Text('$label: ',
-              style: const TextStyle(color: Colors.blue, fontSize: 13)),
-          Text(value,
+  Widget _inviteRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: Colors.grey[500], size: 18),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              value,
               style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13)),
-        ],
-      ),
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

@@ -41,7 +41,7 @@ class _ThresholdConfigScreenState extends State<ThresholdConfigScreen> {
       if (_existingThreshold != null) {
         _minController.text = _existingThreshold!.minValue?.toString() ?? '';
         _maxController.text = _existingThreshold!.maxValue?.toString() ?? '';
-        _enabled = _existingThreshold!.enabled;
+        _enabled = _existingThreshold!.alertEnabled;
       }
     }
   }
@@ -79,7 +79,7 @@ class _ThresholdConfigScreenState extends State<ThresholdConfigScreen> {
       maxValue: _maxController.text.isEmpty
           ? null
           : double.tryParse(_maxController.text),
-      enabled: _enabled,
+      alertEnabled: _enabled,
       createdAt: _existingThreshold?.createdAt ?? DateTime.now(),
       updatedAt: DateTime.now(),
     );

@@ -31,6 +31,10 @@ dependencies:
   uuid: ^4.3.3
   flutter_dotenv: ^5.1.0
   
+  # Bluetooth (OBD-II)
+  flutter_blue_plus: ^1.32.12
+  flutter_bluetooth_serial: ^0.4.0
+
   # Deep Linking
   app_links: ^6.3.2
 
@@ -42,6 +46,9 @@ dependencies:
 
   # Network connectivity detection (heartbeat classification)
   connectivity_plus: ^5.0.2
+
+  # Camera QR code scanner
+  mobile_scanner: ^5.2.3
 
   # Charts
   fl_chart: ^0.69.0

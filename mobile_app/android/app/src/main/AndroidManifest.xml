@@ -22,6 +22,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Wake lock — prevent CPU from sleeping during active foreground tracking -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
         android:label="FTPGO"

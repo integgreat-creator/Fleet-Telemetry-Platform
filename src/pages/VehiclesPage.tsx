@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QrCode, UserPlus, Trash2, RefreshCw, Users, Car } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
 import InviteDriverModal from '../components/InviteDriverModal';
 import CreateDriverModal from '../components/CreateDriverModal';
+import PendingInvitationsPanel from '../components/PendingInvitationsPanel';
 
 interface DriverAccount {
   id: string;
@@ -30,6 +32,7 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
   const [showInviteModal,   setShowInviteModal]   = useState(false);
   const [showDriverModal,   setShowDriverModal]   = useState(false);
   const [deletingDriver,    setDeletingDriver]    = useState<string | null>(null);
+  const [resendToken,       setResendToken]       = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -170,6 +173,16 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
         </div>
       </div>
 
+      {/* ── Pending Invitations ───────────────────────────────────────── */}
+      {fleetId && (
+        <PendingInvitationsPanel
+          fleetId={fleetId}
+          onResendQR={(token, _vehicleName, _driverPhone) => {
+            setResendToken(token);
+          }}
+        />
+      )}
+
       {/* ── Vehicles grid ─────────────────────────────────────────────── */}
       <div>
         <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
@@ -271,6 +284,33 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
           onClose={() => setShowDriverModal(false)}
           onDriverCreated={loadAll}
         />
+      )}
+
+      {/* ── Resend QR modal ───────────────────────────────────────────── */}
+      {resendToken && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
+          <div className="bg-gray-800 rounded-xl p-8 max-w-sm w-full mx-4">
+            <h3 className="text-white font-bold text-lg mb-4 text-center">Resend Invite QR</h3>
+            <div className="flex justify-center mb-4">
+              <QRCodeSVG value={`vehiclesense://join?token=${resendToken}`} size={200} />
+            </div>
+            <p className="text-gray-400 text-sm text-center mb-4 break-all">
+              vehiclesense://join?token={resendToken}
+            </p>
+            <button
+              onClick={() => { navigator.clipboard.writeText(`vehiclesense://join?token=${resendToken}`); }}
+              className="w-full bg-teal-600 hover:bg-teal-500 text-white py-2 rounded-lg mb-2"
+            >
+              Copy Link
+            </button>
+            <button
+              onClick={() => setResendToken(null)}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg"
+            >
+              Close
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

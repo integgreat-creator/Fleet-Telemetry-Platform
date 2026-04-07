@@ -13,7 +13,7 @@ class ConnectivityProvider extends ChangeNotifier {
   ConnectionStatus _status = ConnectionStatus.unknown;
   int _offlineQueueLength = 0;
   bool _isFlushing = false;
-  StreamSubscription<List<ConnectivityResult>>? _subscription;
+  StreamSubscription<ConnectivityResult>? _subscription;
 
   ConnectionStatus get status => _status;
   int get offlineQueueLength => _offlineQueueLength;
@@ -26,9 +26,9 @@ class ConnectivityProvider extends ChangeNotifier {
   }
 
   Future<void> _init() async {
-    // Check initial connectivity state
-    final results = await Connectivity().checkConnectivity();
-    _updateStatus(results);
+    // connectivity_plus ^5 returns a single ConnectivityResult
+    final result = await Connectivity().checkConnectivity();
+    _updateStatus(result);
 
     // Listen for changes
     _subscription =
@@ -38,13 +38,11 @@ class ConnectivityProvider extends ChangeNotifier {
     await _refreshQueueCount();
   }
 
-  void _updateStatus(List<ConnectivityResult> results) {
-    final isConnected = results.any(
-      (r) =>
-          r == ConnectivityResult.wifi ||
-          r == ConnectivityResult.mobile ||
-          r == ConnectivityResult.ethernet,
-    );
+  void _updateStatus(ConnectivityResult result) {
+    final isConnected =
+        result == ConnectivityResult.wifi ||
+        result == ConnectivityResult.mobile ||
+        result == ConnectivityResult.ethernet;
     final newStatus =
         isConnected ? ConnectionStatus.online : ConnectionStatus.offline;
 

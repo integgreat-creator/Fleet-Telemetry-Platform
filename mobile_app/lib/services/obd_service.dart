@@ -625,6 +625,81 @@ class OBDService {
     ),
   ];
 
+  // ── VIN Read (Mode 09, PID 02) ───────────────────────────────────────────
+
+  /// Requests the Vehicle Identification Number via OBD Mode 09 PID 02.
+  /// Returns the 17-char VIN string, or null if the adapter / vehicle does
+  /// not support the request (common on Indian-market vehicles).
+  Future<String?> readVin() async {
+    try {
+      final completer = Completer<String?>();
+
+      // One-shot listener on the data stream — captures the first non-empty
+      // response that arrives after we send the VIN command.
+      late StreamSubscription<String> sub;
+      sub = _bluetoothService.dataStream.listen((raw) {
+        if (completer.isCompleted) return;
+        final vin = _parseVinResponse(raw);
+        if (vin != null) {
+          sub.cancel();
+          completer.complete(vin);
+        }
+      });
+
+      // Send VIN request command (carriage-return terminator required by ELM327)
+      await _bluetoothService.sendCommand('0902');
+
+      // Allow up to 3 seconds for a multi-frame ISO 15765 response
+      Future.delayed(const Duration(seconds: 3), () {
+        if (!completer.isCompleted) {
+          sub.cancel();
+          completer.complete(null);
+        }
+      });
+
+      return await completer.future;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Parses a raw hex string from the OBD adapter into a VIN.
+  /// Handles single-line and multi-frame ISO 15765-4 responses.
+  String? _parseVinResponse(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'\s+'), '').toUpperCase();
+    if (cleaned.isEmpty ||
+        cleaned.contains('NODATA') ||
+        cleaned.contains('ERROR') ||
+        cleaned.contains('UNABLETOCONNECT')) {
+      return null;
+    }
+
+    // Strip any non-hex characters ('>','?', line headers, etc.)
+    final hexOnly = cleaned.replaceAll(RegExp(r'[^0-9A-F]'), '');
+
+    // Locate the 4902 response marker (Mode 09, PID 02 reply)
+    final markerIdx = hexOnly.indexOf('4902');
+    if (markerIdx == -1) return null;
+
+    final vinHex = hexOnly.substring(markerIdx + 4);
+    if (vinHex.length < 34) return null; // 17 bytes = 34 hex chars min
+
+    // Convert hex pairs to ASCII characters
+    final sb = StringBuffer();
+    for (int i = 0; i + 1 < vinHex.length && sb.length < 17; i += 2) {
+      final byte = int.tryParse(vinHex.substring(i, i + 2), radix: 16);
+      if (byte == null || byte == 0) continue;
+      sb.writeCharCode(byte);
+    }
+
+    // VIN must be A-H, J-N, P, R-Z, 0-9 only (I, O, Q are excluded by standard)
+    final vin = sb.toString().replaceAll(RegExp(r'[^A-HJ-NPR-Z0-9]'), '');
+    if (vin.length < 11) return null;
+    return vin.length >= 17 ? vin.substring(0, 17) : vin;
+  }
+
+  // ── Polling ───────────────────────────────────────────────────────────────
+
   void startPolling() {
     if (_pollingTimer != null && _pollingTimer!.isActive) {
       return;

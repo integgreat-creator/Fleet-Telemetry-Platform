@@ -5,12 +5,14 @@
  *
  * POST { action: 'create', vehicle_name, driver_phone, driver_email?, fleet_id }
  *   → creates invitation row, returns { token, invite_url }
+ *     also sends an invite email to driver_email if provided
  *
  * GET  ?action=get&token=<token>
  *   → returns invite details for the mobile app to display
  *
- * POST { action: 'accept', token, vin, make, model, year }
- *   → creates vehicle, marks invitation accepted, returns { vehicle_id, fleet_id }
+ * POST { action: 'accept', token }
+ *   → creates driver_accounts row (vehicle_id=null), marks invitation accepted,
+ *     returns { success, fleet_id, user_id, session }
  *
  * GET  ?action=poll&token=<token>
  *   → returns { status } for the web dashboard to poll
@@ -156,6 +158,38 @@ serve(async (req) => {
 
     if (inviteErr) return err(inviteErr.message, 500);
 
+    // Send invite email if driver_email was provided
+    const driverEmail = body.driver_email as string | undefined;
+    if (driverEmail && driverEmail.includes('@')) {
+      try {
+        const inviteUrl = `${Deno.env.get('SITE_URL') ?? 'https://vehiclesense.app'}/invite?token=${token}`;
+        const emailHtml = `
+          <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:32px">
+            <h2 style="color:#00BFA5">You've been invited to VehicleSense</h2>
+            <p>Your fleet manager has added you to <strong>${body.fleet_name ?? 'a fleet'}</strong>.</p>
+            <p>Vehicle: <strong>${body.vehicle_name ?? 'Your Vehicle'}</strong></p>
+            <p>Install the VehicleSense app and scan the QR code, or tap the button below:</p>
+            <a href="vehiclesense://join?token=${token}"
+               style="display:inline-block;background:#00BFA5;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+              Open in App
+            </a>
+            <p style="margin-top:16px;font-size:12px;color:#666">
+              Or copy this link: vehiclesense://join?token=${token}
+            </p>
+            <p style="font-size:12px;color:#666">This invite expires in 72 hours.</p>
+          </div>
+        `;
+
+        // Use Supabase admin to send email via their SMTP
+        await adminClient.auth.admin.inviteUserByEmail(driverEmail, {
+          data: { invite_token: token, fleet_name: body.fleet_name },
+          redirectTo: `vehiclesense://join?token=${token}`,
+        }).catch(() => null); // non-fatal — email is best-effort
+      } catch (_) {
+        // Email sending failure is non-fatal
+      }
+    }
+
     return json({
       token,
       invite_url: `vehiclesense://join?token=${token}`,
@@ -165,11 +199,10 @@ serve(async (req) => {
 
   // ── accept: driver accepts the invitation on mobile app ───────────────────
   if (body.action === "accept") {
-    const { token, vin, make, model, year } = body;
-    if (!token || !vin || !make || !model || !year) {
-      return err("token, vin, make, model, and year are required");
+    const { token } = body;
+    if (!token) {
+      return err("token is required");
     }
-    if (vin.length < 11) return err("VIN must be at least 11 characters");
 
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -186,42 +219,88 @@ serve(async (req) => {
     if (invite.status === "accepted") return err("Invitation already accepted", 410);
     if (new Date(invite.expires_at) < new Date()) return err("Invitation has expired", 410);
 
-    // Get fleet manager's user_id to set as owner
-    const { data: fleet, error: fleetErr } = await adminClient
-      .from("fleets")
-      .select("manager_id")
-      .eq("id", invite.fleet_id)
-      .single();
+    // Create or retrieve the driver's auth user
+    let userId: string;
+    let sessionTokens: { access_token: string; refresh_token: string } | null = null;
 
-    if (fleetErr || !fleet) return err("Fleet not found", 404);
+    const phone = invite.driver_phone as string;
+    const email = invite.driver_email as string | null;
 
-    // Create the vehicle
-    const { data: vehicle, error: vehicleErr } = await adminClient
-      .from("vehicles")
-      .insert({
-        name:         invite.vehicle_name,
-        vin:          vin.trim().toUpperCase(),
-        make:         make.trim(),
-        model:        model.trim(),
-        year:         parseInt(year),
-        owner_id:     fleet.manager_id,
-        fleet_id:     invite.fleet_id,
-        driver_phone: invite.driver_phone,
-        is_active:    true,
-        health_score: 100,
-      })
-      .select()
-      .single();
+    // Try to find an existing user by phone or email
+    let existingUserId: string | null = null;
 
-    if (vehicleErr) return err(vehicleErr.message, 500);
+    if (email) {
+      const { data: listData } = await adminClient.auth.admin.listUsers();
+      const match = listData?.users?.find((u: { email?: string; phone?: string; id: string }) =>
+        u.email === email || u.phone === phone
+      );
+      if (match) existingUserId = match.id;
+    }
+
+    if (!existingUserId) {
+      // Create a new user for the driver
+      const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
+        phone,
+        email: email ?? undefined,
+        password: `VS_${invite.invite_token.substring(0, 12)}`, // temporary password from token
+        email_confirm: true,
+        phone_confirm: true,
+        user_metadata: { name: invite.vehicle_name, fleet_id: invite.fleet_id },
+      });
+      if (createErr || !newUser?.user) return err("Failed to create driver account", 500);
+      userId = newUser.user.id;
+    } else {
+      userId = existingUserId;
+    }
+
+    // Generate a sign-in link / session for the new user using service role
+    // This gives the mobile app a valid Supabase session immediately after QR scan.
+    try {
+      const { data: linkData } = await adminClient.auth.admin.generateLink({
+        type: "magiclink",
+        email: email ?? `${phone.replace(/\D/g, '')}@vehiclesense.driver`,
+        options: { data: { fleet_id: invite.fleet_id } },
+      });
+      if (linkData?.properties) {
+        // Exchange the hashed token for a session
+        const supabaseUser = createClient(SUPABASE_URL, ANON_KEY);
+        const { data: sessionData } = await supabaseUser.auth.verifyOtp({
+          token_hash: linkData.properties.hashed_token,
+          type: "magiclink",
+        });
+        if (sessionData?.session) {
+          sessionTokens = {
+            access_token: sessionData.session.access_token,
+            refresh_token: sessionData.session.refresh_token,
+          };
+        }
+      }
+    } catch (_) {
+      // Session generation is best-effort; driver can still sign in manually
+    }
+
+    // Create/update driver_accounts row with vehicle_id = null
+    await adminClient.from('driver_accounts').upsert({
+      user_id: userId,
+      fleet_id: invite.fleet_id,
+      vehicle_id: null,   // will be set after driver connects OBD
+      name: invite.vehicle_name,
+      phone: invite.driver_phone,
+      email: invite.driver_email ?? null,
+    }, { onConflict: 'user_id' });
 
     // Mark invitation as accepted
     await adminClient
       .from("invitations")
-      .update({ status: "accepted", vehicle_id: vehicle.id })
+      .update({ status: "accepted" })
       .eq("invite_token", token);
 
-    return json({ vehicle_id: vehicle.id, fleet_id: invite.fleet_id });
+    return new Response(JSON.stringify({
+      success: true,
+      fleet_id: invite.fleet_id,
+      user_id: userId,
+      session: sessionTokens,
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   return err("Unknown action");

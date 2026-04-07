@@ -67,14 +67,20 @@ class _VehicleFormScreenState extends State<VehicleFormScreen> {
     final userId = authProvider.user!.id;
 
     final vehicle = Vehicle(
-      id: widget.vehicleId ?? const Uuid().v4(),
-      name: _nameController.text,
-      vin: _vinController.text.isEmpty ? null : _vinController.text,
-      make: _makeController.text.isEmpty ? null : _makeController.text,
-      model: _modelController.text.isEmpty ? null : _modelController.text,
-      year: _yearController.text.isEmpty ? null : int.tryParse(_yearController.text),
-      userId: userId,
-      createdAt: DateTime.now(),
+      id:         widget.vehicleId ?? const Uuid().v4(),
+      name:       _nameController.text,
+      vin:        _vinController.text.isEmpty ? '' : _vinController.text,
+      make:       _makeController.text.isEmpty ? '' : _makeController.text,
+      model:      _modelController.text.isEmpty ? '' : _modelController.text,
+      year:       int.tryParse(_yearController.text) ?? DateTime.now().year,
+      ownerId:    userId,
+      isActive:   true,
+      healthScore: 100.0,
+      fuelPricePerLitre: 100.0,
+      avgKmPerLitre:     15.0,
+      fuelType:   'petrol',
+      createdAt:  DateTime.now(),
+      updatedAt:  DateTime.now(),
     );
 
     final success = widget.vehicleId == null

@@ -97,6 +97,60 @@ class SupabaseService {
     }
   }
 
+  /// Upserts a vehicle by VIN for a given user. If a vehicle with the same VIN
+  /// already exists for this user, the existing record is returned. Otherwise a
+  /// new one is created. Useful for the post-OBD-connection auto-registration flow.
+  Future<Vehicle> getOrCreateVehicleByVin({
+    required String userId,
+    required String vin,
+    required String name,
+    String? make,
+    String? model,
+    int? year,
+    String? fleetId,
+  }) async {
+    // Check if a vehicle with this VIN already belongs to this user
+    try {
+      final existing = await _client
+          .from('vehicles')
+          .select()
+          .eq('vin', vin)
+          .eq('owner_id', userId)
+          .maybeSingle();
+
+      if (existing != null) {
+        return Vehicle.fromJson(existing as Map<String, dynamic>);
+      }
+    } catch (_) {
+      // No existing record — continue to create
+    }
+
+    final now = DateTime.now();
+    final vehicle = Vehicle(
+      id:                '',
+      name:              name,
+      vin:               vin,
+      make:              make ?? '',
+      model:             model ?? '',
+      year:              year ?? now.year,
+      ownerId:           userId,
+      fleetId:           fleetId,
+      isActive:          true,
+      healthScore:       100.0,
+      fuelPricePerLitre: 100.0,
+      avgKmPerLitre:     15.0,
+      fuelType:          'petrol',
+      createdAt:         now,
+      updatedAt:         now,
+    );
+
+    final created = await createVehicle(vehicle);
+    if (created == null) {
+      throw Exception('Failed to create vehicle record');
+    }
+    return created;
+  }
+
   Future<Vehicle?> createVehicle(Vehicle vehicle) async {
     try {
       final response = await _client
