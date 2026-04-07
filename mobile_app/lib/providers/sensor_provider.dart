@@ -119,7 +119,7 @@ class SensorProvider extends ChangeNotifier {
         severity:  'critical',
         metadata:  { 'latitude': reading.latitude, 'longitude': reading.longitude },
       );
-      _notificationService.showAlert(
+      _notificationService.showConnectionAlert(
         'Mock GPS Detected',
         'Warning: Fake GPS provider detected on this device.',
       );
@@ -154,7 +154,7 @@ class SensorProvider extends ChangeNotifier {
             'last_rpm':        rpmData?.value,
           },
         );
-        _notificationService.showAlert(
+        _notificationService.showConnectionAlert(
           'Possible Tampering',
           'Ignition ON but no sensor data received for ${elapsed.inMinutes} minutes.',
         );
@@ -168,7 +168,7 @@ class SensorProvider extends ChangeNotifier {
           severity:    'critical',
           metadata:    { 'elapsed_minutes': elapsed.inMinutes },
         );
-        _notificationService.showAlert(
+        _notificationService.showConnectionAlert(
           'Device Offline',
           'No OBD data received for ${elapsed.inMinutes} minutes.',
         );

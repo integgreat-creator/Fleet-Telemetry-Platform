@@ -69,10 +69,33 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
 
               return ListTile(
                 leading: Icon(isBle ? Icons.bluetooth_audio : Icons.bluetooth),
-                title: Text(name),
-                subtitle: Text("$id (${isBle ? 'BLE' : 'Classic'})"),
-                trailing: device is classic.BluetoothDevice && device.isBonded 
-                    ? const Icon(Icons.link, color: Colors.blue) 
+                title: Row(
+                  children: [
+                    Expanded(child: Text(name)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: isBle
+                            ? const Color(0xFF1565C0)   // deep blue for BLE
+                            : const Color(0xFF6A1B9A),  // deep purple for Classic BT
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        isBle ? 'BLE' : 'Classic BT',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                subtitle: Text(id),
+                trailing: device is classic.BluetoothDevice && device.isBonded
+                    ? const Icon(Icons.link, color: Colors.blue)
                     : null,
                 onTap: () async {
                   _showConnectingDialog(name);
