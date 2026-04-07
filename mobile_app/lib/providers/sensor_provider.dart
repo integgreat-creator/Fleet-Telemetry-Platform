@@ -20,6 +20,7 @@ class SensorProvider extends ChangeNotifier {
   StreamSubscription? _locationSubscription;
   String? _currentVehicleId;
   String? _currentVehicleName;
+  String? _currentDriverAccountId;   // MOB-2: for data attribution
   List<Threshold> _thresholds = [];
 
   // ── Watchdog ──────────────────────────────────────────────────────────────
@@ -35,13 +36,15 @@ class SensorProvider extends ChangeNotifier {
   void startMonitoring(
     String vehicleId,
     String vehicleName,
-    List<Threshold> thresholds,
-  ) {
+    List<Threshold> thresholds, {
+    String? driverAccountId,   // MOB-2: optional driver attribution
+  }) {
     if (_sensorSubscription != null) return;
 
-    _currentVehicleId   = vehicleId;
-    _currentVehicleName = vehicleName;
-    _thresholds         = thresholds;
+    _currentVehicleId        = vehicleId;
+    _currentVehicleName      = vehicleName;
+    _currentDriverAccountId  = driverAccountId;
+    _thresholds              = thresholds;
     _lastDataReceivedAt = DateTime.now();
     _offlineEventFired  = false;
 
@@ -52,7 +55,11 @@ class SensorProvider extends ChangeNotifier {
       _latestSensorData[sensorData.type] = sensorData;
       _checkThresholds(sensorData);
       notifyListeners();
-      _supabaseService.saveSensorData(vehicleId, sensorData);
+      _supabaseService.saveSensorData(
+        vehicleId,
+        sensorData,
+        driverAccountId: _currentDriverAccountId,  // MOB-2
+      );
     });
 
     _obdService.startPolling();
@@ -99,14 +106,15 @@ class SensorProvider extends ChangeNotifier {
 
     // Save to vehicle_logs
     await _supabaseService.saveVehicleLog(
-      vehicleId:      vehicleId,
-      latitude:       reading.latitude,
-      longitude:      reading.longitude,
-      accuracy:       reading.accuracy,
-      altitude:       reading.altitude,
-      speed:          reading.speedKmh,
-      ignitionStatus: ignition,
-      isMockGps:      isMock,
+      vehicleId:        vehicleId,
+      latitude:         reading.latitude,
+      longitude:        reading.longitude,
+      accuracy:         reading.accuracy,
+      altitude:         reading.altitude,
+      speed:            reading.speedKmh,
+      ignitionStatus:   ignition,
+      isMockGps:        isMock,
+      driverAccountId:  _currentDriverAccountId,  // MOB-2
     );
 
     // Fire mock GPS event if detected

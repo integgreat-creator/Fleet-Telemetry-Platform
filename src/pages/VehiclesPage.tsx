@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { QrCode, UserPlus, Trash2, RefreshCw, Users, Car } from 'lucide-react';
+import { QrCode, UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle, Clock } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
 import InviteDriverModal from '../components/InviteDriverModal';
 import CreateDriverModal from '../components/CreateDriverModal';
 import PendingInvitationsPanel from '../components/PendingInvitationsPanel';
+import AddVehicleModal from '../components/AddVehicleModal';
 
 interface DriverAccount {
   id: string;
@@ -16,6 +17,7 @@ interface DriverAccount {
   phone: string;
   email: string;
   created_at: string;
+  first_login_at: string | null;   // WEB-2: null = never logged in
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
@@ -31,6 +33,7 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
   const [refreshing,        setRefreshing]        = useState(false);
   const [showInviteModal,   setShowInviteModal]   = useState(false);
   const [showDriverModal,   setShowDriverModal]   = useState(false);
+  const [showAddVehicle,    setShowAddVehicle]    = useState(false);   // WEB-1
   const [deletingDriver,    setDeletingDriver]    = useState<string | null>(null);
   const [resendToken,       setResendToken]       = useState<string | null>(null);
 
@@ -154,6 +157,14 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
           </button>
           {fleetId && (
             <>
+              {/* WEB-1: Pre-register a vehicle without waiting for a driver */}
+              <button
+                onClick={() => setShowAddVehicle(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-gray-200 text-sm font-medium transition-colors"
+              >
+                <PlusCircle className="w-4 h-4" />
+                Add Vehicle
+              </button>
               <button
                 onClick={() => setShowInviteModal(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium transition-colors"
@@ -195,10 +206,12 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
 
         {vehicles.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-700 bg-gray-900/40 px-6 py-12 text-center">
-            <QrCode className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+            <Car className="w-10 h-10 text-gray-700 mx-auto mb-3" />
             <p className="text-gray-400 font-medium mb-1">No vehicles yet</p>
-            <p className="text-gray-600 text-sm">
-              Click <span className="text-blue-400">QR Invite</span> to add your first vehicle.
+            <p className="text-gray-600 text-sm max-w-sm mx-auto">
+              Click <span className="text-gray-300 font-medium">Add Vehicle</span> to pre-register a vehicle,
+              or use <span className="text-blue-400">QR Invite</span> to onboard a driver —
+              vehicles appear automatically once a driver connects their OBD adapter.
             </p>
           </div>
         ) : (
@@ -239,7 +252,21 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
                 className="flex items-center justify-between px-4 py-3 bg-gray-900 border border-gray-800 rounded-xl"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-white font-medium truncate">{driver.name || '—'}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-white font-medium truncate">{driver.name || '—'}</p>
+                    {/* WEB-2: Onboarding status badge */}
+                    {driver.first_login_at ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-900/40 text-green-400 border border-green-800/50">
+                        <CheckCircle className="w-3 h-3" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-900/40 text-yellow-400 border border-yellow-800/50">
+                        <Clock className="w-3 h-3" />
+                        Awaiting first login
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-0.5">
                     {driver.email && (
                       <span className="text-xs text-gray-400">{driver.email}</span>
@@ -269,6 +296,15 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       </div>
 
       {/* ── Modals ────────────────────────────────────────────────────── */}
+      {/* WEB-1: Vehicle pre-registration modal */}
+      {showAddVehicle && fleetId && (
+        <AddVehicleModal
+          fleetId={fleetId}
+          onClose={() => setShowAddVehicle(false)}
+          onVehicleAdded={() => { loadAll(); setShowAddVehicle(false); }}
+        />
+      )}
+
       {showInviteModal && fleetId && (
         <InviteDriverModal
           fleetId={fleetId}
