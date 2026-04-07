@@ -218,6 +218,48 @@ function DeviceTypeBadge({ type }: { type: DeviceHealth['device_type'] }) {
   );
 }
 
+// ─── WhatsApp Number Field ────────────────────────────────────────────────────
+
+function WhatsAppNumberField({ fleetId }: { fleetId: string | null }) {
+  const [number, setNumber] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved]   = useState(false);
+
+  useEffect(() => {
+    if (!fleetId) return;
+    supabase.from('fleets').select('whatsapp_number').eq('id', fleetId).single()
+      .then(({ data }) => { if (data?.whatsapp_number) setNumber(data.whatsapp_number); });
+  }, [fleetId]);
+
+  const handleSave = async () => {
+    if (!fleetId) return;
+    setSaving(true);
+    await supabase.from('fleets').update({ whatsapp_number: number }).eq('id', fleetId);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  return (
+    <div className="flex gap-2">
+      <input
+        type="tel"
+        value={number}
+        onChange={e => setNumber(e.target.value)}
+        placeholder="+919876543210"
+        className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-teal-500 placeholder-gray-500"
+      />
+      <button
+        onClick={handleSave}
+        disabled={saving || !number.trim()}
+        className="px-4 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors font-medium"
+      >
+        {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save'}
+      </button>
+    </div>
+  );
+}
+
 // ─── Plan Cards ───────────────────────────────────────────────────────────────
 
 const PLAN_CARDS = [
@@ -569,6 +611,17 @@ export default function AdminPage() {
                 ) : (
                   <p className="text-gray-500 text-sm">No subscription found for this fleet.</p>
                 )}
+              </div>
+
+              {/* WhatsApp Notification Number */}
+              <div className="bg-gray-800 rounded-xl p-5">
+                <h3 className="text-white font-semibold mb-1 flex items-center gap-2">
+                  <span>📱</span> WhatsApp Alerts
+                </h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Receive real-time alerts for device offline, unauthorized movement, and tampering events.
+                </p>
+                <WhatsAppNumberField fleetId={fleetId} />
               </div>
 
               {/* Plan cards */}
