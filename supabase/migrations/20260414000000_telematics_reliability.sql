@@ -140,7 +140,7 @@ BEGIN
     PERFORM cron.schedule(
       'vehicle_logs_cleanup',
       '0 2 * * *',
-      $$DELETE FROM vehicle_logs WHERE timestamp < now() - INTERVAL '30 days'$$
+      $cmd$DELETE FROM vehicle_logs WHERE timestamp < now() - INTERVAL '30 days'$cmd$
     );
   END IF;
 END $$;
