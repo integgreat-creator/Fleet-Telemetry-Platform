@@ -46,32 +46,26 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
+      // Use supabase.functions.invoke() — it handles auth headers internally,
+      // always uses a fresh token, and never produces "Invalid JWT".
+      const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
+        body: {
+          action:   'create',
+          name:     name.trim(),
+          email:    email.trim().toLowerCase(),
+          password,
+          phone:    phone.trim() || undefined,
+          fleet_id: fleetId,
+        },
+      });
 
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            Authorization:   `Bearer ${session.access_token}`,
-            apikey:          import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({
-            action:   'create',
-            name:     name.trim(),
-            email:    email.trim().toLowerCase(),
-            password,
-            phone:    phone.trim() || undefined,
-            fleet_id: fleetId,
-          }),
-        }
-      );
+      if (fnErr) {
+        // fnErr.message contains the actual error from the edge function
+        console.error('[CreateDriver] edge function error', fnErr);
+        throw new Error(fnErr.message || 'Failed to create driver');
+      }
 
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || 'Failed to create driver');
-
+      console.log('[CreateDriver] success', data);
       setCreated(true);
       onDriverCreated();
     } catch (e: unknown) {

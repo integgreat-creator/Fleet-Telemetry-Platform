@@ -28,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_driver_sessions_vehicle
 -- RLS: fleet managers can read sessions for their fleet's vehicles
 ALTER TABLE driver_sessions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Fleet managers can view their fleet's sessions" ON driver_sessions;
 CREATE POLICY "Fleet managers can view their fleet's sessions"
   ON driver_sessions FOR SELECT
   USING (
@@ -39,6 +40,7 @@ CREATE POLICY "Fleet managers can view their fleet's sessions"
     )
   );
 
+DROP POLICY IF EXISTS "Drivers can view their own sessions" ON driver_sessions;
 CREATE POLICY "Drivers can view their own sessions"
   ON driver_sessions FOR SELECT
   USING (

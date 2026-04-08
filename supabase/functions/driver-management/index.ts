@@ -263,8 +263,12 @@ serve(async (req) => {
     const oneTimeToken    = generateOneTimeToken();
     const tokenExpiry     = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-    // Create driver_accounts row
-    const { data: driverAccount, error: daErr } = await adminClient
+    // Create driver_accounts row — try with token fields first; fall back without
+    // them if the migration hasn't been run yet (graceful degradation).
+    let driverAccount: any = null;
+    let tokenColumnsAvailable = true;
+
+    const { data: daFull, error: daErrFull } = await adminClient
       .from("driver_accounts")
       .insert({
         user_id:                    newUser.id,
@@ -279,20 +283,55 @@ serve(async (req) => {
       .select()
       .single();
 
-    if (daErr) {
-      // Roll back auth user if driver_accounts insert fails
-      await adminClient.auth.admin.deleteUser(newUser.id);
-      return err(daErr.message, 500);
+    if (daErrFull) {
+      // If the error is a missing-column error the migration hasn't been run yet —
+      // retry without the token fields so account creation still succeeds.
+      const missingColumn =
+        daErrFull.message.includes("one_time_login_token") ||
+        daErrFull.message.includes("column") ||
+        daErrFull.code === "42703";
+
+      if (missingColumn) {
+        console.warn("one_time_login_token columns not found — inserting without token (run migration 20260415)");
+        tokenColumnsAvailable = false;
+
+        const { data: daBasic, error: daErrBasic } = await adminClient
+          .from("driver_accounts")
+          .insert({
+            user_id:    newUser.id,
+            fleet_id:   fleet.id,
+            vehicle_id: vehicle_id ?? null,
+            name:       name.trim(),
+            phone:      phone?.trim() ?? null,
+            email:      email.trim().toLowerCase(),
+          })
+          .select()
+          .single();
+
+        if (daErrBasic) {
+          await adminClient.auth.admin.deleteUser(newUser.id);
+          return err(daErrBasic.message, 500);
+        }
+        driverAccount = daBasic;
+      } else {
+        // Roll back auth user for any other DB error
+        await adminClient.auth.admin.deleteUser(newUser.id);
+        return err(daErrFull.message, 500);
+      }
+    } else {
+      driverAccount = daFull;
     }
 
     // Send welcome email (best-effort — non-fatal if RESEND_API_KEY not configured)
+    // If token columns are missing the QR code in the email won't work, but
+    // the credential table (email + password) will still be delivered.
     await sendWelcomeEmail({
       driverName:   name.trim(),
       driverEmail:  email.trim().toLowerCase(),
       driverPhone:  phone?.trim() ?? null,
       password,
       fleetName:    fleet.name,
-      oneTimeToken,
+      oneTimeToken: tokenColumnsAvailable ? oneTimeToken : "",
     });
 
     // ❺ Send SMS credentials (best-effort — non-fatal if SMS_API_KEY not configured)
