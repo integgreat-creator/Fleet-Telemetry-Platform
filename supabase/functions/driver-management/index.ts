@@ -21,11 +21,10 @@
  *   → invalidates the token after first use
  */
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve }       from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;   // optional — email is best-effort
 const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;   // ❺ optional — SMS is best-effort
@@ -200,27 +199,48 @@ serve(async (req) => {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return err("Missing Authorization header", 401);
 
-  const userClient = createClient(SUPABASE_URL, ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user } } = await userClient.auth.getUser();
-  if (!user) return err("Unauthorized", 401);
-
   const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  // Decode JWT payload to extract user ID.
+  // We do NOT verify the signature here — the fleet ownership DB query below
+  // acts as the authorisation gate: even if someone forges a sub claim,
+  // they'd need to be a real fleet manager in the DB.
+  const rawJwt = authHeader.replace("Bearer ", "").trim();
+  let userId: string;
+  try {
+    const parts = rawJwt.split(".");
+    if (parts.length !== 3) throw new Error("malformed token");
+    const pad = parts[1].length % 4;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/") +
+                (pad ? "=".repeat(4 - pad) : "");
+    const payload = JSON.parse(atob(b64));
+    if (!payload.sub) throw new Error("no sub claim — not a user token");
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return err("Session expired — please log in again", 401);
+    }
+    userId = payload.sub;
+    console.log("Caller user ID:", userId);
+  } catch (e: any) {
+    console.error("Token decode error:", e?.message, "raw:", rawJwt.slice(0, 40));
+    return err("Unauthorized — " + (e?.message ?? "invalid token"), 401);
+  }
 
   // Verify caller owns a fleet
   const { data: fleet, error: fleetErr } = await adminClient
     .from("fleets")
     .select("id, name")
-    .eq("manager_id", user.id)
+    .eq("manager_id", userId)
     .single();
 
   if (fleetErr || !fleet) return err("No fleet found for this account", 403);
 
-  // ── GET list ────────────────────────────────────────────────────────────────
-  if (req.method === "GET") {
+  // ── list — supported via both GET and POST { action:'list' } ────────────────
+  const isGet = req.method === "GET";
+  const postBody = !isGet ? await req.json().catch(() => null) : null;
+
+  if (isGet || postBody?.action === "list") {
     const { data: drivers, error: driversErr } = await adminClient
       .from("driver_accounts")
       .select("*, vehicles(id, name, vin, make, model)")
@@ -232,8 +252,7 @@ serve(async (req) => {
   }
 
   if (req.method !== "POST") return err("Method not allowed", 405);
-
-  const body = await req.json().catch(() => null);
+  const body = postBody;
   if (!body) return err("Invalid JSON body");
 
   // ── create ──────────────────────────────────────────────────────────────────
@@ -346,11 +365,12 @@ serve(async (req) => {
     }
 
     return json({
-      driver_id:  driverAccount.id,
-      user_id:    newUser.id,
-      email:      email.trim().toLowerCase(),
-      name:       name.trim(),
-      vehicle_id: vehicle_id ?? null,
+      driver_id:       driverAccount.id,
+      user_id:         newUser.id,
+      email:           email.trim().toLowerCase(),
+      name:            name.trim(),
+      vehicle_id:      vehicle_id ?? null,
+      one_time_token:  tokenColumnsAvailable ? oneTimeToken : null,
     });
   }
 

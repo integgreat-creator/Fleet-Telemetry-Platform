@@ -60,11 +60,13 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       if (vehiclesErr) throw vehiclesErr;
       if (vehiclesData) setVehicles(vehiclesData);
 
-      // Get driver accounts via invoke() — handles auth internally, no stale JWT
-      const { data: driversData } = await supabase.functions.invoke('driver-management', {
-        method: 'GET',
-      });
-      if (Array.isArray(driversData)) setDrivers(driversData);
+      // List drivers directly via DB — no edge function, no JWT issues
+      const { data: driversData } = await supabase
+        .from('driver_accounts')
+        .select('*, vehicles(id, name, vin, make, model)')
+        .eq('fleet_id', fleet.id)
+        .order('created_at', { ascending: false });
+      if (driversData) setDrivers(driversData);
     } catch (e) {
       console.error('Error loading vehicles/drivers:', e);
     } finally {
@@ -90,7 +92,11 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     if (!confirm('Delete this driver account? They will no longer be able to log in.')) return;
     setDeletingDriver(driverId);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token ?? null;
+      if (!accessToken) return;
       const { error: fnErr } = await supabase.functions.invoke('driver-management', {
+        headers: { Authorization: `Bearer ${accessToken}` },
         body: { action: 'delete', driver_id: driverId },
       });
       if (!fnErr) setDrivers(d => d.filter(x => x.id !== driverId));
