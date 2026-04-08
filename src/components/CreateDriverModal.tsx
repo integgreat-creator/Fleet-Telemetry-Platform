@@ -69,8 +69,19 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
         }
       );
 
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || 'Failed to create driver');
+      // Parse body safely — some error responses are not JSON
+      const rawText = await res.text();
+      let body: any = {};
+      try { body = JSON.parse(rawText); } catch { /* keep empty object */ }
+
+      if (!res.ok) {
+        // Surface the actual error regardless of which field name is used
+        const msg =
+          body.error ?? body.message ?? body.msg ??
+          (rawText.length < 300 ? rawText : `HTTP ${res.status}`);
+        console.error('[CreateDriver] edge function error', res.status, body);
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
 
       setCreated(true);
       onDriverCreated();
