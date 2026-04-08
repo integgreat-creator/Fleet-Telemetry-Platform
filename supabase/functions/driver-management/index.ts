@@ -365,11 +365,12 @@ serve(async (req) => {
     }
 
     return json({
-      driver_id:  driverAccount.id,
-      user_id:    newUser.id,
-      email:      email.trim().toLowerCase(),
-      name:       name.trim(),
-      vehicle_id: vehicle_id ?? null,
+      driver_id:       driverAccount.id,
+      user_id:         newUser.id,
+      email:           email.trim().toLowerCase(),
+      name:            name.trim(),
+      vehicle_id:      vehicle_id ?? null,
+      one_time_token:  tokenColumnsAvailable ? oneTimeToken : null,
     });
   }
 

@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { X, UserPlus, Copy, Check, Eye, EyeOff, Loader } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { X, UserPlus, Copy, Check, Eye, EyeOff, Loader, Download, Share2 } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { supabase } from '../lib/supabase';
 
 interface Props {
@@ -25,19 +26,28 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
   const [error, setError] = useState<string | null>(null);
 
   // Success state
-  const [created, setCreated] = useState(false);
-  const [copiedEmail, setCopiedEmail] = useState(false);
+  const [created,        setCreated]        = useState(false);
+  const [createdToken,   setCreatedToken]   = useState<string | null>(null);
+  const [copiedEmail,    setCopiedEmail]    = useState(false);
   const [copiedPassword, setCopiedPassword] = useState(false);
+  const [copiedLink,     setCopiedLink]     = useState(false);
+  const qrRef = useRef<HTMLCanvasElement>(null);
 
-  const copy = (text: string, which: 'email' | 'password') => {
+  const copy = (text: string, which: 'email' | 'password' | 'link') => {
     navigator.clipboard.writeText(text);
-    if (which === 'email') {
-      setCopiedEmail(true);
-      setTimeout(() => setCopiedEmail(false), 2000);
-    } else {
-      setCopiedPassword(true);
-      setTimeout(() => setCopiedPassword(false), 2000);
-    }
+    if (which === 'email')    { setCopiedEmail(true);    setTimeout(() => setCopiedEmail(false),    2000); }
+    if (which === 'password') { setCopiedPassword(true); setTimeout(() => setCopiedPassword(false), 2000); }
+    if (which === 'link')     { setCopiedLink(true);     setTimeout(() => setCopiedLink(false),     2000); }
+  };
+
+  const downloadQr = () => {
+    const canvas = qrRef.current;
+    if (!canvas) return;
+    const url = canvas.toDataURL('image/png');
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `vehiclesense-qr-${name.trim().replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.click();
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -77,6 +87,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
       }
 
       console.log('[CreateDriver] success', data);
+      setCreatedToken(data?.one_time_token ?? null);
       setCreated(true);
       onDriverCreated();
     } catch (e: unknown) {
@@ -103,8 +114,9 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
 
         {/* ── Success state ─────────────────────────────────────────── */}
         {created ? (
-          <div className="space-y-4">
-            <div className="flex flex-col items-center gap-2 py-2">
+          <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+            {/* Header */}
+            <div className="flex flex-col items-center gap-2 py-1">
               <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center">
                 <Check className="w-6 h-6 text-green-400" />
               </div>
@@ -124,7 +136,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
                 <p className="text-xs text-gray-500 mb-0.5">Email</p>
                 <p className="text-white text-sm font-mono">{email}</p>
               </div>
-              <button onClick={() => copy(email, 'email')} className="text-gray-400 hover:text-white ml-3">
+              <button onClick={() => copy(email, 'email')} className="text-gray-400 hover:text-white ml-3 flex-shrink-0">
                 {copiedEmail ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
@@ -135,10 +147,58 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
                 <p className="text-xs text-gray-500 mb-0.5">Password</p>
                 <p className="text-white text-sm font-mono">{password}</p>
               </div>
-              <button onClick={() => copy(password, 'password')} className="text-gray-400 hover:text-white ml-3">
+              <button onClick={() => copy(password, 'password')} className="text-gray-400 hover:text-white ml-3 flex-shrink-0">
                 {copiedPassword ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
+
+            {/* QR Code */}
+            {createdToken ? (
+              <div className="bg-gray-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-white">Login QR Code</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Driver scans this to log in instantly · valid 7 days · one-time use</p>
+                  </div>
+                </div>
+
+                {/* QR canvas — centred, white background */}
+                <div className="flex justify-center">
+                  <div className="bg-white p-3 rounded-xl inline-block">
+                    <QRCodeCanvas
+                      ref={qrRef}
+                      value={`vehiclesense://auth?token=${createdToken}`}
+                      size={180}
+                      bgColor="#ffffff"
+                      fgColor="#000000"
+                      level="M"
+                    />
+                  </div>
+                </div>
+
+                {/* Share & Download row */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => copy(`vehiclesense://auth?token=${createdToken}`, 'link')}
+                    className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+                  >
+                    {copiedLink
+                      ? <><Check className="w-3.5 h-3.5 text-green-400" /> Copied</>
+                      : <><Share2 className="w-3.5 h-3.5" /> Copy Link</>}
+                  </button>
+                  <button
+                    onClick={downloadQr}
+                    className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download QR
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-gray-800/50 border border-gray-700 rounded-xl px-4 py-3 text-xs text-gray-500 text-center">
+                QR code unavailable — run migration 20260415 in Supabase to enable it
+              </div>
+            )}
 
             <button
               onClick={onClose}
