@@ -60,9 +60,14 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
       });
 
       if (fnErr) {
-        // fnErr.message contains the actual error from the edge function
-        console.error('[CreateDriver] edge function error', fnErr);
-        throw new Error(fnErr.message || 'Failed to create driver');
+        // Extract the real error body from FunctionsHttpError.context
+        let msg = fnErr.message ?? 'Failed to create driver';
+        try {
+          const errBody = await (fnErr as any).context?.json?.();
+          msg = errBody?.error ?? errBody?.message ?? msg;
+        } catch { /* context not parseable — use fnErr.message */ }
+        console.error('[CreateDriver] edge function error', fnErr, msg);
+        throw new Error(msg);
       }
 
       console.log('[CreateDriver] success', data);
