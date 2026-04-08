@@ -53,13 +53,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final vehicleProvider = context.read<VehicleProvider>();
-      final authProvider    = context.read<AuthProvider>();
       await vehicleProvider.loadVehicles();
-      // Path B (Create Driver): auto-select the vehicle assigned to this driver
-      // Change 6i: null-safety check instead of !
-      if (authProvider.isDriver && authProvider.driverVehicleId != null) {
-        await vehicleProvider.selectVehicleById(authProvider.driverVehicleId!);
-      }
+      // ❸ Drivers are no longer fixed to one vehicle — they connect dynamically
+      // via OBD each session. No auto-selection on login.
     });
   }
 
@@ -238,6 +234,11 @@ class _HomeScreenState extends State<HomeScreen> {
       await vehicleProvider.loadVehicles();
       await vehicleProvider.selectVehicle(vehicle);
 
+      // ❸ OBD is already connected — start monitoring now that the vehicle is known
+      if (_connectionState == BtConnectionState.connected) {
+        _startMonitoring();
+      }
+
       if (mounted) {
         _showSnackbar('Vehicle registered: ${vehicle.name}', isError: false);
       }
@@ -376,7 +377,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: const DashboardScreen(),
+      body: Consumer<VehicleProvider>(
+        builder: (context, vp, _) {
+          // ❸ Show connect prompt until driver connects their OBD adapter
+          if (vp.selectedVehicle == null &&
+              _connectionState != BtConnectionState.connected) {
+            return _buildObdConnectPrompt();
+          }
+          return const DashboardScreen();
+        },
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _connectionState == BtConnectionState.connected
             ? _disconnect
@@ -394,6 +404,63 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: _connectionState == BtConnectionState.connected
             ? Colors.red
             : Colors.blue,
+      ),
+    );
+  }
+
+  // ❸ Shown on every login until driver plugs in their OBD adapter
+  Widget _buildObdConnectPrompt() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 88,
+              height: 88,
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.bluetooth_searching,
+                  size: 44, color: Colors.blue),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Connect your OBD adapter',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Tap the button below to scan for and connect to your vehicle\'s OBD-II adapter. '
+              'Your vehicle will be identified automatically.',
+              style: TextStyle(color: Colors.grey[400], fontSize: 14, height: 1.5),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: _connectToBluetooth,
+              icon: const Icon(Icons.bluetooth),
+              label: const Text(
+                'Connect OBD-II',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

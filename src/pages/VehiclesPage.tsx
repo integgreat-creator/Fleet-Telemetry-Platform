@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { QrCode, UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle, Clock } from 'lucide-react';
+import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle, Clock } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
-import InviteDriverModal from '../components/InviteDriverModal';
 import CreateDriverModal from '../components/CreateDriverModal';
 import PendingInvitationsPanel from '../components/PendingInvitationsPanel';
 import AddVehicleModal from '../components/AddVehicleModal';
@@ -31,7 +30,6 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
   const [fleetId,           setFleetId]           = useState<string | null>(null);
   const [loading,           setLoading]           = useState(true);
   const [refreshing,        setRefreshing]        = useState(false);
-  const [showInviteModal,   setShowInviteModal]   = useState(false);
   const [showDriverModal,   setShowDriverModal]   = useState(false);
   const [showAddVehicle,    setShowAddVehicle]    = useState(false);   // WEB-1
   const [deletingDriver,    setDeletingDriver]    = useState<string | null>(null);
@@ -142,8 +140,9 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
         <div>
           <h1 className="text-3xl font-bold text-white mb-1">Vehicles & Drivers</h1>
           <p className="text-gray-400 text-sm">
-            Use <span className="text-blue-400 font-medium">QR Invite</span> when the driver knows the vehicle details,
-            or <span className="text-green-400 font-medium">Create Driver</span> to set up persistent login credentials.
+            Use <span className="text-green-400 font-medium">Create Driver</span> to set up login credentials —
+            the driver will receive a welcome email with their credentials and a one-time QR code.
+            Vehicles are registered automatically when a driver connects their OBD adapter.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -164,13 +163,6 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
               >
                 <PlusCircle className="w-4 h-4" />
                 Add Vehicle
-              </button>
-              <button
-                onClick={() => setShowInviteModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white text-sm font-medium transition-colors"
-              >
-                <QrCode className="w-4 h-4" />
-                QR Invite
               </button>
               <button
                 onClick={() => setShowDriverModal(true)}
@@ -210,7 +202,7 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
             <p className="text-gray-400 font-medium mb-1">No vehicles yet</p>
             <p className="text-gray-600 text-sm max-w-sm mx-auto">
               Click <span className="text-gray-300 font-medium">Add Vehicle</span> to pre-register a vehicle,
-              or use <span className="text-blue-400">QR Invite</span> to onboard a driver —
+              or click <span className="text-green-400 font-medium">Create Driver</span> to add a driver —
               vehicles appear automatically once a driver connects their OBD adapter.
             </p>
           </div>
@@ -305,18 +297,9 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
         />
       )}
 
-      {showInviteModal && fleetId && (
-        <InviteDriverModal
-          fleetId={fleetId}
-          onClose={() => setShowInviteModal(false)}
-          onVehicleCreated={() => { loadAll(); setShowInviteModal(false); }}
-        />
-      )}
-
       {showDriverModal && fleetId && (
         <CreateDriverModal
           fleetId={fleetId}
-          vehicles={vehicles}
           onClose={() => setShowDriverModal(false)}
           onDriverCreated={loadAll}
         />

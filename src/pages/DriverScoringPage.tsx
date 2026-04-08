@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Shield, TrendingUp, TrendingDown, AlertTriangle, Award, Users } from 'lucide-react';
-import { supabase, type DriverBehavior, type Vehicle } from '../lib/supabase';
+import { supabase, type DriverBehavior } from '../lib/supabase';
 
 interface BehaviorWithVehicle extends DriverBehavior {
-  vehicle_name?: string;
-  vehicle_make?: string;
+  vehicle_name?:  string;
+  vehicle_make?:  string;
   vehicle_model?: string;
+  driver_name?:   string;   // ❻ driver_accounts.name — null for pre-migration records
 }
 
 export default function DriverScoringPage() {
@@ -20,7 +21,7 @@ export default function DriverScoringPage() {
     try {
       const { data } = await supabase
         .from('driver_behavior')
-        .select('*, vehicles(name, make, model)')
+        .select('*, vehicles(name, make, model), driver_accounts(name)')   // ❻ join driver
         .order('driver_score', { ascending: false })
         .limit(200);
 
@@ -28,9 +29,10 @@ export default function DriverScoringPage() {
         setBehaviors(
           data.map((b: any) => ({
             ...b,
-            vehicle_name: b.vehicles?.name,
-            vehicle_make: b.vehicles?.make,
+            vehicle_name:  b.vehicles?.name,
+            vehicle_make:  b.vehicles?.make,
             vehicle_model: b.vehicles?.model,
+            driver_name:   b.driver_accounts?.name ?? null,   // ❻
           }))
         );
       }
@@ -41,13 +43,17 @@ export default function DriverScoringPage() {
     }
   };
 
-  // Deduplicate: latest record per vehicle (already sorted by score desc, so take first per vehicle)
-  const latestPerVehicle = behaviors.reduce<BehaviorWithVehicle[]>((acc, b) => {
-    if (!acc.find(x => x.vehicle_id === b.vehicle_id)) acc.push(b);
+  // ❻ Deduplicate: latest record per driver (when attributed) or per vehicle (legacy)
+  // Records with driver_account_id are deduplicated by driver; the rest by vehicle.
+  const latestPerSubject = behaviors.reduce<BehaviorWithVehicle[]>((acc, b) => {
+    const key = b.driver_account_id ?? `vehicle:${b.vehicle_id}`;
+    if (!acc.find(x => (x.driver_account_id ?? `vehicle:${x.vehicle_id}`) === key)) {
+      acc.push(b);
+    }
     return acc;
   }, []);
 
-  const leaderboard = [...latestPerVehicle].sort((a, b) => b.driver_score - a.driver_score);
+  const leaderboard = [...latestPerSubject].sort((a, b) => b.driver_score - a.driver_score);
 
   const fleetAvgScore =
     leaderboard.length > 0
@@ -181,7 +187,9 @@ export default function DriverScoringPage() {
         <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-800">
             <h2 className="text-lg font-bold text-white">Driver Leaderboard</h2>
-            <p className="text-sm text-gray-400">Latest trip score per vehicle, ranked highest to lowest</p>
+            <p className="text-sm text-gray-400">
+              Latest score per driver (or per vehicle for pre-attribution records), ranked highest to lowest
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -191,7 +199,7 @@ export default function DriverScoringPage() {
                     Rank
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                    Vehicle
+                    Driver / Vehicle
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider min-w-[180px]">
                     Score
@@ -228,16 +236,19 @@ export default function DriverScoringPage() {
                         )}
                       </td>
 
-                      {/* Vehicle */}
+                      {/* Driver / Vehicle */}
                       <td className="px-4 py-3">
+                        {/* ❻ Show driver name when attributed; fall back to vehicle */}
                         <p className="text-white font-medium text-sm">
-                          {b.vehicle_name || 'Unknown'}
+                          {b.driver_name ?? (
+                            <span className="text-gray-500 italic">Unattributed</span>
+                          )}
                         </p>
-                        {(b.vehicle_make || b.vehicle_model) && (
-                          <p className="text-gray-500 text-xs">
-                            {b.vehicle_make} {b.vehicle_model}
-                          </p>
-                        )}
+                        <p className="text-gray-500 text-xs">
+                          {b.vehicle_name || 'Unknown vehicle'}
+                          {(b.vehicle_make || b.vehicle_model) &&
+                            ` · ${b.vehicle_make ?? ''} ${b.vehicle_model ?? ''}`.trim()}
+                        </p>
                       </td>
 
                       {/* Score with bar */}
