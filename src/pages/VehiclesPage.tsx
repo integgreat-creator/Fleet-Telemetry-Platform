@@ -60,9 +60,10 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       if (vehiclesErr) throw vehiclesErr;
       if (vehiclesData) setVehicles(vehiclesData);
 
-      // Get driver accounts via invoke() — handles auth internally, no stale JWT
+      // List drivers via POST action — avoids GET auth-header issues with invoke()
+      await supabase.auth.refreshSession();
       const { data: driversData } = await supabase.functions.invoke('driver-management', {
-        method: 'GET',
+        body: { action: 'list' },
       });
       if (Array.isArray(driversData)) setDrivers(driversData);
     } catch (e) {
@@ -90,6 +91,7 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     if (!confirm('Delete this driver account? They will no longer be able to log in.')) return;
     setDeletingDriver(driverId);
     try {
+      await supabase.auth.refreshSession();
       const { error: fnErr } = await supabase.functions.invoke('driver-management', {
         body: { action: 'delete', driver_id: driverId },
       });

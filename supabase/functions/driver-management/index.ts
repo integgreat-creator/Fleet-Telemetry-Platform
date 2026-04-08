@@ -231,8 +231,11 @@ serve(async (req) => {
 
   if (fleetErr || !fleet) return err("No fleet found for this account", 403);
 
-  // ── GET list ────────────────────────────────────────────────────────────────
-  if (req.method === "GET") {
+  // ── list — supported via both GET and POST { action:'list' } ────────────────
+  const isGet = req.method === "GET";
+  const postBody = !isGet ? await req.json().catch(() => null) : null;
+
+  if (isGet || postBody?.action === "list") {
     const { data: drivers, error: driversErr } = await adminClient
       .from("driver_accounts")
       .select("*, vehicles(id, name, vin, make, model)")
@@ -244,8 +247,7 @@ serve(async (req) => {
   }
 
   if (req.method !== "POST") return err("Method not allowed", 405);
-
-  const body = await req.json().catch(() => null);
+  const body = postBody;
   if (!body) return err("Invalid JSON body");
 
   // ── create ──────────────────────────────────────────────────────────────────
