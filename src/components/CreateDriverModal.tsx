@@ -46,8 +46,10 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     setError(null);
 
     try {
-      // Use supabase.functions.invoke() — it handles auth headers internally,
-      // always uses a fresh token, and never produces "Invalid JWT".
+      // Proactively refresh session so invoke() always sends a valid JWT
+      await supabase.auth.refreshSession();
+
+      // Use supabase.functions.invoke() — it handles auth headers internally
       const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
         body: {
           action:   'create',
