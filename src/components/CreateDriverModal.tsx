@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { X, UserPlus, Copy, Check, Eye, EyeOff, Loader } from 'lucide-react';
-import { supabase, type Vehicle } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 
 interface Props {
   fleetId: string;
-  vehicles: Vehicle[];
   onClose: () => void;
   onDriverCreated: () => void;
 }
@@ -16,11 +15,10 @@ function generatePassword(): string {
     .join('');
 }
 
-export default function CreateDriverModal({ fleetId, vehicles, onClose, onDriverCreated }: Props) {
+export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }: Props) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [vehicleId, setVehicleId] = useState('');
   const [password, setPassword] = useState(generatePassword);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -61,13 +59,12 @@ export default function CreateDriverModal({ fleetId, vehicles, onClose, onDriver
             apikey:          import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
-            action:     'create',
-            name:       name.trim(),
-            email:      email.trim().toLowerCase(),
+            action:   'create',
+            name:     name.trim(),
+            email:    email.trim().toLowerCase(),
             password,
-            phone:      phone.trim() || undefined,
-            vehicle_id: vehicleId || undefined,
-            fleet_id:   fleetId,
+            phone:    phone.trim() || undefined,
+            fleet_id: fleetId,
           }),
         }
       );
@@ -181,20 +178,6 @@ export default function CreateDriverModal({ fleetId, vehicles, onClose, onDriver
                 placeholder="+91 98765 43210"
                 className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
               />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-gray-300">Assign Vehicle (optional)</label>
-              <select
-                value={vehicleId}
-                onChange={e => setVehicleId(e.target.value)}
-                className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-              >
-                <option value="">— No vehicle assigned yet —</option>
-                {vehicles.map(v => (
-                  <option key={v.id} value={v.id}>{v.name} {v.vin ? `· ${v.vin}` : ''}</option>
-                ))}
-              </select>
             </div>
 
             <div className="space-y-1.5">

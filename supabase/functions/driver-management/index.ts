@@ -28,6 +28,7 @@ const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;   // optional — email is best-effort
+const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;   // ❺ optional — SMS is best-effort
 const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://vehiclesense.app";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -124,6 +125,57 @@ async function sendWelcomeEmail(opts: {
     }
   } catch (e) {
     console.warn("Welcome email exception:", e);
+  }
+}
+
+/** ❺ Sends driver credentials via SMS.
+ *  Completely non-fatal — skipped if SMS_API_KEY is not configured.
+ *  When you choose an SMS provider (MSG91, Fast2SMS, Twilio, etc.),
+ *  replace the TODO block below with the provider's API call.
+ *  Required Supabase secret: SMS_API_KEY */
+async function sendSmsCredentials(opts: {
+  driverName:   string;
+  driverPhone:  string;
+  driverEmail:  string;
+  password:     string;
+  fleetName:    string;
+}): Promise<void> {
+  if (!SMS_API_KEY) {
+    console.warn("SMS_API_KEY not configured — SMS credentials skipped");
+    return;
+  }
+  if (!opts.driverPhone) {
+    console.warn("No phone number provided — SMS skipped");
+    return;
+  }
+
+  const message =
+    `Welcome to ${opts.fleetName} fleet!\n` +
+    `Your VehicleSense credentials:\n` +
+    `Email: ${opts.driverEmail}\n` +
+    `Password: ${opts.password}\n` +
+    `Download the VehicleSense app and sign in to get started.`;
+
+  try {
+    // TODO: Replace with your chosen SMS provider.
+    // Example for MSG91 (India):
+    //   POST https://api.msg91.com/api/v5/flow/
+    //   Headers: { authkey: SMS_API_KEY }
+    //   Body: { template_id, mobiles: opts.driverPhone, VAR1: opts.driverEmail, VAR2: opts.password }
+    //
+    // Example for Twilio (global):
+    //   POST https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json
+    //   Auth: Basic {ACCOUNT_SID}:{AUTH_TOKEN}
+    //   Body: { From: +1xxx, To: opts.driverPhone, Body: message }
+    //
+    // Example for Fast2SMS (India, free tier):
+    //   POST https://www.fast2sms.com/dev/bulkV2
+    //   Headers: { authorization: SMS_API_KEY }
+    //   Body: { route: "q", message, language: "english", numbers: opts.driverPhone }
+
+    console.info(`SMS_API_KEY present but provider not yet configured — message for ${opts.driverPhone}: ${message}`);
+  } catch (e) {
+    console.warn("SMS credentials exception:", e);
   }
 }
 
@@ -242,6 +294,17 @@ serve(async (req) => {
       fleetName:    fleet.name,
       oneTimeToken,
     });
+
+    // ❺ Send SMS credentials (best-effort — non-fatal if SMS_API_KEY not configured)
+    if (phone?.trim()) {
+      await sendSmsCredentials({
+        driverName:  name.trim(),
+        driverPhone: phone.trim(),
+        driverEmail: email.trim().toLowerCase(),
+        password,
+        fleetName:   fleet.name,
+      });
+    }
 
     return json({
       driver_id:  driverAccount.id,
