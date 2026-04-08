@@ -407,6 +407,30 @@ serve(async (req) => {
     return json({ email: driver.email });
   }
 
+  // ── regenerate_token ────────────────────────────────────────────────────────
+  // Fleet manager requests a fresh one-time login token for a driver who hasn't
+  // logged in yet (token used or expired).
+  if (body.action === "regenerate_token") {
+    const { driver_id } = body;
+    if (!driver_id) return err("driver_id is required");
+
+    const newToken  = generateOneTimeToken();
+    const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    const { error: updateErr } = await adminClient
+      .from("driver_accounts")
+      .update({
+        one_time_login_token:     newToken,
+        one_time_login_token_exp: newExpiry.toISOString(),
+      })
+      .eq("id",       driver_id)
+      .eq("fleet_id", fleet.id);   // ensures manager only touches their own drivers
+
+    if (updateErr) return err(updateErr.message, 500);
+
+    return json({ one_time_token: newToken });
+  }
+
   // ── delete ──────────────────────────────────────────────────────────────────
   if (body.action === "delete") {
     const { driver_id } = body;
