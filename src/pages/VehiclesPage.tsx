@@ -60,8 +60,9 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       if (vehiclesErr) throw vehiclesErr;
       if (vehiclesData) setVehicles(vehiclesData);
 
-      // Get driver accounts
-      const { data: { session } } = await supabase.auth.getSession();
+      // Get driver accounts — use refreshSession to avoid stale JWT
+      const { data: refreshData } = await supabase.auth.refreshSession();
+      const session = refreshData.session;
       if (session) {
         const res = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management?action=list`,
@@ -102,7 +103,8 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     if (!confirm('Delete this driver account? They will no longer be able to log in.')) return;
     setDeletingDriver(driverId);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: refreshData } = await supabase.auth.refreshSession();
+      const session = refreshData.session;
       if (!session) return;
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,

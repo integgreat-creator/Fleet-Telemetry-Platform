@@ -46,8 +46,11 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
+      // refreshSession() guarantees a non-expired access token.
+      // getSession() can return a stale cached token → "Invalid JWT".
+      const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+      const session = refreshData.session;
+      if (refreshErr || !session) throw new Error('Session expired — please refresh the page and log in again');
 
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
