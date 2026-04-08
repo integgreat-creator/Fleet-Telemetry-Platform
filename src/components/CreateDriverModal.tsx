@@ -46,11 +46,15 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     setError(null);
 
     try {
-      // Proactively refresh session so invoke() always sends a valid JWT
-      await supabase.auth.refreshSession();
+      // Get a fresh session and explicitly attach the access token as a header.
+      // supabase.functions.invoke() can silently fall back to the anon key if
+      // getSession() returns null — passing the header explicitly prevents that.
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token ?? null;
+      if (!accessToken) throw new Error('Not authenticated — please log in again');
 
-      // Use supabase.functions.invoke() — it handles auth headers internally
       const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
+        headers: { Authorization: `Bearer ${accessToken}` },
         body: {
           action:   'create',
           name:     name.trim(),

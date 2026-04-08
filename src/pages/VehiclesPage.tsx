@@ -92,8 +92,11 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     if (!confirm('Delete this driver account? They will no longer be able to log in.')) return;
     setDeletingDriver(driverId);
     try {
-      await supabase.auth.refreshSession();
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token ?? null;
+      if (!accessToken) return;
       const { error: fnErr } = await supabase.functions.invoke('driver-management', {
+        headers: { Authorization: `Bearer ${accessToken}` },
         body: { action: 'delete', driver_id: driverId },
       });
       if (!fnErr) setDrivers(d => d.filter(x => x.id !== driverId));
