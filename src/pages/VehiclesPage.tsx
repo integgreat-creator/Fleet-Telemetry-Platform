@@ -60,12 +60,13 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       if (vehiclesErr) throw vehiclesErr;
       if (vehiclesData) setVehicles(vehiclesData);
 
-      // List drivers via POST action — avoids GET auth-header issues with invoke()
-      await supabase.auth.refreshSession();
-      const { data: driversData } = await supabase.functions.invoke('driver-management', {
-        body: { action: 'list' },
-      });
-      if (Array.isArray(driversData)) setDrivers(driversData);
+      // List drivers directly via DB — no edge function, no JWT issues
+      const { data: driversData } = await supabase
+        .from('driver_accounts')
+        .select('*, vehicles(id, name, vin, make, model)')
+        .eq('fleet_id', fleet.id)
+        .order('created_at', { ascending: false });
+      if (driversData) setDrivers(driversData);
     } catch (e) {
       console.error('Error loading vehicles/drivers:', e);
     } finally {

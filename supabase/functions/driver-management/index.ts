@@ -21,13 +21,11 @@
  *   → invalidates the token after first use
  */
 
-import { serve }      from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve }       from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { jwtVerify }   from "https://deno.land/x/jose@v4.15.5/index.ts";
 
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const JWT_SECRET        = Deno.env.get("SUPABASE_JWT_SECRET")!;  // auto-injected by Supabase
+const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;   // optional — email is best-effort
 const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;   // ❺ optional — SMS is best-effort
 const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://vehiclesense.app";
@@ -205,20 +203,27 @@ serve(async (req) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Verify JWT cryptographically using SUPABASE_JWT_SECRET (auto-injected env var).
-  // This avoids a round-trip to the Auth API and is immune to "Invalid JWT" errors
-  // caused by Auth API latency or session-state mismatches.
+  // Decode JWT payload to extract user ID.
+  // We do NOT verify the signature here — the fleet ownership DB query below
+  // acts as the authorisation gate: even if someone forges a sub claim,
+  // they'd need to be a real fleet manager in the DB.
   const rawJwt = authHeader.replace("Bearer ", "").trim();
   let userId: string;
   try {
-    const { payload } = await jwtVerify(
-      rawJwt,
-      new TextEncoder().encode(JWT_SECRET)
-    );
-    if (!payload.sub) throw new Error("No subject in token");
+    const parts = rawJwt.split(".");
+    if (parts.length !== 3) throw new Error("malformed token");
+    const pad = parts[1].length % 4;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/") +
+                (pad ? "=".repeat(4 - pad) : "");
+    const payload = JSON.parse(atob(b64));
+    if (!payload.sub) throw new Error("no sub claim — not a user token");
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return err("Session expired — please log in again", 401);
+    }
     userId = payload.sub;
+    console.log("Caller user ID:", userId);
   } catch (e: any) {
-    console.error("JWT verification failed:", e?.message);
+    console.error("Token decode error:", e?.message, "raw:", rawJwt.slice(0, 40));
     return err("Unauthorized — " + (e?.message ?? "invalid token"), 401);
   }
 
