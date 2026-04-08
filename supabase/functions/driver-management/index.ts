@@ -21,12 +21,13 @@
  *   → invalidates the token after first use
  */
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve }      from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { jwtVerify }   from "https://deno.land/x/jose@v4.15.5/index.ts";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const JWT_SECRET        = Deno.env.get("SUPABASE_JWT_SECRET")!;  // auto-injected by Supabase
 const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;   // optional — email is best-effort
 const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;   // ❺ optional — SMS is best-effort
 const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://vehiclesense.app";
@@ -200,24 +201,32 @@ serve(async (req) => {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return err("Missing Authorization header", 401);
 
-  // Use adminClient.auth.getUser(jwt) — more reliable than creating a second
-  // anon client. Directly validates the token server-side without session state.
   const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const jwt = authHeader.replace("Bearer ", "").trim();
-  const { data: { user }, error: authErr } = await adminClient.auth.getUser(jwt);
-  if (authErr || !user) {
-    console.error("Auth error:", authErr?.message);
-    return err(authErr?.message ?? "Unauthorized", 401);
+  // Verify JWT cryptographically using SUPABASE_JWT_SECRET (auto-injected env var).
+  // This avoids a round-trip to the Auth API and is immune to "Invalid JWT" errors
+  // caused by Auth API latency or session-state mismatches.
+  const rawJwt = authHeader.replace("Bearer ", "").trim();
+  let userId: string;
+  try {
+    const { payload } = await jwtVerify(
+      rawJwt,
+      new TextEncoder().encode(JWT_SECRET)
+    );
+    if (!payload.sub) throw new Error("No subject in token");
+    userId = payload.sub;
+  } catch (e: any) {
+    console.error("JWT verification failed:", e?.message);
+    return err("Unauthorized — " + (e?.message ?? "invalid token"), 401);
   }
 
   // Verify caller owns a fleet
   const { data: fleet, error: fleetErr } = await adminClient
     .from("fleets")
     .select("id, name")
-    .eq("manager_id", user.id)
+    .eq("manager_id", userId)
     .single();
 
   if (fleetErr || !fleet) return err("No fleet found for this account", 403);
