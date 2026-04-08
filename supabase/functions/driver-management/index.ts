@@ -200,15 +200,18 @@ serve(async (req) => {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return err("Missing Authorization header", 401);
 
-  const userClient = createClient(SUPABASE_URL, ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const { data: { user } } = await userClient.auth.getUser();
-  if (!user) return err("Unauthorized", 401);
-
+  // Use adminClient.auth.getUser(jwt) — more reliable than creating a second
+  // anon client. Directly validates the token server-side without session state.
   const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  const jwt = authHeader.replace("Bearer ", "").trim();
+  const { data: { user }, error: authErr } = await adminClient.auth.getUser(jwt);
+  if (authErr || !user) {
+    console.error("Auth error:", authErr?.message);
+    return err(authErr?.message ?? "Unauthorized", 401);
+  }
 
   // Verify caller owns a fleet
   const { data: fleet, error: fleetErr } = await adminClient
