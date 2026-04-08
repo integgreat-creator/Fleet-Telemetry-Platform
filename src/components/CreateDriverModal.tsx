@@ -46,46 +46,26 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     setError(null);
 
     try {
-      // refreshSession() guarantees a non-expired access token.
-      // getSession() can return a stale cached token → "Invalid JWT".
-      const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
-      const session = refreshData.session;
-      if (refreshErr || !session) throw new Error('Session expired — please refresh the page and log in again');
+      // Use supabase.functions.invoke() — it handles auth headers internally,
+      // always uses a fresh token, and never produces "Invalid JWT".
+      const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
+        body: {
+          action:   'create',
+          name:     name.trim(),
+          email:    email.trim().toLowerCase(),
+          password,
+          phone:    phone.trim() || undefined,
+          fleet_id: fleetId,
+        },
+      });
 
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            Authorization:   `Bearer ${session.access_token}`,
-            apikey:          import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({
-            action:   'create',
-            name:     name.trim(),
-            email:    email.trim().toLowerCase(),
-            password,
-            phone:    phone.trim() || undefined,
-            fleet_id: fleetId,
-          }),
-        }
-      );
-
-      // Parse body safely — some error responses are not JSON
-      const rawText = await res.text();
-      let body: any = {};
-      try { body = JSON.parse(rawText); } catch { /* keep empty object */ }
-
-      if (!res.ok) {
-        // Surface the actual error regardless of which field name is used
-        const msg =
-          body.error ?? body.message ?? body.msg ??
-          (rawText.length < 300 ? rawText : `HTTP ${res.status}`);
-        console.error('[CreateDriver] edge function error', res.status, body);
-        throw new Error(msg || `HTTP ${res.status}`);
+      if (fnErr) {
+        // fnErr.message contains the actual error from the edge function
+        console.error('[CreateDriver] edge function error', fnErr);
+        throw new Error(fnErr.message || 'Failed to create driver');
       }
 
+      console.log('[CreateDriver] success', data);
       setCreated(true);
       onDriverCreated();
     } catch (e: unknown) {

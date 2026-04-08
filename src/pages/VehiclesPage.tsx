@@ -60,24 +60,11 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
       if (vehiclesErr) throw vehiclesErr;
       if (vehiclesData) setVehicles(vehiclesData);
 
-      // Get driver accounts — use refreshSession to avoid stale JWT
-      const { data: refreshData } = await supabase.auth.refreshSession();
-      const session = refreshData.session;
-      if (session) {
-        const res = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management?action=list`,
-          {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-              apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-            },
-          }
-        );
-        if (res.ok) {
-          const data = await res.json();
-          setDrivers(data);
-        }
-      }
+      // Get driver accounts via invoke() — handles auth internally, no stale JWT
+      const { data: driversData } = await supabase.functions.invoke('driver-management', {
+        method: 'GET',
+      });
+      if (Array.isArray(driversData)) setDrivers(driversData);
     } catch (e) {
       console.error('Error loading vehicles/drivers:', e);
     } finally {
@@ -103,22 +90,10 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     if (!confirm('Delete this driver account? They will no longer be able to log in.')) return;
     setDeletingDriver(driverId);
     try {
-      const { data: refreshData } = await supabase.auth.refreshSession();
-      const session = refreshData.session;
-      if (!session) return;
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            Authorization:   `Bearer ${session.access_token}`,
-            apikey:          import.meta.env.VITE_SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify({ action: 'delete', driver_id: driverId }),
-        }
-      );
-      if (res.ok) setDrivers(d => d.filter(x => x.id !== driverId));
+      const { error: fnErr } = await supabase.functions.invoke('driver-management', {
+        body: { action: 'delete', driver_id: driverId },
+      });
+      if (!fnErr) setDrivers(d => d.filter(x => x.id !== driverId));
     } catch (e) {
       console.error('Error deleting driver:', e);
     } finally {
