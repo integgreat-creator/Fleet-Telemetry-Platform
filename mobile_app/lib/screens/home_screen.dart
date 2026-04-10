@@ -216,7 +216,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (user == null) return;
 
     final prefs = await SharedPreferences.getInstance();
-    final fleetId = prefs.getString('fleet_id');
+    // SharedPreferences has fleet_id only when the old invite-accept flow ran.
+    // For drivers who logged in with email/password credentials the fleet_id
+    // lives in AuthProvider (loaded from driver_accounts on sign-in).
+    final fleetId = prefs.getString('fleet_id')
+        ?? context.read<AuthProvider>().driverFleetId;
 
     try {
       final supabaseService = SupabaseService();
