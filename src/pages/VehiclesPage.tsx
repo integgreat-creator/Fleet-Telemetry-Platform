@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle, Clock } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle,
+         Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
 import CreateDriverModal from '../components/CreateDriverModal';
@@ -16,7 +17,9 @@ interface DriverAccount {
   phone: string;
   email: string;
   created_at: string;
-  first_login_at: string | null;   // WEB-2: null = never logged in
+  first_login_at:           string | null;
+  one_time_login_token:     string | null;
+  one_time_login_token_exp: string | null;
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
@@ -34,6 +37,10 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
   const [showAddVehicle,    setShowAddVehicle]    = useState(false);   // WEB-1
   const [deletingDriver,    setDeletingDriver]    = useState<string | null>(null);
   const [resendToken,       setResendToken]       = useState<string | null>(null);
+  const [credDriver,        setCredDriver]        = useState<DriverAccount | null>(null);
+  const [regenLoading,      setRegenLoading]      = useState(false);
+  const [copiedCredLink,    setCopiedCredLink]    = useState(false);
+  const credQrRef = useRef<HTMLCanvasElement>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -105,6 +112,37 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
     } finally {
       setDeletingDriver(null);
     }
+  };
+
+  const handleRegenerateToken = async (driver: DriverAccount) => {
+    setRegenLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token ?? null;
+      if (!accessToken) return;
+      const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: { action: 'regenerate_token', driver_id: driver.id },
+      });
+      if (fnErr) { console.error('Regenerate token error', fnErr); return; }
+      // Update driver in local state + refresh credentials modal
+      const updated = { ...driver, one_time_login_token: data.one_time_token,
+        one_time_login_token_exp: new Date(Date.now() + 7*24*60*60*1000).toISOString() };
+      setDrivers(prev => prev.map(d => d.id === driver.id ? updated : d));
+      setCredDriver(updated);
+    } finally {
+      setRegenLoading(false);
+    }
+  };
+
+  const downloadCredQr = (driverName: string) => {
+    const canvas = credQrRef.current;
+    if (!canvas) return;
+    const url = canvas.toDataURL('image/png');
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `vehiclesense-qr-${driverName.replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.click();
   };
 
   if (loading) {
@@ -256,14 +294,26 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDeleteDriver(driver.id)}
-                  disabled={deletingDriver === driver.id}
-                  className="ml-3 flex-shrink-0 p-1.5 rounded-lg text-red-500 hover:bg-red-900/30 transition-colors disabled:opacity-50"
-                  title="Delete driver"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="ml-3 flex-shrink-0 flex items-center gap-1">
+                  {/* Show credentials button — only for drivers awaiting first login */}
+                  {!driver.first_login_at && (
+                    <button
+                      onClick={() => setCredDriver(driver)}
+                      className="p-1.5 rounded-lg text-yellow-400 hover:bg-yellow-900/30 transition-colors"
+                      title="View credentials & QR code"
+                    >
+                      <QrCode className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDeleteDriver(driver.id)}
+                    disabled={deletingDriver === driver.id}
+                    className="p-1.5 rounded-lg text-red-500 hover:bg-red-900/30 transition-colors disabled:opacity-50"
+                    title="Delete driver"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -287,6 +337,113 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
           onDriverCreated={loadAll}
         />
       )}
+
+      {/* ── Driver Credentials & QR modal ────────────────────────────── */}
+      {credDriver && (() => {
+        const token     = credDriver.one_time_login_token;
+        const expiry    = credDriver.one_time_login_token_exp;
+        const isExpired = !token || (expiry ? new Date(expiry) < new Date() : true);
+        const deepLink  = token ? `vehiclesense://auth?token=${token}` : '';
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-4">
+
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Driver Credentials</h2>
+                  <p className="text-sm text-gray-400 mt-0.5">{credDriver.name}</p>
+                </div>
+                <button onClick={() => { setCredDriver(null); setCopiedCredLink(false); }}
+                  className="text-gray-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Email */}
+              <div className="bg-gray-800 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-500 mb-0.5">Email</p>
+                <p className="text-white text-sm font-mono">{credDriver.email}</p>
+              </div>
+
+              {/* QR section */}
+              {isExpired ? (
+                <div className="bg-gray-800 rounded-xl p-4 text-center space-y-3">
+                  <p className="text-yellow-400 text-sm font-medium">QR code has expired or been used</p>
+                  <p className="text-gray-500 text-xs">Generate a new one-time login QR for this driver.</p>
+                  <button
+                    onClick={() => handleRegenerateToken(credDriver)}
+                    disabled={regenLoading}
+                    className="flex items-center justify-center gap-2 w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+                  >
+                    <RefreshCcw className={`w-4 h-4 ${regenLoading ? 'animate-spin' : ''}`} />
+                    {regenLoading ? 'Generating…' : 'Generate New QR'}
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-gray-800 rounded-xl p-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-white">Login QR Code</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Valid until {new Date(expiry!).toLocaleDateString()} · one-time use
+                    </p>
+                  </div>
+                  {/* QR code */}
+                  <div className="flex justify-center">
+                    <div className="bg-white p-3 rounded-xl inline-block">
+                      <QRCodeCanvas
+                        ref={credQrRef}
+                        value={deepLink}
+                        size={180}
+                        bgColor="#ffffff"
+                        fgColor="#000000"
+                        level="M"
+                      />
+                    </div>
+                  </div>
+                  {/* Actions */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(deepLink);
+                        setCopiedCredLink(true);
+                        setTimeout(() => setCopiedCredLink(false), 2000);
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+                    >
+                      {copiedCredLink
+                        ? <><Check className="w-3.5 h-3.5 text-green-400" /> Copied</>
+                        : <><Share2 className="w-3.5 h-3.5" /> Copy Link</>}
+                    </button>
+                    <button
+                      onClick={() => downloadCredQr(credDriver.name)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download QR
+                    </button>
+                  </div>
+                  {/* Regenerate option */}
+                  <button
+                    onClick={() => handleRegenerateToken(credDriver)}
+                    disabled={regenLoading}
+                    className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-gray-500 hover:text-gray-300 text-xs transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`w-3 h-3 ${regenLoading ? 'animate-spin' : ''}`} />
+                    Regenerate QR
+                  </button>
+                </div>
+              )}
+
+              <button
+                onClick={() => { setCredDriver(null); setCopiedCredLink(false); }}
+                className="w-full py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Resend QR modal ───────────────────────────────────────────── */}
       {resendToken && (
