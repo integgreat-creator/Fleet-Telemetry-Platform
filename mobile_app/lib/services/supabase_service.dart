@@ -97,9 +97,14 @@ class SupabaseService {
     }
   }
 
-  /// Upserts a vehicle by VIN for a given user. If a vehicle with the same VIN
-  /// already exists for this user, the existing record is returned. Otherwise a
-  /// new one is created. Useful for the post-OBD-connection auto-registration flow.
+  /// Registers a vehicle via the `create_vehicle_for_driver` RPC.
+  ///
+  /// Uses SECURITY DEFINER on the DB side so drivers (who do not have
+  /// direct INSERT on `vehicles`) can register their vehicle after OBD
+  /// connection. The RPC also:
+  ///   - Seeds default thresholds for new vehicles
+  ///   - Links the calling driver to the vehicle in driver_accounts
+  ///   - Handles the "already exists" case (upsert by VIN)
   Future<Vehicle> getOrCreateVehicleByVin({
     required String userId,
     required String vin,
@@ -109,46 +114,35 @@ class SupabaseService {
     int? year,
     String? fleetId,
   }) async {
-    // Check if a vehicle with this VIN already belongs to this user
     try {
-      final existing = await _client
-          .from('vehicles')
-          .select()
-          .eq('vin', vin)
-          .eq('owner_id', userId)
-          .maybeSingle();
+      final response = await _client.rpc(
+        'create_vehicle_for_driver',
+        params: {
+          'p_vin':       vin,
+          'p_name':      name,
+          if (make      != null) 'p_make':     make,
+          if (model     != null) 'p_model':    model,
+          if (year      != null) 'p_year':     year,
+          'p_fuel_type': 'petrol',
+          if (fleetId   != null) 'p_fleet_id': fleetId,
+        },
+      );
 
-      if (existing != null) {
-        return Vehicle.fromJson(existing as Map<String, dynamic>);
+      // PostgREST may return the single row as a Map or as a 1-element List
+      final Map<String, dynamic> json;
+      if (response is List && response.isNotEmpty) {
+        json = response.first as Map<String, dynamic>;
+      } else if (response is Map<String, dynamic>) {
+        json = response;
+      } else {
+        throw Exception('Unexpected RPC response type: ${response.runtimeType}');
       }
-    } catch (_) {
-      // No existing record — continue to create
-    }
 
-    final now = DateTime.now();
-    final vehicle = Vehicle(
-      id:                '',
-      name:              name,
-      vin:               vin,
-      make:              make ?? '',
-      model:             model ?? '',
-      year:              year ?? now.year,
-      ownerId:           userId,
-      fleetId:           fleetId,
-      isActive:          true,
-      healthScore:       100.0,
-      fuelPricePerLitre: 100.0,
-      avgKmPerLitre:     15.0,
-      fuelType:          'petrol',
-      createdAt:         now,
-      updatedAt:         now,
-    );
-
-    final created = await createVehicle(vehicle);
-    if (created == null) {
+      return Vehicle.fromJson(json);
+    } catch (e) {
+      print('getOrCreateVehicleByVin RPC error: $e');
       throw Exception('Failed to create vehicle record');
     }
-    return created;
   }
 
   Future<Vehicle?> createVehicle(Vehicle vehicle) async {
