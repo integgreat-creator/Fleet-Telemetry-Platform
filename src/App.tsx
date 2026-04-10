@@ -15,11 +15,13 @@ import MaintenancePage from './pages/MaintenancePage';
 import AnomalyFeedPage from './pages/AnomalyFeedPage';
 import AdminPage from './pages/AdminPage';
 import DebugToolsPage from './pages/DebugToolsPage';
+import FleetMapPage from './pages/FleetMapPage';
 import { realtimeService } from './services/realtimeService';
 
 export type Page =
   | 'overview'
   | 'vehicles'
+  | 'map'
   | 'alerts'
   | 'analytics'
   | 'trips'
@@ -85,6 +87,7 @@ function App() {
         <>
           {currentPage === 'overview'       && <FleetOverview />}
           {currentPage === 'vehicles'       && <VehiclesPage onSelectVehicle={handleSelectVehicle} />}
+          {currentPage === 'map'            && <FleetMapPage />}
           {currentPage === 'alerts'         && <AlertsPage />}
           {currentPage === 'analytics'      && <AnalyticsPage />}
           {currentPage === 'trips'          && <TripsPage />}
