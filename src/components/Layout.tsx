@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
-  Settings, Bug,
+  Settings, Bug, Map,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Page } from '../App';
@@ -16,6 +16,7 @@ interface LayoutProps {
 const fleetNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
   { id: 'overview',  label: 'Fleet Overview', icon: Car },
   { id: 'vehicles',  label: 'Vehicles',        icon: Activity },
+  { id: 'map',       label: 'Fleet Map',        icon: Map },
   { id: 'alerts',    label: 'Alerts & Events',  icon: AlertTriangle },
 ];
 
