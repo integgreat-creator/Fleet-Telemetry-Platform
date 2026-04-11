@@ -48,6 +48,12 @@ class SensorProvider extends ChangeNotifier {
     _lastDataReceivedAt = DateTime.now();
     _offlineEventFired  = false;
 
+    // Restore the threshold-alerts toggle preference on every session start
+    SharedPreferences.getInstance().then((prefs) {
+      _notificationService.alertsEnabled =
+          prefs.getBool('threshold_alerts_enabled') ?? true;
+    });
+
     // OBD sensor stream
     _sensorSubscription = _obdService.sensorDataStream.listen((sensorData) {
       _lastDataReceivedAt = DateTime.now();

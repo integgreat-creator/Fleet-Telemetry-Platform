@@ -6,6 +6,7 @@ import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/login_screen.dart';
 import 'package:vehicle_telemetry/screens/vehicle_list_screen.dart';
+import 'package:vehicle_telemetry/services/notification_service.dart';
 
 /// Profile / settings tab.
 /// Shows driver email + role, current vehicle, notification toggles, app version
@@ -29,17 +30,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _alertsEnabled = prefs.getBool('threshold_alerts_enabled') ?? true;
-      });
-    }
+    final saved = prefs.getBool('threshold_alerts_enabled') ?? true;
+    // Sync the in-memory flag so it's correct from the first sensor reading
+    NotificationService().alertsEnabled = saved;
+    if (mounted) setState(() => _alertsEnabled = saved);
   }
 
   Future<void> _toggleAlerts(bool value) async {
     setState(() => _alertsEnabled = value);
+    // 1. Persist preference
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('threshold_alerts_enabled', value);
+    // 2. Apply immediately to the running notification service
+    NotificationService().alertsEnabled = value;
+    // 3. Cancel any queued notifications if the user turned alerts off
+    if (!value) await NotificationService().cancelAll();
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────

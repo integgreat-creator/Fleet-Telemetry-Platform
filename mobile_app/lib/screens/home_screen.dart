@@ -7,6 +7,7 @@ import 'package:vehicle_telemetry/config/app_colors.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/sensor_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
+import 'package:vehicle_telemetry/screens/activity_screen.dart';
 import 'package:vehicle_telemetry/screens/alerts_screen.dart';
 import 'package:vehicle_telemetry/screens/bluetooth_scan_screen.dart';
 import 'package:vehicle_telemetry/screens/dashboard_screen.dart';
@@ -368,8 +369,8 @@ class _HomeScreenState extends State<HomeScreen> {
               return const DashboardScreen();
             },
           ),
-          // Tab 1 — Activity: full sensor-tab dashboard
-          const DashboardScreen(),
+          // Tab 1 — Activity: 7-day sensor history charts
+          const ActivityScreen(),
           // Tab 2 — Alerts
           const AlertsScreen(),
           // Tab 3 — Profile
