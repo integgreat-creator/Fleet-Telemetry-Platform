@@ -26,22 +26,26 @@ class VehicleProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // N+1 FIX: single joined query fetches vehicles + all their thresholds
-    final vehiclesWithThresholds =
-        await _supabaseService.getVehiclesWithThresholds();
+    try {
+      // N+1 FIX: single joined query fetches vehicles + all their thresholds
+      final vehiclesWithThresholds =
+          await _supabaseService.getVehiclesWithThresholds();
 
-    _vehicles = vehiclesWithThresholds.keys.toList();
-    // Cache thresholds for every vehicle in one shot
-    for (final entry in vehiclesWithThresholds.entries) {
-      _thresholds[entry.key.id] = entry.value;
+      _vehicles = vehiclesWithThresholds.keys.toList();
+      // Cache thresholds for every vehicle in one shot
+      for (final entry in vehiclesWithThresholds.entries) {
+        _thresholds[entry.key.id] = entry.value;
+      }
+
+      if (_vehicles.isNotEmpty && _selectedVehicle == null) {
+        await _loadSelectedVehicle();
+      }
+    } catch (e) {
+      debugPrint('loadVehicles error: $e');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
-
-    if (_vehicles.isNotEmpty && _selectedVehicle == null) {
-      await _loadSelectedVehicle();
-    }
-
-    _isLoading = false;
-    notifyListeners();
   }
 
   Future<void> _loadSelectedVehicle() async {

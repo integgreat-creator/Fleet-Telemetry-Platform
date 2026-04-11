@@ -41,7 +41,16 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 16),
-                  Text("Scanning for adapters (BLE & Classic)..."),
+                  Text("Scanning for OBD-II adapters…"),
+                  SizedBox(height: 8),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 40),
+                    child: Text(
+                      "Make sure your OBD-II adapter is plugged in and powered on.",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 ],
               ),
             );
@@ -49,9 +58,40 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
 
           final results = snapshot.data!;
 
-          return ListView.builder(
-            itemCount: results.length,
-            itemBuilder: (context, index) {
+          return Column(
+            children: [
+              // Tip banner
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A2D4D),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF3B82F6).withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.info_outline, color: Color(0xFF3B82F6), size: 18),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'ELM327 OBD-II adapters use Classic BT. '
+                        'Select "Classic BT" if your adapter appears twice.',
+                        style: TextStyle(
+                          color: Color(0xFF8994B0),
+                          fontSize: 12,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: results.length,
+                  itemBuilder: (context, index) {
               final device = results[index];
               String name = "Unknown Device";
               String id = "";
@@ -67,18 +107,24 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
                 isBle = false;
               }
 
+              // Determine if device is bonded (Classic only)
+              final isBonded = device is classic.BluetoothDevice && (device.isBonded ?? false);
+
               return ListTile(
-                leading: Icon(isBle ? Icons.bluetooth_audio : Icons.bluetooth),
+                leading: Icon(
+                  isBle ? Icons.bluetooth_audio : Icons.bluetooth,
+                  color: isBonded ? const Color(0xFF3B82F6) : null,
+                ),
                 title: Row(
                   children: [
-                    Expanded(child: Text(name)),
+                    Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.w500))),
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: isBle
-                            ? const Color(0xFF1565C0)   // deep blue for BLE
-                            : const Color(0xFF6A1B9A),  // deep purple for Classic BT
+                            ? const Color(0xFF1565C0)
+                            : const Color(0xFF6A1B9A),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
@@ -93,9 +139,17 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
                     ),
                   ],
                 ),
-                subtitle: Text(id),
-                trailing: device is classic.BluetoothDevice && device.isBonded
-                    ? const Icon(Icons.link, color: Colors.blue)
+                subtitle: Text(
+                  isBonded ? '$id  •  Paired' : id,
+                  style: TextStyle(
+                    color: isBonded
+                        ? const Color(0xFF3B82F6)
+                        : null,
+                    fontSize: 12,
+                  ),
+                ),
+                trailing: isBonded
+                    ? const Icon(Icons.link_rounded, color: Color(0xFF3B82F6))
                     : null,
                 onTap: () async {
                   _showConnectingDialog(name);
@@ -107,19 +161,43 @@ class _BluetoothScanScreenState extends State<BluetoothScanScreen> {
                   }
 
                   if (mounted) {
-                    Navigator.of(context).pop(); // Close dialog
+                    Navigator.of(context).pop(); // Close connecting dialog
                     if (success) {
                       Navigator.of(context).pop(true); // Return success to Home
                     } else {
+                      // Show brief snackbar, then also pop so Home shows error state
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Failed to connect. Ensure device is powered and in range.")),
+                        SnackBar(
+                          content: Row(
+                            children: [
+                              const Icon(Icons.bluetooth_disabled,
+                                  color: Colors.white, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Could not connect to $name. Make sure it is powered on.',
+                                ),
+                              ),
+                            ],
+                          ),
+                          backgroundColor: Colors.red[700],
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 3),
+                        ),
                       );
+                      // Pop with false so HomeScreen can show the error state
+                      Future.delayed(const Duration(milliseconds: 400), () {
+                        if (mounted) Navigator.of(context).pop(false);
+                      });
                     }
                   }
                 },
               );
             },
-          );
+          ),
+                ),
+              ],
+            );
         },
       ),
     );
