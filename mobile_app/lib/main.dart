@@ -1,6 +1,8 @@
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:vehicle_telemetry/config/app_colors.dart';
 import 'package:vehicle_telemetry/config/supabase_config.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/connectivity_provider.dart';
@@ -32,6 +34,12 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Force the status bar icons to be light (white) on the dark background
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+    ));
+
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
@@ -41,88 +49,143 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
       ],
       child: MaterialApp(
-        title: 'Vehicle Telemetry',
+        title: 'VehicleSense',
         debugShowCheckedModeBanner: false,
 
-        // ── Light Theme ──────────────────────────────────────────
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(
-            centerTitle: false,
-            elevation: 2,
-          ),
-          cardTheme: CardThemeData(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            filled: true,
-            fillColor: Colors.grey.shade50,
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ),
-
-        // ── Dark Theme ───────────────────────────────────────────
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.blue,
-            brightness: Brightness.dark,
-          ),
-          useMaterial3: true,
-          appBarTheme: const AppBarTheme(
-            centerTitle: false,
-            elevation: 2,
-            backgroundColor: Color(0xFF1E1E1E),
-            foregroundColor: Colors.white,
-          ),
-          cardTheme: CardThemeData(
-            elevation: 2,
-            color: const Color(0xFF2C2C2C),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            filled: true,
-            fillColor: const Color(0xFF2C2C2C),
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              elevation: 2,
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          scaffoldBackgroundColor: const Color(0xFF121212),
-          dividerColor: Colors.grey.shade800,
-        ),
-
-        // ── Follows device setting automatically ─────────────────
-        themeMode: ThemeMode.system,
+        // ── Dark-navy brand theme (always dark) ─────────────────
+        theme: _buildTheme(),
+        darkTheme: _buildTheme(),
+        themeMode: ThemeMode.dark,
 
         home: const _AppHome(),
+      ),
+    );
+  }
+
+  static ThemeData _buildTheme() {
+    return ThemeData(
+      brightness: Brightness.dark,
+      useMaterial3: true,
+
+      // Colour scheme seeded from the brand blue
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: AppColors.accentBlue,
+        brightness: Brightness.dark,
+        surface: AppColors.bgCard,
+        onSurface: AppColors.textPrimary,
+        primary: AppColors.accentBlue,
+        onPrimary: AppColors.textPrimary,
+      ),
+
+      scaffoldBackgroundColor: AppColors.bgPrimary,
+
+      // AppBar
+      appBarTheme: const AppBarTheme(
+        centerTitle: false,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: AppColors.bgSurface,
+        foregroundColor: AppColors.textPrimary,
+        titleTextStyle: TextStyle(
+          color: AppColors.textPrimary,
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+        ),
+        iconTheme: IconThemeData(color: AppColors.textPrimary),
+      ),
+
+      // Cards
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: AppColors.bgCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        margin: EdgeInsets.zero,
+      ),
+
+      // List tiles
+      listTileTheme: const ListTileThemeData(
+        tileColor: Colors.transparent,
+        textColor: AppColors.textPrimary,
+        iconColor: AppColors.accentBlue,
+      ),
+
+      // Divider
+      dividerColor: AppColors.divider,
+      dividerTheme: const DividerThemeData(
+        color: AppColors.divider,
+        space: 1,
+        thickness: 1,
+      ),
+
+      // Input fields
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: AppColors.bgCardAlt,
+        labelStyle: const TextStyle(color: AppColors.textSecondary),
+        hintStyle: const TextStyle(color: AppColors.textLabel),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppColors.divider),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppColors.divider),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AppColors.accentBlue, width: 1.5),
+        ),
+      ),
+
+      // Elevated buttons
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: AppColors.accentBlue,
+          foregroundColor: AppColors.textPrimary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+
+      // Bottom navigation bar
+      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+        backgroundColor: AppColors.bgSurface,
+        selectedItemColor: AppColors.accentBlue,
+        unselectedItemColor: AppColors.textLabel,
+        elevation: 0,
+        type: BottomNavigationBarType.fixed,
+        selectedLabelStyle: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        unselectedLabelStyle: TextStyle(fontSize: 11),
+      ),
+
+      // Dialogs
+      dialogTheme: DialogThemeData(
+        backgroundColor: AppColors.bgCardAlt,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+
+      // Popup menus
+      popupMenuTheme: const PopupMenuThemeData(
+        color: AppColors.bgCardAlt,
+        textStyle: TextStyle(color: AppColors.textPrimary),
+      ),
+
+      // Snackbar
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: AppColors.bgCardAlt,
+        contentTextStyle: const TextStyle(color: AppColors.textPrimary),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vehicle_telemetry/config/supabase_config.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
@@ -97,14 +98,69 @@ class SupabaseService {
     }
   }
 
-  /// Registers a vehicle via the `create_vehicle_for_driver` RPC.
+  // ── Vehicle registration: two paths depending on caller role ────────────
+
+  /// **Fleet managers / owners**: direct INSERT — they have full RLS access.
+  /// Finds by VIN first (upsert behaviour) so reconnecting the same vehicle
+  /// never creates a duplicate.
+  Future<Vehicle> createOrFindVehicleByVin({
+    required String vin,
+    required String name,
+    String? make,
+    String? model,
+    int? year,
+    required String ownerId,
+    String? fleetId,
+  }) async {
+    // 1. Try to find an existing vehicle with this exact VIN
+    try {
+      final existing = await _client
+          .from('vehicles')
+          .select()
+          .eq('vin', vin)
+          .limit(1);
+
+      if (existing is List && (existing as List).isNotEmpty) {
+        return Vehicle.fromJson(existing.first as Map<String, dynamic>);
+      }
+    } catch (_) {
+      // Not found or transient error — fall through to create
+    }
+
+    // 2. Insert new vehicle row.
+    // Only include columns that are guaranteed to exist in the base schema
+    // (migration 20260227043631). Extended columns like fuel_type are added
+    // by migration 20260418 — if that hasn't been applied yet the INSERT
+    // would fail with "column does not exist". We rely on DB defaults for
+    // those fields and the Vehicle.fromJson() null-safety fallbacks on read.
+    final insertData = <String, dynamic>{
+      'vin':          vin,
+      'name':         name,
+      'make':         make  ?? '',
+      'model':        model ?? '',
+      'year':         year  ?? DateTime.now().year,
+      'owner_id':     ownerId,
+      'is_active':    true,
+      'health_score': 100.0,
+    };
+    if (fleetId != null) insertData['fleet_id'] = fleetId;
+
+    final response = await _client
+        .from('vehicles')
+        .insert(insertData)
+        .select()
+        .single();
+
+    return Vehicle.fromJson(response as Map<String, dynamic>);
+  }
+
+  /// **Drivers**: must go through the `create_vehicle_for_driver` SECURITY
+  /// DEFINER RPC because drivers cannot directly INSERT into `vehicles` (RLS).
+  /// The RPC also seeds default thresholds and links the driver in
+  /// driver_accounts.
   ///
-  /// Uses SECURITY DEFINER on the DB side so drivers (who do not have
-  /// direct INSERT on `vehicles`) can register their vehicle after OBD
-  /// connection. The RPC also:
-  ///   - Seeds default thresholds for new vehicles
-  ///   - Links the calling driver to the vehicle in driver_accounts
-  ///   - Handles the "already exists" case (upsert by VIN)
+  /// If the RPC is unavailable (migration not yet applied), throws an
+  /// Exception with the real Supabase error so the caller can surface it.
   Future<Vehicle> getOrCreateVehicleByVin({
     required String userId,
     required String vin,
@@ -130,7 +186,7 @@ class SupabaseService {
 
       // PostgREST may return the single row as a Map or as a 1-element List
       final Map<String, dynamic> json;
-      if (response is List && response.isNotEmpty) {
+      if (response is List && (response as List).isNotEmpty) {
         json = response.first as Map<String, dynamic>;
       } else if (response is Map<String, dynamic>) {
         json = response;
@@ -140,8 +196,12 @@ class SupabaseService {
 
       return Vehicle.fromJson(json);
     } catch (e) {
-      print('getOrCreateVehicleByVin RPC error: $e');
-      throw Exception('Failed to create vehicle record');
+      // Surface the real error (Supabase message, constraint name, etc.)
+      // so operators can diagnose missing migrations / RLS issues.
+      debugPrint('create_vehicle_for_driver RPC error: $e');
+      // Strip nested "Exception:" prefix if present
+      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+      throw Exception(msg);
     }
   }
 

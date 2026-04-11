@@ -3,16 +3,18 @@ import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:vehicle_telemetry/config/app_colors.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/sensor_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
+import 'package:vehicle_telemetry/screens/alerts_screen.dart';
 import 'package:vehicle_telemetry/screens/bluetooth_scan_screen.dart';
 import 'package:vehicle_telemetry/screens/dashboard_screen.dart';
-import 'package:vehicle_telemetry/screens/login_screen.dart';
-import 'package:vehicle_telemetry/screens/vehicle_list_screen.dart';
+import 'package:vehicle_telemetry/screens/profile_screen.dart';
 import 'package:vehicle_telemetry/services/bluetooth_service.dart';
 import 'package:vehicle_telemetry/services/obd_service.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
+import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/services/vin_decoder_service.dart';
 import 'package:vehicle_telemetry/widgets/connection_status.dart';
 import 'package:vehicle_telemetry/bluetooth/bt_connection_state.dart';
@@ -31,6 +33,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // VIN decoder + vehicle creation state (Change 6b)
   final VinDecoderService _vinDecoder = VinDecoderService();
   bool _isCreatingVehicle = false;
+
+  // Bottom navigation tab index
+  int _selectedTab = 0;
 
   @override
   void initState() {
@@ -215,30 +220,47 @@ class _HomeScreenState extends State<HomeScreen> {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
 
-    final prefs = await SharedPreferences.getInstance();
-    // SharedPreferences has fleet_id only when the old invite-accept flow ran.
-    // For drivers who logged in with email/password credentials the fleet_id
-    // lives in AuthProvider (loaded from driver_accounts on sign-in).
-    final fleetId = prefs.getString('fleet_id')
-        ?? context.read<AuthProvider>().driverFleetId;
+    final prefs         = await SharedPreferences.getInstance();
+    final authProvider  = context.read<AuthProvider>();
+    // SharedPreferences has fleet_id only from the invite-accept flow.
+    // Email/password drivers get it from AuthProvider.
+    final fleetId = prefs.getString('fleet_id') ?? authProvider.driverFleetId;
 
     try {
       final supabaseService = SupabaseService();
-      final vehicle = await supabaseService.getOrCreateVehicleByVin(
-        userId: user.id,
-        vin: vin,
-        name: name,
-        make: make,
-        model: model,
-        year: year,
-        fleetId: fleetId,
-      );
+      final Vehicle vehicle;
+
+      if (authProvider.isDriver) {
+        // ── Drivers: restricted RLS → must use SECURITY DEFINER RPC ──────
+        // Requires migration 20260413 to be applied on the Supabase project.
+        vehicle = await supabaseService.getOrCreateVehicleByVin(
+          userId:  user.id,
+          vin:     vin,
+          name:    name,
+          make:    make,
+          model:   model,
+          year:    year,
+          fleetId: fleetId,
+        );
+      } else {
+        // ── Fleet managers: full RLS access → direct DB upsert ────────────
+        // No migration needed; works even before 20260413 is applied.
+        vehicle = await supabaseService.createOrFindVehicleByVin(
+          vin:     vin,
+          name:    name,
+          make:    make,
+          model:   model,
+          year:    year,
+          ownerId: user.id,
+          fleetId: fleetId,
+        );
+      }
 
       final vehicleProvider = context.read<VehicleProvider>();
       await vehicleProvider.loadVehicles();
       await vehicleProvider.selectVehicle(vehicle);
 
-      // ❸ OBD is already connected — start monitoring now that the vehicle is known
+      // OBD is already connected — start monitoring now that vehicle is known
       if (_connectionState == BtConnectionState.connected) {
         _startMonitoring();
       }
@@ -248,7 +270,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       if (mounted) {
-        _showSnackbar('Failed to register vehicle: $e', isError: true);
+        // Strip nested "Exception:" prefix for a cleaner error message
+        final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+        _showSnackbar(msg, isError: true);
       }
     }
   }
@@ -257,9 +281,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showSnackbar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: isError ? Colors.red[700] : const Color(0xFF00BFA5),
+      content: Text(
+        message,
+        style: const TextStyle(color: AppColors.textPrimary),
+      ),
+      backgroundColor:
+          isError ? AppColors.statusError : AppColors.accentTeal,
       behavior: SnackBarBehavior.floating,
+      duration: Duration(seconds: isError ? 6 : 3),
     ));
   }
 
@@ -280,13 +309,32 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute(builder: (_) => const BluetoothScanScreen()),
       );
 
-      if (result == true && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Connected to OBD-II adapter'),
-            backgroundColor: Colors.green,
-          ),
-        );
+      if (mounted) {
+        if (result == true) {
+          // Connection confirmed — snackbar is informational; the AppBar badge
+          // and dashboard body update automatically via connectionStateStream.
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.bluetooth_connected,
+                      color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Connected to OBD-II adapter'
+                    '${_bluetoothService.connectedDeviceName != null ? ': ${_bluetoothService.connectedDeviceName}' : ''}',
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF00BFA5),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+        // result == false → BluetoothScanScreen already showed its own snackbar;
+        // the _connectionState stream will have moved to `error` which causes
+        // _buildObdConnectPrompt to render the "Connection Failed / Try Again" UI.
       }
     }
   }
@@ -305,135 +353,226 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Consumer<VehicleProvider>(
-          builder: (context, vehicleProvider, _) {
-            final vehicle = vehicleProvider.selectedVehicle;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Vehicle Telemetry'),
-                if (vehicle != null)
-                  Text(
-                    vehicle.name,
-                    style: const TextStyle(fontSize: 12),
+      backgroundColor: AppColors.bgPrimary,
+      appBar: _buildAppBar(),
+      body: IndexedStack(
+        index: _selectedTab,
+        children: [
+          // Tab 0 — Dashboard: OBD connect prompt OR live sensor view
+          Consumer<VehicleProvider>(
+            builder: (context, vp, _) {
+              if (vp.selectedVehicle == null &&
+                  _connectionState != BtConnectionState.connected) {
+                return _buildObdConnectPrompt();
+              }
+              return const DashboardScreen();
+            },
+          ),
+          // Tab 1 — Activity: full sensor-tab dashboard
+          const DashboardScreen(),
+          // Tab 2 — Alerts
+          const AlertsScreen(),
+          // Tab 3 — Profile
+          const ProfileScreen(),
+        ],
+      ),
+      // FAB only visible on Dashboard tab and only when OBD prompt is not shown
+      floatingActionButton: _selectedTab == 0
+          ? Consumer<VehicleProvider>(
+              builder: (context, vp, _) {
+                final showPrompt = vp.selectedVehicle == null &&
+                    _connectionState != BtConnectionState.connected;
+                if (showPrompt) return const SizedBox.shrink();
+                return FloatingActionButton.extended(
+                  onPressed: _connectionState == BtConnectionState.connected
+                      ? _disconnect
+                      : _connectToBluetooth,
+                  icon: Icon(
+                    _connectionState == BtConnectionState.connected
+                        ? Icons.bluetooth_connected_rounded
+                        : Icons.bluetooth_rounded,
                   ),
-              ],
-            );
-          },
-        ),
-        actions: [
-          if (_isCreatingVehicle)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: Center(
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white70,
+                  label: Text(
+                    _connectionState == BtConnectionState.connected
+                        ? 'Disconnect'
+                        : 'Connect OBD-II',
                   ),
-                ),
-              ),
+                  backgroundColor: _connectionState == BtConnectionState.connected
+                      ? AppColors.statusError
+                      : AppColors.accentBlue,
+                  foregroundColor: AppColors.textPrimary,
+                  elevation: 4,
+                );
+              },
+            )
+          : null,
+      bottomNavigationBar: _buildBottomNav(),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: AppColors.bgSurface,
+      elevation: 0,
+      title: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppColors.iconBg,
+              borderRadius: BorderRadius.circular(8),
             ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ConnectionStatusWidget(
-                connectionState: _connectionState,
-                deviceName: _bluetoothService.connectedDeviceName,
-              ),
+            child: const Icon(
+              Icons.directions_car_rounded,
+              color: AppColors.accentBlue,
+              size: 20,
             ),
           ),
-          PopupMenuButton(
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'vehicles',
-                child: Row(
-                  children: [
-                    Icon(Icons.directions_car),
-                    SizedBox(width: 8),
-                    Text('My Vehicles'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'logout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout, color: Colors.red),
-                    SizedBox(width: 8),
-                    Text('Logout', style: TextStyle(color: Colors.red)),
-                  ],
-                ),
-              ),
-            ],
-            onSelected: (value) {
-              if (value == 'vehicles') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const VehicleListScreen()),
-                );
-              } else if (value == 'logout') {
-                _logout();
-              }
-            },
+          const SizedBox(width: 10),
+          const Text(
+            'VehicleSense',
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
           ),
         ],
       ),
-      body: Consumer<VehicleProvider>(
-        builder: (context, vp, _) {
-          // ❸ Show connect prompt until driver connects their OBD adapter
-          if (vp.selectedVehicle == null &&
-              _connectionState != BtConnectionState.connected) {
-            return _buildObdConnectPrompt();
-          }
-          return const DashboardScreen();
-        },
+      actions: [
+        if (_isCreatingVehicle)
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: Center(
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: ConnectionStatusWidget(
+            connectionState: _connectionState,
+            deviceName: _bluetoothService.connectedDeviceName,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomNav() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bgSurface,
+        border: Border(
+          top: BorderSide(color: AppColors.divider, width: 1),
+        ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _connectionState == BtConnectionState.connected
-            ? _disconnect
-            : _connectToBluetooth,
-        icon: Icon(
-          _connectionState == BtConnectionState.connected
-              ? Icons.bluetooth_connected
-              : Icons.bluetooth,
+      child: BottomNavigationBar(
+        currentIndex: _selectedTab,
+        onTap: (index) => setState(() => _selectedTab = index),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        selectedItemColor: AppColors.accentBlue,
+        unselectedItemColor: AppColors.textLabel,
+        type: BottomNavigationBarType.fixed,
+        selectedLabelStyle: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
         ),
-        label: Text(
-          _connectionState == BtConnectionState.connected
-              ? 'Disconnect'
-              : 'Connect OBD-II',
-        ),
-        backgroundColor: _connectionState == BtConnectionState.connected
-            ? Colors.red
-            : Colors.blue,
+        unselectedLabelStyle: const TextStyle(fontSize: 11),
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.grid_view_rounded),
+            activeIcon: Icon(Icons.grid_view_rounded),
+            label: 'Dashboard',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.bar_chart_rounded),
+            activeIcon: Icon(Icons.bar_chart_rounded),
+            label: 'Activity',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.notifications_outlined),
+            activeIcon: Icon(Icons.notifications_rounded),
+            label: 'Alerts',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline_rounded),
+            activeIcon: Icon(Icons.person_rounded),
+            label: 'Profile',
+          ),
+        ],
       ),
     );
   }
 
-  // ❸ Shown on every login until driver plugs in their OBD adapter
+  // ❸ Shown on every login until driver plugs in their OBD adapter.
+  // Adapts its UI to reflect the current connection state.
   Widget _buildObdConnectPrompt() {
+    final isConnecting = _connectionState == BtConnectionState.connecting;
+    final isError      = _connectionState == BtConnectionState.error;
+
+    // Icon + colour for each state
+    final iconData  = isConnecting
+        ? Icons.bluetooth_searching
+        : isError
+            ? Icons.bluetooth_disabled
+            : Icons.bluetooth_searching;
+    final iconColor = isConnecting
+        ? Colors.orange
+        : isError
+            ? Colors.red
+            : Colors.blue;
+    final bgColor = iconColor.withOpacity(0.12);
+
+    final headline = isConnecting
+        ? 'Connecting…'
+        : isError
+            ? 'Connection Failed'
+            : 'Connect your OBD adapter';
+
+    final subtitle = isConnecting
+        ? 'Establishing link with the OBD-II adapter.\nPlease wait…'
+        : isError
+            ? 'Could not connect to the adapter.\nMake sure it is powered on and within range, then try again.'
+            : 'Tap the button below to scan for and connect to your vehicle\'s OBD-II adapter. '
+              'Your vehicle will be identified automatically.';
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // State icon
             Container(
               width: 88,
               height: 88,
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.bluetooth_searching,
-                  size: 44, color: Colors.blue),
+              decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
+              child: isConnecting
+                  ? Padding(
+                      padding: const EdgeInsets.all(22),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: iconColor,
+                      ),
+                    )
+                  : Icon(iconData, size: 44, color: iconColor),
             ),
             const SizedBox(height: 24),
-            const Text(
-              'Connect your OBD adapter',
-              style: TextStyle(
+
+            // Headline
+            Text(
+              headline,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -441,59 +580,52 @@ class _HomeScreenState extends State<HomeScreen> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 10),
+
+            // Subtitle
             Text(
-              'Tap the button below to scan for and connect to your vehicle\'s OBD-II adapter. '
-              'Your vehicle will be identified automatically.',
+              subtitle,
               style: TextStyle(color: Colors.grey[400], fontSize: 14, height: 1.5),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: _connectToBluetooth,
-              icon: const Icon(Icons.bluetooth),
-              label: const Text(
-                'Connect OBD-II',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+
+            // Error detail from device name (if any)
+            if (isError && _bluetoothService.connectedDeviceName != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _bluetoothService.connectedDeviceName!,
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  textAlign: TextAlign.center,
                 ),
               ),
-            ),
+            ],
+
+            const SizedBox(height: 32),
+
+            // Action button — hidden while connecting
+            if (!isConnecting)
+              ElevatedButton.icon(
+                onPressed: _connectToBluetooth,
+                icon: Icon(isError ? Icons.refresh : Icons.bluetooth),
+                label: Text(
+                  isError ? 'Try Again' : 'Connect OBD-II',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isError ? Colors.red : Colors.blue,
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _logout() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              await context.read<AuthProvider>().signOut();
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (route) => false,
-                );
-              }
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Logout'),
-          ),
-        ],
       ),
     );
   }
