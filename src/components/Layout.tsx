@@ -41,20 +41,22 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
     window.location.reload();
   };
 
-  const NavItem = ({ item }: { item: typeof fleetNavItems[0] }) => {
+  const NavItem = ({ item, muted = false }: { item: typeof fleetNavItems[0]; muted?: boolean }) => {
     const Icon = item.icon;
     const active = currentPage === item.id;
     return (
       <button
         onClick={() => onNavigate(item.id)}
-        className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors text-left ${
+        className={`w-full flex items-center space-x-3 py-2.5 rounded-lg transition-colors text-left relative ${
           active
-            ? 'bg-blue-600 text-white'
-            : 'text-gray-400 hover:text-white hover:bg-gray-800'
+            ? 'bg-blue-600/20 text-white pl-[10px] pr-3 border-l-2 border-blue-400'
+            : muted
+            ? 'text-gray-600 hover:text-gray-400 hover:bg-gray-800 px-3 opacity-70'
+            : 'text-gray-400 hover:text-white hover:bg-gray-800 px-3'
         }`}
       >
-        <Icon className="w-4 h-4 flex-shrink-0" />
-        <span className="text-sm font-medium truncate">{item.label}</span>
+        <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-blue-400' : ''}`} />
+        <span className={`text-sm font-medium truncate ${muted ? 'text-xs' : ''}`}>{item.label}</span>
       </button>
     );
   };
@@ -74,21 +76,30 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
 
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
           <div>
-            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Fleet</p>
+            <p className={`px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest transition-colors ${
+              fleetNavItems.some(i => i.id === currentPage) ? 'text-blue-400' : 'text-gray-500'
+            }`}>Fleet</p>
             <div className="space-y-1">
               {fleetNavItems.map(item => <NavItem key={item.id} item={item} />)}
             </div>
           </div>
           <div>
-            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Intelligence</p>
+            <p className={`px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest transition-colors ${
+              intelligenceNavItems.some(i => i.id === currentPage) ? 'text-blue-400' : 'text-gray-500'
+            }`}>Intelligence</p>
             <div className="space-y-1">
               {intelligenceNavItems.map(item => <NavItem key={item.id} item={item} />)}
             </div>
           </div>
           <div>
-            <p className="px-3 mb-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">System</p>
+            <p className={`px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest transition-colors ${
+              systemNavItems.some(i => i.id === currentPage) ? 'text-blue-400' : 'text-gray-500'
+            }`}>System</p>
             <div className="space-y-1">
-              {systemNavItems.map(item => <NavItem key={item.id} item={item} />)}
+              {/* Admin is a standard nav item */}
+              <NavItem item={systemNavItems[0]} />
+              {/* Debug Tools is de-emphasised — developer use only */}
+              <NavItem item={systemNavItems[1]} muted />
             </div>
           </div>
         </nav>

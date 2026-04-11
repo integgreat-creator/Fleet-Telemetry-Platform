@@ -85,7 +85,7 @@ function App() {
         <VehicleDetail vehicle={selectedVehicle} onBack={handleBackFromVehicle} />
       ) : (
         <>
-          {currentPage === 'overview'       && <FleetOverview />}
+          {currentPage === 'overview'       && <FleetOverview onNavigate={handleNavigate} />}
           {currentPage === 'vehicles'       && <VehiclesPage onSelectVehicle={handleSelectVehicle} />}
           {currentPage === 'map'            && <FleetMapPage />}
           {currentPage === 'alerts'         && <AlertsPage />}
