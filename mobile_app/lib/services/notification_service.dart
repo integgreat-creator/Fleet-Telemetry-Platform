@@ -9,6 +9,10 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
 
+  /// Mirrors the "Threshold Alerts" toggle in the Profile tab.
+  /// When false, [showThresholdAlert] is a no-op.
+  bool alertsEnabled = true;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -57,6 +61,8 @@ class NotificationService {
   }
 
   Future<void> showThresholdAlert(SensorData sensorData, String vehicleName) async {
+    // Respect the user's toggle in the Profile tab
+    if (!alertsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
       'threshold_alerts',
       'Threshold Alerts',

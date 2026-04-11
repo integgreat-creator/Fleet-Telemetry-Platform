@@ -292,6 +292,32 @@ class SupabaseService {
     }
   }
 
+  // ── SENSOR HISTORY ───────────────────────────────────────────────────────
+
+  /// Fetches up to [limit] sensor readings for [vehicleId] from the last
+  /// [days] days, ordered oldest-first so charts render left→right.
+  /// Returns raw maps: { sensor_type, value, unit, timestamp }
+  Future<List<Map<String, dynamic>>> getSensorHistory({
+    required String vehicleId,
+    int days  = 7,
+    int limit = 4000,
+  }) async {
+    final since = DateTime.now().subtract(Duration(days: days));
+    try {
+      final response = await _client
+          .from('sensor_data')
+          .select('sensor_type, value, unit, timestamp')
+          .eq('vehicle_id', vehicleId)
+          .gte('timestamp', since.toIso8601String())
+          .order('timestamp', ascending: true)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      debugPrint('getSensorHistory error: $e');
+      return [];
+    }
+  }
+
   // ── SENSOR DATA ───────────────────────────────────────────────────────────
 
   Future<bool> saveSensorData(
