@@ -573,7 +573,8 @@ class _VehicleEntrySheetState extends State<_VehicleEntrySheet> {
             const SizedBox(height: 20),
             TextFormField(
               controller: _makeCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+              cursorColor: const Color(0xFF00BFA5),
               decoration: _inputDecoration('Make', 'e.g. Maruti, Tata, Hyundai'),
               validator: (v) =>
                   v == null || v.trim().isEmpty ? 'Required' : null,
@@ -581,13 +582,15 @@ class _VehicleEntrySheetState extends State<_VehicleEntrySheet> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _modelCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+              cursorColor: const Color(0xFF00BFA5),
               decoration: _inputDecoration('Model', 'e.g. Swift, Nexon, i20'),
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _yearCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 15),
+              cursorColor: const Color(0xFF00BFA5),
               keyboardType: TextInputType.number,
               decoration: _inputDecoration('Year', 'e.g. 2022'),
               validator: (v) {
@@ -641,17 +644,32 @@ class _VehicleEntrySheetState extends State<_VehicleEntrySheet> {
 
   InputDecoration _inputDecoration(String label, String hint) =>
       InputDecoration(
-        labelText: label,
-        hintText: hint,
+        labelText:  label,
+        hintText:   hint,
+        // Explicit fill so the field always has a dark background regardless
+        // of the app/system theme — white typed text stays visible.
+        filled:     true,
+        fillColor:  const Color(0xFF2A2A40),
         labelStyle: TextStyle(color: Colors.grey[400]),
-        hintStyle: TextStyle(color: Colors.grey[600]),
+        hintStyle:  TextStyle(color: Colors.grey[600]),
+        // Tighten content padding so it looks balanced in the bottom sheet
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         enabledBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.grey[700]!)),
-        focusedBorder: const OutlineInputBorder(
-            borderSide: BorderSide(color: Color(0xFF00BFA5))),
-        errorBorder:
-            const OutlineInputBorder(borderSide: BorderSide(color: Colors.red)),
-        focusedErrorBorder:
-            const OutlineInputBorder(borderSide: BorderSide(color: Colors.red)),
+          borderRadius: BorderRadius.circular(8),
+          borderSide:   BorderSide(color: Colors.grey[700]!),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:   const BorderSide(color: Color(0xFF00BFA5), width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:   const BorderSide(color: Colors.red),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:   const BorderSide(color: Colors.red, width: 1.5),
+        ),
+        errorStyle: const TextStyle(color: Colors.redAccent, fontSize: 12),
       );
 }
