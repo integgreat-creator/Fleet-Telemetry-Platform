@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
+import 'package:vehicle_telemetry/config/app_colors.dart';
 import 'package:vehicle_telemetry/models/sensor_data.dart';
 import 'package:vehicle_telemetry/models/threshold.dart' as model;
+import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 
 class ThresholdConfigScreen extends StatefulWidget {
@@ -110,13 +112,18 @@ class _ThresholdConfigScreenState extends State<ThresholdConfigScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDriver = context.read<AuthProvider>().isDriver;
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Thresholds'),
-            Text('Configure limits', style: TextStyle(fontSize: 12)),
+            Text(isDriver ? 'Thresholds' : 'Thresholds'),
+            Text(
+              isDriver ? 'View limits' : 'Configure limits',
+              style: const TextStyle(fontSize: 12),
+            ),
           ],
         ),
       ),
@@ -125,6 +132,40 @@ class _ThresholdConfigScreenState extends State<ThresholdConfigScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+
+            // ── Driver read-only banner ──────────────────────────────────
+            if (isDriver) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.iconBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.accentBlue.withOpacity(0.4),
+                  ),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.lock_outline_rounded,
+                        color: AppColors.accentBlue, size: 18),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Thresholds are managed by your fleet manager. '
+                        'Contact them to change alert limits.',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
             // Sensor info card
             Card(
               child: Padding(
@@ -168,74 +209,91 @@ class _ThresholdConfigScreenState extends State<ThresholdConfigScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Enable alerts toggle
+            // Enable alerts toggle — read-only for drivers
             SwitchListTile(
               title: const Text('Enable Alerts'),
               subtitle: const Text(
                 'Receive notifications when threshold is exceeded',
               ),
               value: _enabled,
-              onChanged: (value) => setState(() => _enabled = value),
+              // null onChanged disables the toggle (renders as greyed-out)
+              onChanged: isDriver ? null : (value) => setState(() => _enabled = value),
             ),
             const SizedBox(height: 16),
 
             // Min value input
             TextFormField(
               controller: _minController,
+              readOnly: isDriver,
               decoration: InputDecoration(
                 labelText: 'Minimum Value (${_getUnit()})',
                 border: const OutlineInputBorder(),
                 prefixIcon: const Icon(Icons.arrow_downward),
                 helperText: 'Normal: ${_getNormalRange()}',
+                // Visual cue that the field is locked for drivers
+                suffixIcon: isDriver
+                    ? const Icon(Icons.lock_outline_rounded,
+                        size: 16, color: AppColors.textLabel)
+                    : null,
               ),
               keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
-              validator: (value) {
-                if (value != null && value.isNotEmpty) {
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                }
-                return null;
-              },
+                  const TextInputType.numberWithOptions(decimal: true),
+              validator: isDriver
+                  ? null
+                  : (value) {
+                      if (value != null && value.isNotEmpty) {
+                        if (double.tryParse(value) == null) {
+                          return 'Please enter a valid number';
+                        }
+                      }
+                      return null;
+                    },
             ),
             const SizedBox(height: 16),
 
             // Max value input
             TextFormField(
               controller: _maxController,
+              readOnly: isDriver,
               decoration: InputDecoration(
                 labelText: 'Maximum Value (${_getUnit()})',
                 border: const OutlineInputBorder(),
                 prefixIcon: const Icon(Icons.arrow_upward),
                 helperText: 'Normal: ${_getNormalRange()}',
+                suffixIcon: isDriver
+                    ? const Icon(Icons.lock_outline_rounded,
+                        size: 16, color: AppColors.textLabel)
+                    : null,
               ),
               keyboardType:
-              const TextInputType.numberWithOptions(decimal: true),
-              validator: (value) {
-                if (value != null && value.isNotEmpty) {
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  final max = double.tryParse(value);
-                  final min = double.tryParse(_minController.text);
-                  if (min != null && max != null && max <= min) {
-                    return 'Maximum must be greater than minimum';
-                  }
-                }
-                return null;
-              },
+                  const TextInputType.numberWithOptions(decimal: true),
+              validator: isDriver
+                  ? null
+                  : (value) {
+                      if (value != null && value.isNotEmpty) {
+                        if (double.tryParse(value) == null) {
+                          return 'Please enter a valid number';
+                        }
+                        final max = double.tryParse(value);
+                        final min = double.tryParse(_minController.text);
+                        if (min != null && max != null && max <= min) {
+                          return 'Maximum must be greater than minimum';
+                        }
+                      }
+                      return null;
+                    },
             ),
             const SizedBox(height: 24),
 
-            // Save button
-            ElevatedButton(
-              onPressed: _save,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
+            // Save button — hidden for drivers entirely
+            if (!isDriver)
+              ElevatedButton(
+                onPressed: _save,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                child: const Text('Save Threshold'),
               ),
-              child: const Text('Save Threshold'),
-            ),
           ],
         ),
       ),
