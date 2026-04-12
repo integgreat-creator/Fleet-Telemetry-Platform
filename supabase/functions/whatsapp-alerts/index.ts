@@ -74,13 +74,13 @@ serve(async (req) => {
   });
 
   const messageText = [
-    `${emoji} *VehicleSense Alert*`,
+    `${emoji} *FTPGo Alert*`,
     ``,
     `*Vehicle:* ${vehicle_name}${vehicle_vin ? ` (${vehicle_vin})` : ""}`,
     `*Event:* ${description}`,
     `*Time:* ${now} IST`,
     ``,
-    `Log in to VehicleSense dashboard to view details and acknowledge this alert.`,
+    `Log in to FTPGo dashboard to view details and acknowledge this alert.`,
   ].join("\n");
 
   let success = false;

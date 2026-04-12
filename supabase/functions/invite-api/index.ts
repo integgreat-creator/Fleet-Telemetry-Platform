@@ -162,19 +162,19 @@ serve(async (req) => {
     const driverEmail = body.driver_email as string | undefined;
     if (driverEmail && driverEmail.includes('@')) {
       try {
-        const inviteUrl = `${Deno.env.get('SITE_URL') ?? 'https://vehiclesense.app'}/invite?token=${token}`;
+        const inviteUrl = `${Deno.env.get('SITE_URL') ?? 'https://ftpgo.app'}/invite?token=${token}`;
         const emailHtml = `
           <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:32px">
-            <h2 style="color:#00BFA5">You've been invited to VehicleSense</h2>
+            <h2 style="color:#00BFA5">You've been invited to FTPGo</h2>
             <p>Your fleet manager has added you to <strong>${body.fleet_name ?? 'a fleet'}</strong>.</p>
             <p>Vehicle: <strong>${body.vehicle_name ?? 'Your Vehicle'}</strong></p>
-            <p>Install the VehicleSense app and scan the QR code, or tap the button below:</p>
-            <a href="vehiclesense://join?token=${token}"
+            <p>Install the FTPGo app and scan the QR code, or tap the button below:</p>
+            <a href="ftpgo://join?token=${token}"
                style="display:inline-block;background:#00BFA5;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
               Open in App
             </a>
             <p style="margin-top:16px;font-size:12px;color:#666">
-              Or copy this link: vehiclesense://join?token=${token}
+              Or copy this link: ftpgo://join?token=${token}
             </p>
             <p style="font-size:12px;color:#666">This invite expires in 72 hours.</p>
           </div>
@@ -183,7 +183,7 @@ serve(async (req) => {
         // Use Supabase admin to send email via their SMTP
         await adminClient.auth.admin.inviteUserByEmail(driverEmail, {
           data: { invite_token: token, fleet_name: body.fleet_name },
-          redirectTo: `vehiclesense://join?token=${token}`,
+          redirectTo: `ftpgo://join?token=${token}`,
         }).catch(() => null); // non-fatal — email is best-effort
       } catch (_) {
         // Email sending failure is non-fatal
@@ -192,7 +192,7 @@ serve(async (req) => {
 
     return json({
       token,
-      invite_url: `vehiclesense://join?token=${token}`,
+      invite_url: `ftpgo://join?token=${token}`,
       invite_id:  invite.id,
     });
   }
@@ -258,7 +258,7 @@ serve(async (req) => {
     try {
       const { data: linkData } = await adminClient.auth.admin.generateLink({
         type: "magiclink",
-        email: email ?? `${phone.replace(/\D/g, '')}@vehiclesense.driver`,
+        email: email ?? `${phone.replace(/\D/g, '')}@ftpgo.driver`,
         options: { data: { fleet_id: invite.fleet_id } },
       });
       if (linkData?.properties) {

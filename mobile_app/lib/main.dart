@@ -49,7 +49,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
       ],
       child: MaterialApp(
-        title: 'VehicleSense',
+        title: 'FTPGo',
         debugShowCheckedModeBanner: false,
 
         // ── Dark-navy brand theme (always dark) ─────────────────

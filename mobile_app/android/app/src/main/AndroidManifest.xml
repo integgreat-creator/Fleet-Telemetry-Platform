@@ -25,7 +25,7 @@
     <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
-        android:label="FTPGO"
+        android:label="FTPGo"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -46,19 +46,19 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Legacy QR invite deep link (vehiclesense://join?token=…) -->
+            <!-- QR invite deep link (ftpgo://join?token=…) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="vehiclesense" android:host="join"/>
+                <data android:scheme="ftpgo" android:host="join"/>
             </intent-filter>
-            <!-- Credential QR deep link (vehiclesense://auth?data=<base64url>) -->
+            <!-- Credential QR deep link (ftpgo://auth?data=<base64url>) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="vehiclesense" android:host="auth"/>
+                <data android:scheme="ftpgo" android:host="auth"/>
             </intent-filter>
         </activity>
         <!-- Restart GPS tracking on device boot if a session was active -->
