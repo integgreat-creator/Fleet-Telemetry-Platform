@@ -126,7 +126,7 @@ export default function InviteDriverModal({ fleetId, onClose, onVehicleCreated }
             <p className="text-sm text-gray-400 mt-0.5">
               {step === 'form'
                 ? 'Driver will scan this to join your fleet'
-                : 'Driver scans this with the VehicleSense app'}
+                : 'Driver scans this with the FTPGo app'}
             </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
@@ -224,7 +224,7 @@ export default function InviteDriverModal({ fleetId, onClose, onVehicleCreated }
                 <div className="flex flex-col items-center bg-white rounded-2xl p-5 gap-3">
                   <QRCodeSVG value={inviteUrl} size={200} level="M" includeMargin={false} />
                   <p className="text-xs text-gray-500 text-center">
-                    Driver scans with VehicleSense app to join <span className="font-medium text-gray-700">{vehicleName}</span>
+                    Driver scans with FTPGo app to join <span className="font-medium text-gray-700">{vehicleName}</span>
                   </p>
                 </div>
 

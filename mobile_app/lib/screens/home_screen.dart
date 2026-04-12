@@ -432,7 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(width: 10),
           const Text(
-            'VehicleSense',
+            'FTPGo',
             style: TextStyle(
               color: AppColors.textPrimary,
               fontSize: 18,

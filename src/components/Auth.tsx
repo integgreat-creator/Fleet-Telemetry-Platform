@@ -84,9 +84,9 @@ export default function Auth() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <Car className="w-12 h-12 text-blue-500" />
-            <h1 className="text-4xl font-bold text-white">Fleet Telemetry</h1>
+            <h1 className="text-4xl font-bold text-white">FTPGo</h1>
           </div>
-          <p className="text-gray-400">Vehicle monitoring and fleet management platform</p>
+          <p className="text-gray-400">Smart fleet management platform</p>
         </div>
 
         <div className="bg-gray-900 rounded-lg p-8 border border-gray-800">

@@ -69,8 +69,8 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
             <Car className="w-5 h-5 text-white" />
           </div>
           <div>
-            <p className="text-white font-bold text-sm leading-tight">Fleet</p>
-            <p className="text-blue-400 text-xs">Telemetry</p>
+            <p className="text-white font-bold text-sm leading-tight">FTPGo</p>
+            <p className="text-blue-400 text-xs">Fleet Management</p>
           </div>
         </div>
 
