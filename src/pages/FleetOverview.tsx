@@ -1,10 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Car, Activity, AlertTriangle, TrendingUp, Wifi, WifiOff, Shield,
-  CheckCircle2, RefreshCw, Clock, ChevronRight, PlusCircle, Map, Bell,
+  CheckCircle2, RefreshCw, Clock, ChevronRight, PlusCircle, Map, Bell, Info,
 } from 'lucide-react';
 import { supabase, type Vehicle, type Alert } from '../lib/supabase';
 import type { Page } from '../App';
+
+// Extended alert type that includes the joined vehicle name
+interface AlertWithVehicle extends Alert {
+  vehicles?: { name: string } | null;
+}
 
 interface FleetOverviewProps {
   onNavigate: (page: Page) => void;
@@ -37,7 +42,7 @@ function formatLastUpdated(date: Date): string {
 export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
   const [vehicles, setVehicles]           = useState<Vehicle[]>([]);
   const [alerts, setAlerts]               = useState<Alert[]>([]);
-  const [allRecentAlerts, setAllRecent]   = useState<Alert[]>([]);
+  const [allRecentAlerts, setAllRecent]   = useState<AlertWithVehicle[]>([]);
   const [vehicleEvents, setVehicleEvents] = useState<any[]>([]);
   const [loading, setLoading]             = useState(true);
   const [refreshing, setRefreshing]       = useState(false);
@@ -73,7 +78,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
           .limit(5),
         supabase
           .from('alerts')
-          .select('id, severity, created_at, acknowledged')
+          .select('id, severity, created_at, acknowledged, sensor_type, message, vehicle_id, vehicles(name)')
           .gte('created_at', since30d.toISOString())
           .order('created_at', { ascending: false })
           .limit(300),
@@ -82,7 +87,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
       if (vehiclesRes.data) setVehicles(vehiclesRes.data);
       if (alertsRes.data)   setAlerts(alertsRes.data);
       if (eventsRes.data)   setVehicleEvents(eventsRes.data);
-      if (historyRes.data)  setAllRecent(historyRes.data as Alert[]);
+      if (historyRes.data)  setAllRecent(historyRes.data as AlertWithVehicle[]);
       setLastUpdated(new Date());
     } catch (error) {
       console.error('Error loading data:', error);
@@ -138,7 +143,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
   };
 
   // Alerts filtered by the selected time range
-  const getFilteredAlerts = (): Alert[] => {
+  const getFilteredAlerts = (): AlertWithVehicle[] => {
     const days = timeFilter === '1d' ? 1 : timeFilter === '7d' ? 7 : 30;
     const since = new Date();
     since.setDate(since.getDate() - days);
@@ -171,7 +176,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
                     : avgHealthScore >= 60 ? 'text-yellow-400'
                     : 'text-red-400';
 
-  const filteredAlerts = getFilteredAlerts();
+  const filteredAlerts: AlertWithVehicle[] = getFilteredAlerts();
 
   if (loading) {
     return (
@@ -302,7 +307,14 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
         {/* Recent Alerts */}
         <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
           <div className="flex items-start justify-between mb-4">
-            <h2 className="text-xl font-bold text-white">Recent Alerts</h2>
+            <div>
+              <h2 className="text-xl font-bold text-white">Recent Alerts</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {filteredAlerts.length > 0
+                  ? `${filteredAlerts.length} unacknowledged`
+                  : 'Unacknowledged sensor & threshold alerts'}
+              </p>
+            </div>
             {/* 7-day mini trend chart */}
             <div className="flex items-end gap-0.5 h-8" title="7-day alert volume">
               {alertTrend.map((day, i) => (
@@ -313,7 +325,6 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
                     }`}
                     style={{ height: `${Math.max(4, (day.count / trendMax) * 28)}px` }}
                   />
-                  {/* Tooltip on hover */}
                   <span className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:block
                     text-[10px] bg-gray-700 text-gray-200 px-1.5 py-0.5 rounded whitespace-nowrap z-10">
                     {day.label}: {day.count}
@@ -324,51 +335,84 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
           </div>
 
           {filteredAlerts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 text-center">
+            <div className="flex flex-col items-center justify-center py-8 text-center">
               <div className="p-3 rounded-full bg-green-500/10 mb-3">
                 <CheckCircle2 className="w-8 h-8 text-green-500" />
               </div>
               <p className="text-white font-medium mb-1">All systems normal</p>
-              <p className="text-gray-500 text-sm">No active alerts in the selected period</p>
+              <p className="text-gray-500 text-sm">
+                No unacknowledged alerts
+                {timeFilter === '1d' ? ' today' : timeFilter === '7d' ? ' in the last 7 days' : ' in the last 30 days'}
+              </p>
+              <p className="text-gray-600 text-xs mt-2">
+                Last checked: {formatLastUpdated(lastUpdated)}
+              </p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredAlerts.slice(0, 5).map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`p-3 rounded-lg border ${
-                    alert.severity === 'critical'
-                      ? 'border-red-500/50 bg-red-500/10'
-                      : alert.severity === 'warning'
-                      ? 'border-yellow-500/50 bg-yellow-500/10'
-                      : 'border-blue-500/50 bg-blue-500/10'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 mr-3">
-                      <p className="text-white font-medium text-sm truncate">{alert.sensor_type}</p>
-                      <p className="text-gray-400 text-xs truncate">{alert.message}</p>
+            <div className="space-y-2">
+              {filteredAlerts.slice(0, 5).map((alert) => {
+                const isCtitical = alert.severity === 'critical';
+                const isWarning  = alert.severity === 'warning';
+                const borderColor = isCtitical ? 'border-l-red-500'    : isWarning ? 'border-l-yellow-500'    : 'border-l-blue-500';
+                const bgColor     = isCtitical ? 'bg-red-500/10'       : isWarning ? 'bg-yellow-500/10'       : 'bg-blue-500/10';
+                const badgeCls    = isCtitical ? 'bg-red-500/20 text-red-400'  : isWarning ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400';
+                const Icon        = isCtitical ? AlertTriangle : isWarning ? AlertTriangle : Info;
+                const iconCls     = isCtitical ? 'text-red-400' : isWarning ? 'text-yellow-400' : 'text-blue-400';
+
+                // Format sensor_type from snake_case to Title Case
+                const sensorLabel = (alert.sensor_type ?? 'Unknown Sensor')
+                  .replace(/_/g, ' ')
+                  .replace(/\b\w/g, c => c.toUpperCase());
+
+                const vehicleName = (alert.vehicles as { name?: string } | null)?.name;
+
+                return (
+                  <div
+                    key={alert.id}
+                    className={`flex items-start gap-3 p-3 rounded-lg border border-gray-700/40 border-l-4 ${borderColor} ${bgColor} hover:brightness-110 transition-all cursor-default`}
+                  >
+                    {/* Severity icon */}
+                    <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${iconCls}`} />
+
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-white font-semibold text-sm">{sensorLabel}</p>
+                        {vehicleName && (
+                          <span className="text-xs bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded">
+                            {vehicleName}
+                          </span>
+                        )}
+                      </div>
+                      {alert.message && (
+                        <p className="text-gray-400 text-xs mt-0.5 line-clamp-1">{alert.message}</p>
+                      )}
                     </div>
-                    <span className={`text-xs font-medium px-2 py-1 rounded flex-shrink-0 ${
-                      alert.severity === 'critical'
-                        ? 'bg-red-500/20 text-red-400'
-                        : alert.severity === 'warning'
-                        ? 'bg-yellow-500/20 text-yellow-400'
-                        : 'bg-blue-500/20 text-blue-400'
-                    }`}>
-                      {alert.severity}
-                    </span>
+
+                    {/* Right: severity badge + time */}
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded capitalize ${badgeCls}`}>
+                        {alert.severity}
+                      </span>
+                      <span className="text-xs text-gray-600 flex items-center gap-0.5">
+                        <Clock className="w-3 h-3" />
+                        {formatRelativeTime(alert.created_at)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
-              {filteredAlerts.length > 5 && (
-                <button
-                  onClick={() => onNavigate('alerts')}
-                  className="w-full text-xs text-blue-400 hover:text-blue-300 text-center py-2 transition-colors"
-                >
-                  +{filteredAlerts.length - 5} more — View all alerts
-                </button>
-              )}
+                );
+              })}
+
+              {/* View all button */}
+              <button
+                onClick={() => onNavigate('alerts')}
+                className="w-full flex items-center justify-center gap-1.5 mt-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/5 py-2 rounded-lg transition-all border border-transparent hover:border-blue-500/20"
+              >
+                {filteredAlerts.length > 5
+                  ? `+${filteredAlerts.length - 5} more · View all alerts`
+                  : 'View all alerts'}
+                <ChevronRight className="w-3 h-3" />
+              </button>
             </div>
           )}
         </div>
