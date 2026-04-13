@@ -477,31 +477,30 @@ BEGIN
     PERFORM cron.schedule(
       'ftpgo-expire-trials',
       '0 * * * *',
-      $$
+      $sql$
         UPDATE subscriptions
         SET
-          status          = 'expired',
+          status           = 'expired',
           grace_period_end = now() + INTERVAL '7 days',
           updated_at       = now()
         WHERE plan   = 'trial'
           AND status = 'trial'
           AND trial_ends_at < now()
           AND grace_period_end IS NULL;
-      $$
+      $sql$
     );
 
     -- Runs every hour: hard-lock fully expired grace periods
-    -- (keeps status='expired' but sets grace_period_end in the past to trigger hard-lock)
     PERFORM cron.schedule(
       'ftpgo-lock-grace-expired',
       '15 * * * *',
-      $$
+      $sql$
         UPDATE subscriptions
         SET updated_at = now()
         WHERE status = 'expired'
           AND grace_period_end IS NOT NULL
           AND grace_period_end < now();
-      $$
+      $sql$
     );
   ELSE
     RAISE NOTICE
