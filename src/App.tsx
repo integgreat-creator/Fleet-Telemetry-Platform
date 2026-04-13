@@ -17,6 +17,8 @@ import AdminPage from './pages/AdminPage';
 import DebugToolsPage from './pages/DebugToolsPage';
 import FleetMapPage from './pages/FleetMapPage';
 import { realtimeService } from './services/realtimeService';
+import { SubscriptionProvider } from './hooks/useSubscription';
+import FeatureGate from './components/FeatureGate';
 
 export type Page =
   | 'overview'
@@ -33,7 +35,7 @@ export type Page =
   | 'admin'
   | 'debug';
 
-function App() {
+function AppInner() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState<Page>('overview');
@@ -79,28 +81,70 @@ function App() {
 
   if (!user) return <Auth />;
 
+  // Shorthand so each FeatureGate can redirect to Admin for upgrade
+  const toAdmin = () => handleNavigate('admin');
+
   return (
     <Layout currentPage={currentPage} onNavigate={handleNavigate}>
       {selectedVehicle ? (
         <VehicleDetail vehicle={selectedVehicle} onBack={handleBackFromVehicle} />
       ) : (
         <>
-          {currentPage === 'overview'       && <FleetOverview onNavigate={handleNavigate} />}
-          {currentPage === 'vehicles'       && <VehiclesPage onSelectVehicle={handleSelectVehicle} onNavigate={handleNavigate} />}
-          {currentPage === 'map'            && <FleetMapPage />}
-          {currentPage === 'alerts'         && <AlertsPage />}
-          {currentPage === 'analytics'      && <AnalyticsPage />}
-          {currentPage === 'trips'          && <TripsPage />}
-          {currentPage === 'fuel'           && <FuelAnalyticsPage />}
-          {currentPage === 'driver-scoring' && <DriverScoringPage />}
-          {currentPage === 'cost'           && <CostAnalyticsPage />}
-          {currentPage === 'maintenance'    && <MaintenancePage />}
-          {currentPage === 'anomalies'      && <AnomalyFeedPage />}
-          {currentPage === 'admin'          && <AdminPage />}
-          {currentPage === 'debug'          && <DebugToolsPage />}
+          {currentPage === 'overview'  && <FleetOverview onNavigate={handleNavigate} />}
+          {currentPage === 'vehicles'  && (
+            <VehiclesPage
+              onSelectVehicle={handleSelectVehicle}
+              onNavigate={handleNavigate}
+            />
+          )}
+          {currentPage === 'map'       && <FleetMapPage />}
+          {currentPage === 'alerts'    && <AlertsPage />}
+          {currentPage === 'analytics' && <AnalyticsPage />}
+          {currentPage === 'trips'     && <TripsPage />}
+
+          {currentPage === 'fuel' && (
+            <FeatureGate feature="fuel_monitoring" onNavigateToAdmin={toAdmin}>
+              <FuelAnalyticsPage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'driver-scoring' && (
+            <FeatureGate feature="driver_behavior" onNavigateToAdmin={toAdmin}>
+              <DriverScoringPage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'cost' && (
+            <FeatureGate feature="cost_analytics" onNavigateToAdmin={toAdmin}>
+              <CostAnalyticsPage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'maintenance' && (
+            <FeatureGate feature="maintenance_alerts" onNavigateToAdmin={toAdmin}>
+              <MaintenancePage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'anomalies' && (
+            <FeatureGate feature="ai_prediction" onNavigateToAdmin={toAdmin}>
+              <AnomalyFeedPage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'admin' && <AdminPage />}
+          {currentPage === 'debug' && <DebugToolsPage />}
         </>
       )}
     </Layout>
+  );
+}
+
+function App() {
+  return (
+    <SubscriptionProvider>
+      <AppInner />
+    </SubscriptionProvider>
   );
 }
 

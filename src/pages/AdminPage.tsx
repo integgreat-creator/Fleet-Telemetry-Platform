@@ -19,8 +19,8 @@ import { supabase } from '../lib/supabase';
 interface Subscription {
   id: string;
   fleet_id: string;
-  plan: 'free' | 'starter' | 'pro' | 'enterprise';
-  status: 'active' | 'inactive' | 'suspended' | 'trial';
+  plan: 'trial' | 'starter' | 'growth' | 'pro' | 'enterprise';
+  status: 'active' | 'inactive' | 'suspended' | 'trial' | 'expired';
   max_vehicles: number;
   max_drivers: number;
   features: Record<string, unknown>;
@@ -28,6 +28,7 @@ interface Subscription {
   current_period_start?: string;
   current_period_end?: string;
   trial_ends_at?: string;
+  grace_period_end?: string;
   created_at: string;
   updated_at: string;
 }
@@ -117,9 +118,10 @@ function summariseChanges(obj?: Record<string, unknown> | null): string {
 
 function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
   const styles: Record<Subscription['plan'], string> = {
-    free: 'bg-gray-700 text-gray-300',
-    starter: 'bg-blue-900 text-blue-300',
-    pro: 'bg-purple-900 text-purple-300',
+    trial:      'bg-gray-700 text-gray-300',
+    starter:    'bg-blue-900 text-blue-300',
+    growth:     'bg-teal-900 text-teal-300',
+    pro:        'bg-purple-900 text-purple-300',
     enterprise: 'bg-yellow-900 text-yellow-300',
   };
   return (
@@ -134,12 +136,13 @@ function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
 
 function StatusBadge({ status }: { status: Subscription['status'] }) {
   const cfg: Record<Subscription['status'], { cls: string; icon: React.ReactNode }> = {
-    active:    { cls: 'bg-green-900 text-green-300',  icon: <CheckCircle size={11} /> },
+    active:    { cls: 'bg-green-900 text-green-300',   icon: <CheckCircle size={11} /> },
     trial:     { cls: 'bg-yellow-900 text-yellow-300', icon: <Clock size={11} /> },
     suspended: { cls: 'bg-red-900 text-red-300',       icon: <XCircle size={11} /> },
-    inactive:  { cls: 'bg-gray-700 text-gray-400',    icon: <XCircle size={11} /> },
+    inactive:  { cls: 'bg-gray-700 text-gray-400',     icon: <XCircle size={11} /> },
+    expired:   { cls: 'bg-orange-900 text-orange-300', icon: <AlertTriangle size={11} /> },
   };
-  const { cls, icon } = cfg[status];
+  const { cls, icon } = cfg[status] ?? cfg.inactive;
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${cls}`}>
       {icon}
@@ -264,14 +267,15 @@ function WhatsAppNumberField({ fleetId }: { fleetId: string | null }) {
 
 const PLAN_CARDS = [
   {
-    plan: 'free' as const,
-    label: 'Free',
+    plan: 'trial' as const,
+    label: 'Trial',
     price: '₹0',
     period: '',
-    vehicles: '3 vehicles',
-    drivers: '5 drivers',
-    features: ['Basic telemetry', 'Alerts', '7-day history'],
+    vehicles: '2 vehicles',
+    drivers: '3 drivers',
+    features: ['Live tracking', 'Basic alerts', 'Trip history', '7-day history'],
     cta: null,
+    highlight: false,
   },
   {
     plan: 'starter' as const,
@@ -279,19 +283,32 @@ const PLAN_CARDS = [
     price: '₹999',
     period: '/mo',
     vehicles: '10 vehicles',
-    drivers: '20 drivers',
-    features: ['Everything in Free', 'Trip history', 'Driver scoring', '90-day history'],
+    drivers: '15 drivers',
+    features: ['Everything in Trial', 'Fuel monitoring', 'Idle detection', '90-day history'],
     cta: 'Upgrade to Starter',
+    highlight: false,
+  },
+  {
+    plan: 'growth' as const,
+    label: 'Growth',
+    price: '₹1,999',
+    period: '/mo',
+    vehicles: '25 vehicles',
+    drivers: '50 drivers',
+    features: ['Everything in Starter', 'Driver behaviour', 'Cost analytics', 'Maintenance alerts', 'Multi-user access'],
+    cta: 'Upgrade to Growth',
+    highlight: true,
   },
   {
     plan: 'pro' as const,
     label: 'Pro',
-    price: '₹2,499',
+    price: '₹3,999',
     period: '/mo',
-    vehicles: '50 vehicles',
+    vehicles: '100 vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Starter', 'Anomaly detection', 'Cost analytics', 'API access', '1-year history'],
+    features: ['Everything in Growth', 'AI anomaly detection', 'Fuel theft alerts', 'API access', 'Custom reports'],
     cta: 'Upgrade to Pro',
+    highlight: false,
   },
   {
     plan: 'enterprise' as const,
@@ -300,8 +317,9 @@ const PLAN_CARDS = [
     period: '',
     vehicles: 'Unlimited vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Pro', 'Dedicated support', 'Custom integrations', 'SLA guarantee'],
+    features: ['Everything in Pro', 'Dedicated support', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
     cta: 'Contact Sales',
+    highlight: false,
   },
 ];
 
@@ -627,18 +645,25 @@ export default function AdminPage() {
               {/* Plan cards */}
               <div>
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Available Plans</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
                   {PLAN_CARDS.map(card => {
                     const isCurrent = subscription?.plan === card.plan;
                     return (
                       <div
                         key={card.plan}
-                        className={`bg-gray-900 border rounded-xl p-5 flex flex-col gap-3 transition-all ${
+                        className={`bg-gray-900 border rounded-xl p-5 flex flex-col gap-3 transition-all relative ${
                           isCurrent
                             ? 'border-blue-500 ring-1 ring-blue-500/40'
+                            : card.highlight
+                            ? 'border-teal-600/60 ring-1 ring-teal-600/20 hover:border-teal-500'
                             : 'border-gray-800 hover:border-gray-700'
                         }`}
                       >
+                        {card.highlight && !isCurrent && (
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2.5 py-0.5 bg-teal-600 text-white text-[10px] font-bold rounded-full uppercase tracking-wide">
+                            Popular
+                          </span>
+                        )}
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-white">{card.label}</span>
                           {isCurrent && (
@@ -667,6 +692,10 @@ export default function AdminPage() {
                             className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
                               card.plan === 'enterprise'
                                 ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
+                                : card.plan === 'growth'
+                                ? 'bg-teal-600 hover:bg-teal-500 text-white'
+                                : card.plan === 'pro'
+                                ? 'bg-purple-600 hover:bg-purple-500 text-white'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white'
                             }`}
                           >
