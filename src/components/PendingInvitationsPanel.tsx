@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Clock, RefreshCw, Phone, Mail, QrCode } from 'lucide-react';
+import { Clock, RefreshCw, Phone, Mail, QrCode, X, Loader } from 'lucide-react';
 
 interface Invitation {
   id: string;
@@ -20,7 +20,9 @@ interface Props {
 
 export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading,     setLoading]     = useState(true);
+  const [revoking,    setRevoking]    = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -36,11 +38,45 @@ export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) 
 
   useEffect(() => { load(); }, [fleetId]);
 
+  const handleRevoke = async (inv: Invitation) => {
+    if (!confirm(`Revoke invite for ${inv.driver_phone}? They will no longer be able to join using this link.`)) return;
+
+    setRevoking(inv.id);
+    setRevokeError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token ?? null;
+      if (!accessToken) throw new Error('Not authenticated');
+
+      const { error: fnErr } = await supabase.functions.invoke('invite-api', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: { action: 'revoke', token: inv.invite_token },
+      });
+
+      if (fnErr) {
+        let msg = fnErr.message ?? 'Failed to revoke invitation';
+        try {
+          const errBody = await (fnErr as any).context?.json?.();
+          msg = errBody?.error ?? msg;
+        } catch { /* use fnErr.message */ }
+        throw new Error(msg);
+      }
+
+      // Remove from local state immediately
+      setInvitations(prev => prev.filter(i => i.id !== inv.id));
+    } catch (e: unknown) {
+      setRevokeError(e instanceof Error ? e.message : 'Failed to revoke invitation');
+    } finally {
+      setRevoking(null);
+    }
+  };
+
   const getTimeRemaining = (expiresAt: string) => {
     const diff = new Date(expiresAt).getTime() - Date.now();
     if (diff <= 0) return 'Expired';
     const hours = Math.floor(diff / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
+    const mins  = Math.floor((diff % 3600000) / 60000);
     return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
   };
 
@@ -71,10 +107,17 @@ export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) 
         </button>
       </div>
 
+      {revokeError && (
+        <p className="text-sm text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2 mb-3">
+          {revokeError}
+        </p>
+      )}
+
       <div className="space-y-3">
         {invitations.map((inv) => {
           const timeRemaining = getTimeRemaining(inv.expires_at);
-          const isExpiring = new Date(inv.expires_at).getTime() - Date.now() < 3600000;
+          const isExpiring    = new Date(inv.expires_at).getTime() - Date.now() < 3_600_000;
+          const isRevoking    = revoking === inv.id;
 
           return (
             <div
@@ -82,10 +125,13 @@ export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) 
               className="flex items-center justify-between bg-gray-700/60 rounded-lg px-4 py-3"
             >
               <div className="min-w-0">
-                <p className="text-white text-sm font-medium truncate">
-                  {inv.vehicle_name}
-                </p>
-                <div className="flex items-center gap-3 mt-1">
+                {/* vehicle name (may be 'TBD' if not specified at creation) */}
+                {inv.vehicle_name && inv.vehicle_name !== 'TBD' && (
+                  <p className="text-white text-sm font-medium truncate">
+                    {inv.vehicle_name}
+                  </p>
+                )}
+                <div className="flex items-center gap-3 mt-0.5">
                   {inv.driver_phone && (
                     <span className="flex items-center gap-1 text-gray-400 text-xs">
                       <Phone size={11} /> {inv.driver_phone}
@@ -99,7 +145,8 @@ export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) 
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 ml-2 shrink-0">
+              <div className="flex items-center gap-2 ml-2 shrink-0">
+                {/* Time remaining badge */}
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                   isExpiring
                     ? 'bg-red-500/20 text-red-400'
@@ -107,12 +154,28 @@ export default function PendingInvitationsPanel({ fleetId, onResendQR }: Props) 
                 }`}>
                   {timeRemaining}
                 </span>
+
+                {/* Resend QR */}
                 <button
                   onClick={() => onResendQR(inv.invite_token, inv.vehicle_name, inv.driver_phone)}
                   className="flex items-center gap-1.5 text-xs bg-teal-500/20 hover:bg-teal-500/40 text-teal-400 px-2.5 py-1.5 rounded-lg transition"
+                  title="Resend QR code"
                 >
                   <QrCode size={13} />
-                  Resend QR
+                  QR
+                </button>
+
+                {/* Revoke */}
+                <button
+                  onClick={() => handleRevoke(inv)}
+                  disabled={isRevoking}
+                  className="flex items-center gap-1 text-xs bg-red-500/10 hover:bg-red-500/25 text-red-400 px-2.5 py-1.5 rounded-lg transition disabled:opacity-50"
+                  title="Revoke invitation"
+                >
+                  {isRevoking
+                    ? <Loader size={12} className="animate-spin" />
+                    : <X size={12} />}
+                  Revoke
                 </button>
               </div>
             </div>

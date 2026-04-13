@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { X, UserPlus, Copy, Check, Eye, EyeOff, Loader, Download, Share2 } from 'lucide-react';
+import { X, UserPlus, Copy, Check, Eye, EyeOff, Loader, Download, Share2, Lock, ArrowRight } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { supabase } from '../lib/supabase';
 
@@ -7,7 +7,25 @@ interface Props {
   fleetId: string;
   onClose: () => void;
   onDriverCreated: () => void;
+  onNavigateToAdmin?: () => void;
 }
+
+// Returned by check_driver_limit()
+interface LimitCheck {
+  allowed: boolean;
+  reason?: string;
+  limit?: number;
+  used?: number;
+  plan?: string;
+}
+
+const PLAN_DISPLAY: Record<string, string> = {
+  trial:      'Trial',
+  starter:    'Starter',
+  growth:     'Growth',
+  pro:        'Pro',
+  enterprise: 'Enterprise',
+};
 
 function generatePassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
@@ -16,14 +34,15 @@ function generatePassword(): string {
     .join('');
 }
 
-export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }: Props) {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState(generatePassword);
+export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, onNavigateToAdmin }: Props) {
+  const [name,         setName]         = useState('');
+  const [email,        setEmail]        = useState('');
+  const [phone,        setPhone]        = useState('');
+  const [password,     setPassword]     = useState(generatePassword);
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [limitBlocked, setLimitBlocked] = useState<LimitCheck | null>(null);
 
   // Success state
   const [created,        setCreated]        = useState(false);
@@ -54,11 +73,22 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setLimitBlocked(null);
 
     try {
-      // Get a fresh session and explicitly attach the access token as a header.
-      // supabase.functions.invoke() can silently fall back to the anon key if
-      // getSession() returns null — passing the header explicitly prevents that.
+      // ── Check driver limit before creating ────────────────────────────────
+      const { data: limitData, error: limitErr } = await supabase
+        .rpc('check_driver_limit', { p_fleet_id: fleetId });
+
+      if (limitErr) throw new Error(limitErr.message);
+
+      const check = limitData as LimitCheck;
+      if (!check.allowed) {
+        setLimitBlocked(check);
+        return;
+      }
+
+      // ── Limit OK — proceed with creation ──────────────────────────────────
       const { data: { session } } = await supabase.auth.getSession();
       const accessToken = session?.access_token ?? null;
       if (!accessToken) throw new Error('Not authenticated — please log in again');
@@ -76,7 +106,6 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
       });
 
       if (fnErr) {
-        // Extract the real error body from FunctionsHttpError.context
         let msg = fnErr.message ?? 'Failed to create driver';
         try {
           const errBody = await (fnErr as any).context?.json?.();
@@ -112,8 +141,69 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
           </button>
         </div>
 
-        {/* ── Success state ─────────────────────────────────────────── */}
-        {created ? (
+        {/* ── Driver limit blocked state ─────────────────────────────────── */}
+        {limitBlocked && (
+          <div className="space-y-4">
+            {/* Lock icon */}
+            <div className="flex flex-col items-center gap-3 py-2">
+              <div className="w-14 h-14 rounded-2xl bg-gray-800 border border-gray-700 flex items-center justify-center">
+                <Lock className="w-7 h-7 text-gray-400" />
+              </div>
+              <div className="text-center">
+                <p className="text-white font-semibold text-base">Driver limit reached</p>
+                <p className="text-gray-400 text-sm mt-1 max-w-xs leading-relaxed">
+                  {limitBlocked.reason ?? 'You have reached the maximum number of drivers on your current plan.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Usage bar */}
+            {limitBlocked.limit != null && limitBlocked.used != null && limitBlocked.limit > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Drivers used</span>
+                  <span className="text-red-400 font-semibold">
+                    {limitBlocked.used} / {limitBlocked.limit}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+                  <div className="h-2 rounded-full bg-red-500 transition-all" style={{ width: '100%' }} />
+                </div>
+              </div>
+            )}
+
+            {/* Plan badge */}
+            {limitBlocked.plan && (
+              <div className="flex items-center justify-center">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-gray-800 text-gray-400 border border-gray-700">
+                  {PLAN_DISPLAY[limitBlocked.plan] ?? limitBlocked.plan} plan
+                </span>
+              </div>
+            )}
+
+            {/* CTA */}
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={onClose}
+                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors"
+              >
+                Close
+              </button>
+              {onNavigateToAdmin && (
+                <button
+                  onClick={() => { onNavigateToAdmin(); onClose(); }}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  Upgrade Plan
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Success state ─────────────────────────────────────────────── */}
+        {!limitBlocked && created && (
           <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
             {/* Header */}
             <div className="flex flex-col items-center gap-2 py-1">
@@ -162,7 +252,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
                   </div>
                 </div>
 
-                {/* QR canvas — centred, white background */}
+                {/* QR canvas */}
                 <div className="flex justify-center">
                   <div className="bg-white p-3 rounded-xl inline-block">
                     <QRCodeCanvas
@@ -207,8 +297,10 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
               Done
             </button>
           </div>
-        ) : (
-          /* ── Form ────────────────────────────────────────────────── */
+        )}
+
+        {/* ── Form ──────────────────────────────────────────────────────── */}
+        {!limitBlocked && !created && (
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-gray-300">Driver Name *</label>
@@ -286,7 +378,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated }:
                 className="flex-1 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
               >
                 {loading ? <Loader className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                {loading ? 'Creating…' : 'Create Account'}
+                {loading ? 'Checking…' : 'Create Account'}
               </button>
             </div>
           </form>

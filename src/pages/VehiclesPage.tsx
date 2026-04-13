@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle,
          Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X } from 'lucide-react';
-import { QRCodeCanvas } from 'qrcode.react';
+import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
 import CreateDriverModal from '../components/CreateDriverModal';
 import PendingInvitationsPanel from '../components/PendingInvitationsPanel';
 import AddVehicleModal from '../components/AddVehicleModal';
+import { useSubscription } from '../hooks/useSubscription';
 
 interface DriverAccount {
   id: string;
@@ -29,6 +30,8 @@ interface VehiclesPageProps {
 }
 
 export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPageProps) {
+  const { driverLimit } = useSubscription();
+
   const [vehicles,          setVehicles]          = useState<Vehicle[]>([]);
   const [drivers,           setDrivers]           = useState<DriverAccount[]>([]);
   const [fleetId,           setFleetId]           = useState<string | null>(null);
@@ -244,11 +247,23 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
       {/* ── Driver accounts ───────────────────────────────────────────── */}
       <div>
-        <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+        <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2 flex-wrap">
           <Users className="w-5 h-5 text-green-400" />
           Driver Accounts
           {drivers.length > 0 && (
             <span className="text-sm font-normal text-gray-500">({drivers.length})</span>
+          )}
+          {/* Driver usage vs. plan limit */}
+          {driverLimit > 0 && (
+            <span className={`ml-auto text-xs font-medium px-2.5 py-1 rounded-full ${
+              drivers.length >= driverLimit
+                ? 'bg-red-900/40 text-red-400 border border-red-800/50'
+                : drivers.length >= driverLimit * 0.8
+                ? 'bg-yellow-900/40 text-yellow-400 border border-yellow-800/50'
+                : 'bg-gray-800 text-gray-400 border border-gray-700'
+            }`}>
+              {drivers.length} / {driverLimit} drivers
+            </span>
           )}
         </h2>
 
@@ -337,6 +352,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
           fleetId={fleetId}
           onClose={() => setShowDriverModal(false)}
           onDriverCreated={loadAll}
+          onNavigateToAdmin={() => onNavigate?.('admin')}
         />
       )}
 
