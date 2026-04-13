@@ -13,6 +13,16 @@
 
 -- ── 1. Expand plan & status CHECK constraints ────────────────────────────────
 
+-- Rename all existing 'free' rows → 'trial' FIRST, before the constraint is
+-- re-added. Adding the constraint while 'free' rows exist causes a violation.
+UPDATE subscriptions
+SET
+  plan         = 'trial',
+  max_vehicles = 2,
+  max_drivers  = 3,
+  updated_at   = now()
+WHERE plan = 'free';
+
 -- Drop old plan check and replace with full set including 'trial' and 'growth'
 ALTER TABLE subscriptions
   DROP CONSTRAINT IF EXISTS subscriptions_plan_check;
@@ -28,15 +38,6 @@ ALTER TABLE subscriptions
 ALTER TABLE subscriptions
   ADD CONSTRAINT subscriptions_status_check
   CHECK (status IN ('active', 'inactive', 'suspended', 'trial', 'expired'));
-
--- Rename all existing 'free' rows → 'trial'
-UPDATE subscriptions
-SET
-  plan         = 'trial',
-  max_vehicles = 2,
-  max_drivers  = 3,
-  updated_at   = now()
-WHERE plan = 'free';
 
 -- Fix the DEFAULT on the plan column
 ALTER TABLE subscriptions
