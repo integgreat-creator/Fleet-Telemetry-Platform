@@ -42,12 +42,26 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === 'POST' && pathParts.length === 0) {
       const vehicle: Vehicle = await req.json();
+
+      // Enforce vehicle limit when a fleet_id is supplied
+      if (vehicle.fleet_id) {
+        const { data: limitData, error: limitErr } = await supabase
+          .rpc('check_vehicle_limit', { p_fleet_id: vehicle.fleet_id });
+
+        if (limitErr) throw limitErr;
+
+        const check = limitData as { allowed: boolean; reason?: string; plan?: string };
+        if (!check.allowed) {
+          return new Response(
+            JSON.stringify({ error: check.reason ?? 'Vehicle limit reached', plan: check.plan }),
+            { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      }
+
       const { data, error } = await supabase
         .from('vehicles')
-        .insert({
-          ...vehicle,
-          owner_id: user.id,
-        })
+        .insert({ ...vehicle, owner_id: user.id })
         .select()
         .single();
 
