@@ -17,7 +17,10 @@ import 'package:vehicle_telemetry/services/obd_service.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/services/vin_decoder_service.dart';
+import 'package:vehicle_telemetry/services/subscription_service.dart';
+import 'package:vehicle_telemetry/providers/subscription_provider.dart';
 import 'package:vehicle_telemetry/widgets/connection_status.dart';
+import 'package:vehicle_telemetry/widgets/upgrade_bottom_sheet.dart';
 import 'package:vehicle_telemetry/bluetooth/bt_connection_state.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -58,8 +61,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final vehicleProvider = context.read<VehicleProvider>();
-      await vehicleProvider.loadVehicles();
+      final vehicleProvider      = context.read<VehicleProvider>();
+      final subscriptionProvider = context.read<SubscriptionProvider>();
+      await Future.wait([
+        vehicleProvider.loadVehicles(),
+        subscriptionProvider.loadForUser(),
+      ]);
       // ❸ Drivers are no longer fixed to one vehicle — they connect dynamically
       // via OBD each session. No auto-selection on login.
     });
@@ -228,6 +235,27 @@ class _HomeScreenState extends State<HomeScreen> {
     final fleetId = prefs.getString('fleet_id') ?? authProvider.driverFleetId;
 
     try {
+      // ── Vehicle limit check ──────────────────────────────────────────────
+      // Fleet managers go through createOrFindVehicleByVin (direct INSERT).
+      // The DB has no trigger for that path, so we check here first.
+      // Drivers use the create_vehicle_for_driver RPC which enforces the limit
+      // server-side, but we do a pre-check here for a better UX error message.
+      if (fleetId != null) {
+        final limitResult =
+            await SubscriptionService.instance.checkVehicleLimit(fleetId);
+        if (!limitResult.allowed) {
+          if (!mounted) return;
+          final subProvider = context.read<SubscriptionProvider>();
+          await UpgradeBottomSheet.show(
+            context:         context,
+            result:          limitResult,
+            planDisplayName: subProvider.planDisplayName,
+            isManager:       !authProvider.isDriver,
+          );
+          return;
+        }
+      }
+
       final supabaseService = SupabaseService();
       final Vehicle vehicle;
 
