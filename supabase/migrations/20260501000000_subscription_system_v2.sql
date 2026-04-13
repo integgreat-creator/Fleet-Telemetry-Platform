@@ -12,9 +12,19 @@
 
 
 -- ── 1. Expand plan & status CHECK constraints ────────────────────────────────
+-- Order is critical:
+--   Step A — DROP old constraints   (removes 'free' restriction)
+--   Step B — UPDATE data            (free → trial, now unconstrained)
+--   Step C — ADD new constraints    (all rows already valid)
 
--- Rename all existing 'free' rows → 'trial' FIRST, before the constraint is
--- re-added. Adding the constraint while 'free' rows exist causes a violation.
+-- Step A: drop both old constraints so the UPDATE is unrestricted
+ALTER TABLE subscriptions
+  DROP CONSTRAINT IF EXISTS subscriptions_plan_check;
+
+ALTER TABLE subscriptions
+  DROP CONSTRAINT IF EXISTS subscriptions_status_check;
+
+-- Step B: rename all 'free' rows → 'trial' with corrected limits
 UPDATE subscriptions
 SET
   plan         = 'trial',
@@ -23,17 +33,10 @@ SET
   updated_at   = now()
 WHERE plan = 'free';
 
--- Drop old plan check and replace with full set including 'trial' and 'growth'
-ALTER TABLE subscriptions
-  DROP CONSTRAINT IF EXISTS subscriptions_plan_check;
-
+-- Step C: add new constraints — every row now satisfies both
 ALTER TABLE subscriptions
   ADD CONSTRAINT subscriptions_plan_check
   CHECK (plan IN ('trial', 'starter', 'growth', 'pro', 'enterprise'));
-
--- Drop old status check and add 'expired'
-ALTER TABLE subscriptions
-  DROP CONSTRAINT IF EXISTS subscriptions_status_check;
 
 ALTER TABLE subscriptions
   ADD CONSTRAINT subscriptions_status_check
