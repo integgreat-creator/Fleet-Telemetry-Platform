@@ -1,35 +1,68 @@
 import { useState } from 'react';
-import { X, Car, Loader, Check } from 'lucide-react';
+import { X, Car, Loader, Check, Lock, ArrowRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 interface Props {
   fleetId: string;
   onClose: () => void;
   onVehicleAdded: () => void;
+  onNavigateToAdmin?: () => void; // called when user clicks "Upgrade Plan"
 }
 
 const FUEL_TYPES = ['petrol', 'diesel', 'cng', 'ev'] as const;
 
-export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded }: Props) {
-  const [name,     setName]     = useState('');
-  const [vin,      setVin]      = useState('');
-  const [make,     setMake]     = useState('');
-  const [model,    setModel]    = useState('');
-  const [year,     setYear]     = useState('');
-  const [fuelType, setFuelType] = useState<string>('petrol');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
-  const [created,  setCreated]  = useState(false);
+// Returned by check_vehicle_limit()
+interface LimitCheck {
+  allowed: boolean;
+  reason?: string;
+  limit?: number;
+  used?: number;
+  plan?: string;
+}
+
+const PLAN_DISPLAY: Record<string, string> = {
+  trial:      'Trial',
+  starter:    'Starter',
+  growth:     'Growth',
+  pro:        'Pro',
+  enterprise: 'Enterprise',
+};
+
+export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded, onNavigateToAdmin }: Props) {
+  const [name,         setName]         = useState('');
+  const [vin,          setVin]          = useState('');
+  const [make,         setMake]         = useState('');
+  const [model,        setModel]        = useState('');
+  const [year,         setYear]         = useState('');
+  const [fuelType,     setFuelType]     = useState<string>('petrol');
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [created,      setCreated]      = useState(false);
+  const [limitBlocked, setLimitBlocked] = useState<LimitCheck | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setLimitBlocked(null);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      // ── Check vehicle limit before attempting insert ──────────────────────
+      const { data: limitData, error: limitErr } = await supabase
+        .rpc('check_vehicle_limit', { p_fleet_id: fleetId });
+
+      if (limitErr) throw new Error(limitErr.message);
+
+      const check = limitData as LimitCheck;
+      if (!check.allowed) {
+        setLimitBlocked(check);
+        return;
+      }
+
+      // ── Limit OK — proceed with insert ────────────────────────────────────
       const { error: insertErr } = await supabase.from('vehicles').insert({
         name:      name.trim(),
         vin:       vin.trim().toUpperCase() || null,
@@ -75,8 +108,69 @@ export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded }: Pr
           </button>
         </div>
 
-        {/* Success */}
-        {created ? (
+        {/* ── Vehicle limit reached ── */}
+        {limitBlocked ? (
+          <div className="flex flex-col items-center gap-4 py-4 text-center">
+            <div className="w-14 h-14 rounded-full bg-yellow-500/15 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-yellow-400" />
+            </div>
+
+            <div>
+              <p className="text-white font-semibold text-base mb-1">Vehicle Limit Reached</p>
+              <p className="text-gray-400 text-sm leading-relaxed">
+                {limitBlocked.reason}
+              </p>
+            </div>
+
+            {/* Usage bar */}
+            {limitBlocked.limit != null && limitBlocked.used != null && (
+              <div className="w-full bg-gray-800 rounded-xl p-4 space-y-2">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Vehicles used</span>
+                  <span className="text-red-400 font-semibold">
+                    {limitBlocked.used} / {limitBlocked.limit}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div
+                    className="h-2 rounded-full bg-red-500"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                {limitBlocked.plan && (
+                  <p className="text-xs text-gray-500 pt-1">
+                    Current plan:{' '}
+                    <span className="text-gray-300 font-medium">
+                      {PLAN_DISPLAY[limitBlocked.plan] ?? limitBlocked.plan}
+                    </span>
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="w-full space-y-2 pt-1">
+              {/* Upgrade CTA */}
+              <button
+                onClick={() => {
+                  onClose();
+                  onNavigateToAdmin?.();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors"
+              >
+                Upgrade Plan
+                <ArrowRight className="w-4 h-4" />
+              </button>
+              <button
+                onClick={onClose}
+                className="w-full py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+
+        /* ── Success ── */
+        ) : created ? (
           <div className="flex flex-col items-center gap-3 py-6">
             <div className="w-14 h-14 rounded-full bg-green-500/20 flex items-center justify-center">
               <Check className="w-7 h-7 text-green-400" />
@@ -93,6 +187,8 @@ export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded }: Pr
               Done
             </button>
           </div>
+
+        /* ── Form ── */
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
 
@@ -202,7 +298,7 @@ export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded }: Pr
                 className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
               >
                 {loading ? <Loader className="w-4 h-4 animate-spin" /> : <Car className="w-4 h-4" />}
-                {loading ? 'Adding…' : 'Add Vehicle'}
+                {loading ? 'Checking…' : 'Add Vehicle'}
               </button>
             </div>
           </form>

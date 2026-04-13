@@ -25,9 +25,10 @@ interface DriverAccount {
 
 interface VehiclesPageProps {
   onSelectVehicle: (vehicle: Vehicle) => void;
+  onNavigate?: (page: import('../App').Page) => void;
 }
 
-export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
+export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPageProps) {
   const [vehicles,          setVehicles]          = useState<Vehicle[]>([]);
   const [drivers,           setDrivers]           = useState<DriverAccount[]>([]);
   const [fleetId,           setFleetId]           = useState<string | null>(null);
@@ -327,6 +328,7 @@ export default function VehiclesPage({ onSelectVehicle }: VehiclesPageProps) {
           fleetId={fleetId}
           onClose={() => setShowAddVehicle(false)}
           onVehicleAdded={() => { loadAll(); setShowAddVehicle(false); }}
+          onNavigateToAdmin={() => onNavigate?.('admin')}
         />
       )}
 

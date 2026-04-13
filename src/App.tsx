@@ -86,7 +86,7 @@ function App() {
       ) : (
         <>
           {currentPage === 'overview'       && <FleetOverview onNavigate={handleNavigate} />}
-          {currentPage === 'vehicles'       && <VehiclesPage onSelectVehicle={handleSelectVehicle} />}
+          {currentPage === 'vehicles'       && <VehiclesPage onSelectVehicle={handleSelectVehicle} onNavigate={handleNavigate} />}
           {currentPage === 'map'            && <FleetMapPage />}
           {currentPage === 'alerts'         && <AlertsPage />}
           {currentPage === 'analytics'      && <AnalyticsPage />}
