@@ -541,9 +541,12 @@ CREATE TRIGGER trg_subscription_notify
   EXECUTE FUNCTION fn_notify_subscription_change();
 
 
--- ── 10. Update fleet_vehicle_count view to use new plan names ────────────────
+-- ── 10. Rebuild fleet_vehicle_count view with new plan columns ───────────────
+-- DROP first because CREATE OR REPLACE cannot rename existing view columns.
 
-CREATE OR REPLACE VIEW fleet_vehicle_count AS
+DROP VIEW IF EXISTS fleet_vehicle_count;
+
+CREATE VIEW fleet_vehicle_count AS
 SELECT
   f.id                                                    AS fleet_id,
   f.name                                                  AS fleet_name,
