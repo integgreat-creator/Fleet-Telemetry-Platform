@@ -11,8 +11,11 @@ import {
   Eye,
   Trash2,
   Crown,
+  Key,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useSubscription } from '../hooks/useSubscription';
+import ApiAccessTab from '../components/ApiAccessTab';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,7 +79,7 @@ interface DeviceHealth {
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
-type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health';
+type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -326,6 +329,9 @@ const PLAN_CARDS = [
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  const { feature } = useSubscription();
+  const hasApiAccess = feature('api_access') === 'full';
+
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
   // Subscription state
@@ -516,11 +522,12 @@ export default function AdminPage() {
 
   // ─── Tabs config ─────────────────────────────────────────────────────────────
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: Tab; label: string; icon: React.ReactNode; locked?: boolean }[] = [
     { id: 'subscription',  label: 'Subscription',   icon: <CreditCard size={15} /> },
     { id: 'drivers',       label: 'Drivers',         icon: <Users size={15} /> },
     { id: 'audit',         label: 'Audit Log',       icon: <Shield size={15} /> },
     { id: 'device-health', label: 'Device Health',   icon: <Settings size={15} /> },
+    { id: 'api-access',    label: 'API Access',      icon: <Key size={15} />, locked: !hasApiAccess },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -539,19 +546,23 @@ export default function AdminPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 mb-6 bg-gray-900 rounded-xl p-1 border border-gray-800 w-fit">
+      <div className="flex flex-wrap gap-1 mb-6 bg-gray-900 rounded-xl p-1 border border-gray-800 w-fit">
         {tabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => !tab.locked && setActiveTab(tab.id)}
+            title={tab.locked ? 'Upgrade to Pro to unlock API Access' : undefined}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              activeTab === tab.id
-                ? 'bg-blue-600 text-white shadow'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              tab.locked
+                ? 'text-gray-600 cursor-not-allowed'
+                : activeTab === tab.id
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
             }`}
           >
             {tab.icon}
             {tab.label}
+            {tab.locked && <Eye size={12} className="text-gray-600" />}
           </button>
         ))}
       </div>
@@ -969,6 +980,11 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Tab: API Access ────────────────────────────────────────────────────── */}
+      {activeTab === 'api-access' && fleetId && (
+        <ApiAccessTab fleetId={fleetId} />
       )}
     </div>
   );

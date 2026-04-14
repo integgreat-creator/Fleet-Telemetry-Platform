@@ -14,6 +14,7 @@ import CostAnalyticsPage from './pages/CostAnalyticsPage';
 import MaintenancePage from './pages/MaintenancePage';
 import AnomalyFeedPage from './pages/AnomalyFeedPage';
 import AdminPage from './pages/AdminPage';
+import ReportsPage from './pages/ReportsPage';
 import DebugToolsPage from './pages/DebugToolsPage';
 import FleetMapPage from './pages/FleetMapPage';
 import { realtimeService } from './services/realtimeService';
@@ -32,6 +33,7 @@ export type Page =
   | 'cost'
   | 'maintenance'
   | 'anomalies'
+  | 'reports'
   | 'admin'
   | 'debug';
 
@@ -129,6 +131,12 @@ function AppInner() {
           {currentPage === 'anomalies' && (
             <FeatureGate feature="ai_prediction" onNavigateToAdmin={toAdmin}>
               <AnomalyFeedPage />
+            </FeatureGate>
+          )}
+
+          {currentPage === 'reports' && (
+            <FeatureGate feature="custom_reports" onNavigateToAdmin={toAdmin}>
+              <ReportsPage />
             </FeatureGate>
           )}
 

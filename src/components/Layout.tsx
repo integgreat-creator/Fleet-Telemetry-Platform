@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
-  Settings, Bug, Map, Lock, AlertCircle, Clock,
+  Settings, Bug, Map, Lock, AlertCircle, Clock, FileText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -16,11 +16,12 @@ interface LayoutProps {
 
 // Map nav item → feature key (undefined = always accessible)
 const PAGE_FEATURE: Partial<Record<Page, string>> = {
-  fuel:           'fuel_monitoring',
+  fuel:             'fuel_monitoring',
   'driver-scoring': 'driver_behavior',
-  cost:           'cost_analytics',
-  maintenance:    'maintenance_alerts',
-  anomalies:      'ai_prediction',
+  cost:             'cost_analytics',
+  maintenance:      'maintenance_alerts',
+  anomalies:        'ai_prediction',
+  reports:          'custom_reports',
 };
 
 const fleetNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
@@ -38,6 +39,7 @@ const intelligenceNavItems: Array<{ id: Page; label: string; icon: typeof Car }>
   { id: 'cost',           label: 'Cost Analytics',     icon: DollarSign },
   { id: 'maintenance',    label: 'Maintenance',        icon: Wrench },
   { id: 'anomalies',      label: 'Anomaly Feed',       icon: Zap },
+  { id: 'reports',        label: 'Reports',            icon: FileText },
 ];
 
 const systemNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
