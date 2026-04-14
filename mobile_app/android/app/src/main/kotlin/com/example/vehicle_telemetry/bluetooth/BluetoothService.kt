@@ -44,7 +44,11 @@ class BluetoothService(
         // Seed with already-bonded devices so they appear even before discovery ends.
         val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
         bonded.mapTo(found) { device ->
-            mapOf("name" to (device.name ?: "Unknown"), "address" to device.address)
+            mapOf(
+                "name"       to (device.name ?: "Unknown"),
+                "address"    to device.address,
+                "deviceType" to "classic"
+            )
         }
 
         // BroadcastReceiver that accumulates ACTION_FOUND hits and fires the
@@ -68,8 +72,9 @@ class BluetoothService(
                             if (found.none { f -> f["address"] == it.address }) {
                                 found.add(
                                     mapOf(
-                                        "name"    to (it.name ?: "Unknown"),
-                                        "address" to it.address
+                                        "name"       to (it.name ?: "Unknown"),
+                                        "address"    to it.address,
+                                        "deviceType" to "classic"
                                     )
                                 )
                             }
