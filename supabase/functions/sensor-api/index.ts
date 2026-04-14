@@ -3,7 +3,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey, X-API-Key',
 };
 
 interface SensorReading {
@@ -14,34 +14,101 @@ interface SensorReading {
   timestamp?: string;
 }
 
+// ── API key helpers ──────────────────────────────────────────────────────────
+
+async function sha256Hex(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(buf))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function unauthorized(msg = 'Unauthorized') {
+  return new Response(JSON.stringify({ error: msg }), {
+    status: 401,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+// ── Main handler ─────────────────────────────────────────────────────────────
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const authHeader = req.headers.get('Authorization');
+    const supabaseUrl      = Deno.env.get('SUPABASE_URL')!;
+    const supabaseAnonKey  = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const serviceRoleKey   = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const authHeader       = req.headers.get('Authorization') || '';
+    const rawKey           = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : '';
 
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: authHeader || '' } },
-    });
+    let supabase: ReturnType<typeof createClient>;
+    let apiKeyFleetId: string | null = null;
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    if (rawKey.startsWith('vs_')) {
+      // ── API-key path ─────────────────────────────────────────────────────
+      const keyHash = await sha256Hex(rawKey);
+
+      const serviceClient = createClient(supabaseUrl, serviceRoleKey);
+      const { data: apiKey } = await serviceClient
+        .from('api_keys')
+        .select('fleet_id, is_active, expires_at')
+        .eq('key_hash', keyHash)
+        .maybeSingle();
+
+      if (!apiKey || !apiKey.is_active) {
+        return unauthorized('Invalid or inactive API key');
+      }
+      if (apiKey.expires_at && new Date(apiKey.expires_at) < new Date()) {
+        return unauthorized('API key has expired');
+      }
+
+      apiKeyFleetId = apiKey.fleet_id as string;
+      // Use service-role client; access is scoped to the fleet below.
+      supabase = serviceClient;
+    } else {
+      // ── Session-JWT path ─────────────────────────────────────────────────
+      supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
       });
+
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        return unauthorized();
+      }
     }
 
     const url = new URL(req.url);
 
+    // ── POST /sensor-api — ingest one reading ─────────────────────────────
     if (req.method === 'POST') {
       const reading: SensorReading = await req.json();
 
-      // ── REAL-TIME ANOMALY DETECTION ENGINE ────────────────────────
+      // When authenticated via API key, verify the vehicle belongs to the key's fleet
+      if (apiKeyFleetId) {
+        const { data: vehicle } = await supabase
+          .from('vehicles')
+          .select('id')
+          .eq('id', reading.vehicle_id)
+          .eq('fleet_id', apiKeyFleetId)
+          .maybeSingle();
+
+        if (!vehicle) {
+          return new Response(
+            JSON.stringify({ error: 'vehicle_id does not belong to this API key\'s fleet' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      }
+
+      // ── REAL-TIME ANOMALY DETECTION ENGINE ──────────────────────────────
       const { data: recentHistory } = await supabase
         .from('sensor_data')
         .select('value')
@@ -54,15 +121,17 @@ Deno.serve(async (req: Request) => {
       let anomalyMessage = '';
 
       if (recentHistory && recentHistory.length >= 5) {
-        const values = recentHistory.map(h => h.value);
-        const mean = values.reduce((a, b) => a + b, 0) / values.length;
-        const stdDev = Math.sqrt(values.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / values.length);
+        const values = recentHistory.map((h: any) => h.value as number);
+        const mean   = values.reduce((a: number, b: number) => a + b, 0) / values.length;
+        const stdDev = Math.sqrt(
+          values.map((x: number) => Math.pow(x - mean, 2)).reduce((a: number, b: number) => a + b, 0) / values.length,
+        );
 
-        // Z-Score Anomaly Detection: Trigger if reading is > 3 standard deviations from mean
-        // and ignore if stdDev is too small (avoid noise in static values)
-        if (stdDev > (mean * 0.05) && Math.abs(reading.value - mean) > 3 * stdDev) {
+        if (stdDev > mean * 0.05 && Math.abs(reading.value - mean) > 3 * stdDev) {
           isAnomaly = true;
-          anomalyMessage = `AI detected abnormal jump in ${reading.sensor_type}: ${reading.value}${reading.unit} (Expected: ~${mean.toFixed(1)}${reading.unit})`;
+          anomalyMessage =
+            `AI detected abnormal jump in ${reading.sensor_type}: ` +
+            `${reading.value}${reading.unit} (Expected: ~${mean.toFixed(1)}${reading.unit})`;
         }
       }
 
@@ -76,15 +145,15 @@ Deno.serve(async (req: Request) => {
 
       if (isAnomaly) {
         await supabase.from('alerts').insert({
-          vehicle_id: reading.vehicle_id,
+          vehicle_id:  reading.vehicle_id,
           sensor_type: reading.sensor_type,
-          value: reading.value,
-          severity: 'warning',
-          message: anomalyMessage,
+          value:       reading.value,
+          severity:    'warning',
+          message:     anomalyMessage,
         });
       }
 
-      // Standard Threshold Check
+      // ── Standard Threshold Check ────────────────────────────────────────
       const { data: thresholds } = await supabase
         .from('thresholds')
         .select('*')
@@ -97,24 +166,24 @@ Deno.serve(async (req: Request) => {
         const { min_value, max_value, id: threshold_id } = thresholds;
         let alertTriggered = false;
         let severity = 'info';
-        let message = '';
+        let message  = '';
 
         if (max_value !== null && reading.value > max_value) {
           alertTriggered = true;
           severity = reading.value > max_value * 1.2 ? 'critical' : 'warning';
-          message = `${reading.sensor_type} exceeded maximum: ${reading.value}${reading.unit} (max: ${max_value}${reading.unit})`;
+          message  = `${reading.sensor_type} exceeded maximum: ${reading.value}${reading.unit} (max: ${max_value}${reading.unit})`;
         } else if (min_value !== null && reading.value < min_value) {
           alertTriggered = true;
           severity = reading.value < min_value * 0.8 ? 'critical' : 'warning';
-          message = `${reading.sensor_type} below minimum: ${reading.value}${reading.unit} (min: ${min_value}${reading.unit})`;
+          message  = `${reading.sensor_type} below minimum: ${reading.value}${reading.unit} (min: ${min_value}${reading.unit})`;
         }
 
         if (alertTriggered) {
           await supabase.from('alerts').insert({
-            vehicle_id: reading.vehicle_id,
-            sensor_type: reading.sensor_type,
+            vehicle_id:   reading.vehicle_id,
+            sensor_type:  reading.sensor_type,
             threshold_id,
-            value: reading.value,
+            value:        reading.value,
             severity,
             message,
           });
@@ -127,12 +196,30 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // ── GET /sensor-api — query historical readings ───────────────────────
     if (req.method === 'GET') {
-      const vehicleId = url.searchParams.get('vehicle_id');
+      const vehicleId  = url.searchParams.get('vehicle_id');
       const sensorType = url.searchParams.get('sensor_type');
-      const startDate = url.searchParams.get('start_date');
-      const endDate = url.searchParams.get('end_date');
-      const limit = parseInt(url.searchParams.get('limit') || '1000');
+      const startDate  = url.searchParams.get('start_date');
+      const endDate    = url.searchParams.get('end_date');
+      const limit      = parseInt(url.searchParams.get('limit') || '1000');
+
+      // API-key callers may only query their own fleet's vehicles
+      if (apiKeyFleetId && vehicleId) {
+        const { data: vehicle } = await supabase
+          .from('vehicles')
+          .select('id')
+          .eq('id', vehicleId)
+          .eq('fleet_id', apiKeyFleetId)
+          .maybeSingle();
+
+        if (!vehicle) {
+          return new Response(
+            JSON.stringify({ error: 'vehicle_id does not belong to this API key\'s fleet' }),
+            { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      }
 
       let query = supabase
         .from('sensor_data')
@@ -140,13 +227,12 @@ Deno.serve(async (req: Request) => {
         .order('timestamp', { ascending: false })
         .limit(limit);
 
-      if (vehicleId) query = query.eq('vehicle_id', vehicleId);
+      if (vehicleId)  query = query.eq('vehicle_id', vehicleId);
       if (sensorType) query = query.eq('sensor_type', sensorType);
-      if (startDate) query = query.gte('timestamp', startDate);
-      if (endDate) query = query.lte('timestamp', endDate);
+      if (startDate)  query = query.gte('timestamp', startDate);
+      if (endDate)    query = query.lte('timestamp', endDate);
 
       const { data, error } = await query;
-
       if (error) throw error;
 
       return new Response(JSON.stringify(data), {
@@ -158,7 +244,7 @@ Deno.serve(async (req: Request) => {
       status: 405,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
-  } catch (error) {
+  } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

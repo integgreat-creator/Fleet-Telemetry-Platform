@@ -3,11 +3,13 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vehicle_telemetry/models/sensor_data.dart';
 import 'package:vehicle_telemetry/models/threshold.dart';
+import 'package:vehicle_telemetry/services/driver_behaviour_recorder.dart';
 import 'package:vehicle_telemetry/services/location_service.dart';
 import 'package:vehicle_telemetry/services/mock_gps_detector.dart';
 import 'package:vehicle_telemetry/services/obd_service.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
 import 'package:vehicle_telemetry/services/notification_service.dart';
+import 'package:vehicle_telemetry/services/trip_recorder.dart';
 
 class SensorProvider extends ChangeNotifier {
   final OBDService _obdService = OBDService();
@@ -22,6 +24,10 @@ class SensorProvider extends ChangeNotifier {
   String? _currentVehicleName;
   String? _currentDriverAccountId;   // MOB-2: for data attribution
   List<Threshold> _thresholds = [];
+
+  // ── Trip & behaviour recorders ────────────────────────────────────────────
+  TripRecorder? _tripRecorder;
+  DriverBehaviourRecorder? _behaviourRecorder;
 
   // ── Watchdog ──────────────────────────────────────────────────────────────
   Timer? _watchdogTimer;
@@ -54,6 +60,27 @@ class SensorProvider extends ChangeNotifier {
           prefs.getBool('threshold_alerts_enabled') ?? true;
     });
 
+    // ── Trip & behaviour recorder setup ──────────────────────────────────────
+    _behaviourRecorder = DriverBehaviourRecorder(
+      vehicleId:       vehicleId,
+      supabaseService: _supabaseService,
+      driverAccountId: driverAccountId,
+    );
+
+    _tripRecorder = TripRecorder(
+      vehicleId:       vehicleId,
+      supabaseService: _supabaseService,
+      driverAccountId: driverAccountId,
+      onTripSaved: (tripId, tripStart, tripEnd) {
+        // Forward trip context to behaviour recorder to persist one linked row
+        _behaviourRecorder?.finalizeTripBehavior(
+          tripId:    tripId,
+          tripStart: tripStart,
+          tripEnd:   tripEnd,
+        );
+      },
+    );
+
     // OBD sensor stream
     _sensorSubscription = _obdService.sensorDataStream.listen((sensorData) {
       _lastDataReceivedAt = DateTime.now();
@@ -66,11 +93,25 @@ class SensorProvider extends ChangeNotifier {
         sensorData,
         driverAccountId: _currentDriverAccountId,  // MOB-2
       );
+
+      // ── Feed real OBD readings to trip & behaviour recorders ────────────
+      final ts = sensorData.timestamp;
+      switch (sensorData.type) {
+        case SensorType.speed:
+          _tripRecorder?.onSpeedReading(sensorData.value, ts);
+          _behaviourRecorder?.onSpeedReading(sensorData.value, ts);
+        case SensorType.rpm:
+          _behaviourRecorder?.onRpmReading(sensorData.value, ts);
+        case SensorType.engineLoad:
+          _behaviourRecorder?.onEngineLoadReading(sensorData.value);
+        default:
+          break;
+      }
     });
 
     _obdService.startPolling();
 
-    // GPS heartbeat every 15 seconds
+    // GPS continuous stream (background-safe via foreground service)
     _locationService.start();
     _locationSubscription = _locationService.locationStream.listen(
       (reading) => _onLocationReading(reading, vehicleId),
@@ -82,7 +123,12 @@ class SensorProvider extends ChangeNotifier {
     });
   }
 
-  void stopMonitoring() {
+  Future<void> stopMonitoring() async {
+    // Close any open trip before tearing down
+    await _tripRecorder?.finish();
+    _tripRecorder = null;
+    _behaviourRecorder = null;
+
     _sensorSubscription?.cancel();
     _sensorSubscription = null;
     _locationSubscription?.cancel();
@@ -98,6 +144,9 @@ class SensorProvider extends ChangeNotifier {
   // ── GPS heartbeat handler ─────────────────────────────────────────────────
 
   Future<void> _onLocationReading(LocationReading reading, String vehicleId) async {
+    // Feed GPS into trip recorder for Haversine distance accumulation
+    _tripRecorder?.onLocationReading(reading.latitude, reading.longitude);
+
     // Determine ignition status from last known RPM or speed
     final rpmData   = _latestSensorData[SensorType.rpm];
     final speedData = _latestSensorData[SensorType.speed];
