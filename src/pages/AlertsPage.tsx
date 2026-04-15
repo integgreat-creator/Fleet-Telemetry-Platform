@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Filter, AlertTriangle, Wifi, WifiOff, Navigation, Clock,
   Shield, SlidersHorizontal, Bell, BellOff, RotateCcw, Save,
-  Loader, ChevronDown, CheckCircle2,
+  Loader, ChevronDown, CheckCircle2, MapPin,
 } from 'lucide-react';
 import { supabase, type Alert, type Vehicle, type Threshold } from '../lib/supabase';
 import { realtimeService } from '../services/realtimeService';
@@ -28,25 +28,37 @@ interface VehicleEvent {
 }
 
 const EVENT_ICONS: Record<string, React.ReactNode> = {
-  device_offline:        <WifiOff className="w-4 h-4" />,
-  device_tamper:         <Shield className="w-4 h-4" />,
-  unauthorized_movement: <Navigation className="w-4 h-4" />,
-  excessive_idle:        <Clock className="w-4 h-4" />,
-  trip_gap:              <Clock className="w-4 h-4" />,
-  mock_gps_detected:     <Shield className="w-4 h-4" />,
-  ignition_no_data:      <WifiOff className="w-4 h-4" />,
-  device_online:         <Wifi className="w-4 h-4" />,
+  device_offline:              <WifiOff className="w-4 h-4" />,
+  device_tamper:               <Shield className="w-4 h-4" />,
+  unauthorized_movement:       <Navigation className="w-4 h-4" />,
+  excessive_idle:              <Clock className="w-4 h-4" />,
+  trip_gap:                    <Clock className="w-4 h-4" />,
+  mock_gps_detected:           <Shield className="w-4 h-4" />,
+  ignition_no_data:            <WifiOff className="w-4 h-4" />,
+  device_online:               <Wifi className="w-4 h-4" />,
+  // Geofence events
+  geofence_entry:              <MapPin className="w-4 h-4" />,
+  geofence_entry_restricted:   <MapPin className="w-4 h-4" />,
+  geofence_exit:               <MapPin className="w-4 h-4" />,
+  geofence_dwell:              <Clock className="w-4 h-4" />,
+  night_movement:              <Shield className="w-4 h-4" />,
 };
 
 const EVENT_LABELS: Record<string, string> = {
-  device_offline:        'Device Offline',
-  device_tamper:         'Possible Tamper',
-  unauthorized_movement: 'Unauthorized Movement',
-  excessive_idle:        'Excessive Idle',
-  trip_gap:              'Trip Gap',
-  mock_gps_detected:     'Mock GPS',
-  ignition_no_data:      'Ignition No Data',
-  device_online:         'Device Online',
+  device_offline:              'Device Offline',
+  device_tamper:               'Possible Tamper',
+  unauthorized_movement:       'Unauthorized Movement',
+  excessive_idle:              'Excessive Idle',
+  trip_gap:                    'Trip Gap',
+  mock_gps_detected:           'Mock GPS',
+  ignition_no_data:            'Ignition No Data',
+  device_online:               'Device Online',
+  // Geofence events
+  geofence_entry:              'Zone Entry',
+  geofence_entry_restricted:   'Restricted Zone Entry',
+  geofence_exit:               'Zone Exit',
+  geofence_dwell:              'Zone Dwell',
+  night_movement:              'Night Movement',
 };
 
 // ─── All known sensor types with optimal defaults ─────────────────────────────

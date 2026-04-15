@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { supabase, type Vehicle, type Trip } from '../lib/supabase';
 import {
@@ -45,6 +45,18 @@ interface LivePosition {
   speed:      number;
   ignition:   boolean;
   timestamp:  string;
+}
+
+interface GeofenceZone {
+  id:             string;
+  name:           string;
+  shape:          'circle' | 'polygon';
+  zone_type:      string;
+  color:          string;
+  center_lat:     number | null;
+  center_lng:     number | null;
+  radius_metres:  number | null;
+  coordinates:    [number, number][] | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -177,6 +189,10 @@ export default function FleetMapPage() {
   const [selectedVid,     setSelectedVid]     = useState<string | null>(null);
   const [kmSinceStop,     setKmSinceStop]     = useState<number | null>(null);
 
+  // ── Zone overlay state ──────────────────────────────────────────────────
+  const [showZones,       setShowZones]       = useState(false);
+  const [zones,           setZones]           = useState<GeofenceZone[]>([]);
+
   // ── History-mode state ──────────────────────────────────────────────────
   const [histVid,         setHistVid]         = useState('');
   const [histMode,        setHistMode]        = useState<'range' | 'trip'>('range');
@@ -272,6 +288,14 @@ export default function FleetMapPage() {
         fuelMap.set(id, data?.value != null ? Number(data.value) : null);
       }));
       setVehicleFuel(new Map(fuelMap));
+
+      // Load active geofence zones for this fleet
+      const { data: zoneData } = await supabase
+        .from('geofences')
+        .select('id, name, shape, zone_type, color, center_lat, center_lng, radius_metres, coordinates')
+        .eq('fleet_id', fleet.id)
+        .eq('is_active', true);
+      if (zoneData) setZones(zoneData as GeofenceZone[]);
 
       // Subscribe for live updates
       subscribeRealtime();
@@ -499,21 +523,44 @@ export default function FleetMapPage() {
           </p>
         </div>
 
-        {/* Live / History toggle */}
-        <div className="flex bg-gray-800 rounded-xl p-1 border border-gray-700">
-          {(['live', 'history'] as const).map(m => (
-            <button
-              key={m}
-              onClick={() => { setMode(m); if (m === 'live') stopPlayback(); }}
-              className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                mode === m
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              {m === 'live' ? <><Radio className="w-3.5 h-3.5" /> Live</> : <><Clock className="w-3.5 h-3.5" /> History</>}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* Zone overlay toggle */}
+          <button
+            onClick={() => setShowZones(prev => !prev)}
+            title={showZones ? 'Hide geofence zones' : 'Show geofence zones on map'}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
+              showZones
+                ? 'bg-green-600/20 text-green-400 border-green-600/40'
+                : 'bg-gray-800 text-gray-400 border-gray-700 hover:text-white'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            Zones
+            {zones.length > 0 && (
+              <span className={`text-[10px] rounded-full px-1.5 py-0.5 font-bold ${
+                showZones ? 'bg-green-500/30 text-green-300' : 'bg-gray-700 text-gray-400'
+              }`}>
+                {zones.length}
+              </span>
+            )}
+          </button>
+
+          {/* Live / History toggle */}
+          <div className="flex bg-gray-800 rounded-xl p-1 border border-gray-700">
+            {(['live', 'history'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => { setMode(m); if (m === 'live') stopPlayback(); }}
+                className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  mode === m
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                {m === 'live' ? <><Radio className="w-3.5 h-3.5" /> Live</> : <><Clock className="w-3.5 h-3.5" /> History</>}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -986,6 +1033,52 @@ export default function FleetMapPage() {
                 <FitBounds positions={allRouteLatLngs} />
               )}
 
+              {/* ─── Zone overlays (both modes) ─── */}
+              {showZones && zones.map(zone => {
+                const opts = {
+                  color:       zone.color,
+                  fillColor:   zone.color,
+                  fillOpacity: 0.12,
+                  weight:      2,
+                  dashArray:   '6 4',
+                };
+                if (zone.shape === 'circle' &&
+                    zone.center_lat != null &&
+                    zone.center_lng != null &&
+                    zone.radius_metres != null) {
+                  return (
+                    <Circle
+                      key={zone.id}
+                      center={[Number(zone.center_lat), Number(zone.center_lng)]}
+                      radius={Number(zone.radius_metres)}
+                      pathOptions={opts}
+                    >
+                      <Popup>
+                        <p className="font-semibold text-sm">{zone.name}</p>
+                        <p className="text-xs text-gray-500 capitalize">{zone.zone_type.replace('_', ' ')}</p>
+                        <p className="text-xs text-gray-400">r = {Number(zone.radius_metres).toFixed(0)} m</p>
+                      </Popup>
+                    </Circle>
+                  );
+                }
+                if (zone.shape === 'polygon' && zone.coordinates?.length) {
+                  return (
+                    <Polygon
+                      key={zone.id}
+                      positions={zone.coordinates.map(c => [c[0], c[1]] as [number, number])}
+                      pathOptions={opts}
+                    >
+                      <Popup>
+                        <p className="font-semibold text-sm">{zone.name}</p>
+                        <p className="text-xs text-gray-500 capitalize">{zone.zone_type.replace('_', ' ')}</p>
+                        <p className="text-xs text-gray-400">{zone.coordinates.length} vertices</p>
+                      </Popup>
+                    </Polygon>
+                  );
+                }
+                return null;
+              })}
+
             </MapContainer>
           )}
         </div>
@@ -999,6 +1092,11 @@ export default function FleetMapPage() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block ring-2 ring-blue-500/30" /> Live vehicle</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-yellow-500 inline-block" /> Selected</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-gray-500 inline-block" /> Offline (last known)</span>
+            {showZones && zones.length > 0 && (
+              <span className="flex items-center gap-1.5 text-green-400">
+                <MapPin className="w-3 h-3" /> {zones.length} zone{zones.length !== 1 ? 's' : ''} visible
+              </span>
+            )}
             <span className="ml-auto text-gray-600">Positions update in real-time · Marked offline after 5 min</span>
           </>
         ) : (
@@ -1013,6 +1111,11 @@ export default function FleetMapPage() {
                   <span key={i} className="inline-block w-5 h-1.5 rounded-full" style={{ background: c }} />
                 ))}
                 {routeSegments.length} segments
+              </span>
+            )}
+            {showZones && zones.length > 0 && (
+              <span className="flex items-center gap-1.5 text-green-400">
+                <MapPin className="w-3 h-3" /> {zones.length} zone{zones.length !== 1 ? 's' : ''} visible
               </span>
             )}
             <span className="ml-auto text-gray-600">Max {ROW_CAP.toLocaleString()} pts · Segments split at gaps &gt;5 min</span>

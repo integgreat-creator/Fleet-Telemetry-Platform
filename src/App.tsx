@@ -17,6 +17,7 @@ import AdminPage from './pages/AdminPage';
 import ReportsPage from './pages/ReportsPage';
 import DebugToolsPage from './pages/DebugToolsPage';
 import FleetMapPage from './pages/FleetMapPage';
+import GeofencesPage from './pages/GeofencesPage';
 import { realtimeService } from './services/realtimeService';
 import { SubscriptionProvider } from './hooks/useSubscription';
 import FeatureGate from './components/FeatureGate';
@@ -34,6 +35,7 @@ export type Page =
   | 'maintenance'
   | 'anomalies'
   | 'reports'
+  | 'geofences'
   | 'admin'
   | 'debug';
 
@@ -139,6 +141,8 @@ function AppInner() {
               <ReportsPage />
             </FeatureGate>
           )}
+
+          {currentPage === 'geofences' && <GeofencesPage />}
 
           {currentPage === 'admin' && <AdminPage />}
           {currentPage === 'debug' && <DebugToolsPage />}

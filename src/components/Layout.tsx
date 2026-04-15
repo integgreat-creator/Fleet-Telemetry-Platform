@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
-  Settings, Bug, Map, Lock, AlertCircle, Clock, FileText,
+  Settings, Bug, Map, MapPin, Lock, AlertCircle, Clock, FileText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -25,10 +25,11 @@ const PAGE_FEATURE: Partial<Record<Page, string>> = {
 };
 
 const fleetNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
-  { id: 'overview',  label: 'Fleet Overview', icon: Car },
-  { id: 'vehicles',  label: 'Vehicles',        icon: Activity },
-  { id: 'map',       label: 'Fleet Map',        icon: Map },
-  { id: 'alerts',    label: 'Alerts & Events',  icon: AlertTriangle },
+  { id: 'overview',   label: 'Fleet Overview', icon: Car },
+  { id: 'vehicles',   label: 'Vehicles',        icon: Activity },
+  { id: 'map',        label: 'Fleet Map',        icon: Map },
+  { id: 'geofences',  label: 'Geofences',        icon: MapPin },
+  { id: 'alerts',     label: 'Alerts & Events',  icon: AlertTriangle },
 ];
 
 const intelligenceNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
