@@ -8,6 +8,7 @@ import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/connectivity_provider.dart';
 import 'package:vehicle_telemetry/providers/invite_provider.dart';
 import 'package:vehicle_telemetry/providers/sensor_provider.dart';
+import 'package:vehicle_telemetry/providers/subscription_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/home_screen.dart';
 import 'package:vehicle_telemetry/screens/invite_accept_screen.dart';
@@ -47,6 +48,7 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SensorProvider()),
         ChangeNotifierProvider(create: (_) => InviteProvider()),
         ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
+        ChangeNotifierProvider(create: (_) => SubscriptionProvider()),
       ],
       child: MaterialApp(
         title: 'FTPGo',

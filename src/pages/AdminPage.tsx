@@ -11,16 +11,22 @@ import {
   Eye,
   Trash2,
   Crown,
+  Key,
+  Fuel,
+  Save,
+  Loader,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { useSubscription } from '../hooks/useSubscription';
+import ApiAccessTab from '../components/ApiAccessTab';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Subscription {
   id: string;
   fleet_id: string;
-  plan: 'free' | 'starter' | 'pro' | 'enterprise';
-  status: 'active' | 'inactive' | 'suspended' | 'trial';
+  plan: 'trial' | 'starter' | 'growth' | 'pro' | 'enterprise';
+  status: 'active' | 'inactive' | 'suspended' | 'trial' | 'expired';
   max_vehicles: number;
   max_drivers: number;
   features: Record<string, unknown>;
@@ -28,6 +34,7 @@ interface Subscription {
   current_period_start?: string;
   current_period_end?: string;
   trial_ends_at?: string;
+  grace_period_end?: string;
   created_at: string;
   updated_at: string;
 }
@@ -75,7 +82,7 @@ interface DeviceHealth {
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
-type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health';
+type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,9 +124,10 @@ function summariseChanges(obj?: Record<string, unknown> | null): string {
 
 function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
   const styles: Record<Subscription['plan'], string> = {
-    free: 'bg-gray-700 text-gray-300',
-    starter: 'bg-blue-900 text-blue-300',
-    pro: 'bg-purple-900 text-purple-300',
+    trial:      'bg-gray-700 text-gray-300',
+    starter:    'bg-blue-900 text-blue-300',
+    growth:     'bg-teal-900 text-teal-300',
+    pro:        'bg-purple-900 text-purple-300',
     enterprise: 'bg-yellow-900 text-yellow-300',
   };
   return (
@@ -134,12 +142,13 @@ function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
 
 function StatusBadge({ status }: { status: Subscription['status'] }) {
   const cfg: Record<Subscription['status'], { cls: string; icon: React.ReactNode }> = {
-    active:    { cls: 'bg-green-900 text-green-300',  icon: <CheckCircle size={11} /> },
+    active:    { cls: 'bg-green-900 text-green-300',   icon: <CheckCircle size={11} /> },
     trial:     { cls: 'bg-yellow-900 text-yellow-300', icon: <Clock size={11} /> },
     suspended: { cls: 'bg-red-900 text-red-300',       icon: <XCircle size={11} /> },
-    inactive:  { cls: 'bg-gray-700 text-gray-400',    icon: <XCircle size={11} /> },
+    inactive:  { cls: 'bg-gray-700 text-gray-400',     icon: <XCircle size={11} /> },
+    expired:   { cls: 'bg-orange-900 text-orange-300', icon: <AlertTriangle size={11} /> },
   };
-  const { cls, icon } = cfg[status];
+  const { cls, icon } = cfg[status] ?? cfg.inactive;
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${cls}`}>
       {icon}
@@ -264,14 +273,15 @@ function WhatsAppNumberField({ fleetId }: { fleetId: string | null }) {
 
 const PLAN_CARDS = [
   {
-    plan: 'free' as const,
-    label: 'Free',
+    plan: 'trial' as const,
+    label: 'Trial',
     price: '₹0',
     period: '',
-    vehicles: '3 vehicles',
-    drivers: '5 drivers',
-    features: ['Basic telemetry', 'Alerts', '7-day history'],
+    vehicles: '2 vehicles',
+    drivers: '3 drivers',
+    features: ['Live tracking', 'Basic alerts', 'Trip history', '7-day history'],
     cta: null,
+    highlight: false,
   },
   {
     plan: 'starter' as const,
@@ -279,19 +289,32 @@ const PLAN_CARDS = [
     price: '₹999',
     period: '/mo',
     vehicles: '10 vehicles',
-    drivers: '20 drivers',
-    features: ['Everything in Free', 'Trip history', 'Driver scoring', '90-day history'],
+    drivers: '15 drivers',
+    features: ['Everything in Trial', 'Fuel monitoring', 'Idle detection', '90-day history'],
     cta: 'Upgrade to Starter',
+    highlight: false,
+  },
+  {
+    plan: 'growth' as const,
+    label: 'Growth',
+    price: '₹1,999',
+    period: '/mo',
+    vehicles: '25 vehicles',
+    drivers: '50 drivers',
+    features: ['Everything in Starter', 'Driver behaviour', 'Cost analytics', 'Maintenance alerts', 'Multi-user access'],
+    cta: 'Upgrade to Growth',
+    highlight: true,
   },
   {
     plan: 'pro' as const,
     label: 'Pro',
-    price: '₹2,499',
+    price: '₹3,999',
     period: '/mo',
-    vehicles: '50 vehicles',
+    vehicles: '100 vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Starter', 'Anomaly detection', 'Cost analytics', 'API access', '1-year history'],
+    features: ['Everything in Growth', 'AI anomaly detection', 'Fuel theft alerts', 'API access', 'Custom reports'],
     cta: 'Upgrade to Pro',
+    highlight: false,
   },
   {
     plan: 'enterprise' as const,
@@ -300,15 +323,66 @@ const PLAN_CARDS = [
     period: '',
     vehicles: 'Unlimited vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Pro', 'Dedicated support', 'Custom integrations', 'SLA guarantee'],
+    features: ['Everything in Pro', 'Dedicated support', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
     cta: 'Contact Sales',
+    highlight: false,
   },
 ];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  const { feature } = useSubscription();
+  const hasApiAccess = feature('api_access') === 'full';
+
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
+
+  // ── Fuel price settings state ────────────────────────────────────────────
+  const [fuelPriceInr,   setFuelPriceInr]   = useState('103.00');
+  const [usdToInr,       setUsdToInr]       = useState('83.00');
+  const [fuelSaving,     setFuelSaving]     = useState(false);
+  const [fuelSavedMsg,   setFuelSavedMsg]   = useState('');
+  const [fuelLoading,    setFuelLoading]    = useState(false);
+
+  const loadFuelPrice = useCallback(async () => {
+    setFuelLoading(true);
+    try {
+      const { data } = await supabase
+        .from('fuel_price_config')
+        .select('price_inr, usd_to_inr_rate')
+        .eq('id', 1)
+        .maybeSingle();
+      if (data) {
+        setFuelPriceInr(String(data.price_inr));
+        setUsdToInr(String(data.usd_to_inr_rate));
+      }
+    } finally {
+      setFuelLoading(false);
+    }
+  }, []);
+
+  const saveFuelPrice = async () => {
+    const inr  = parseFloat(fuelPriceInr);
+    const rate = parseFloat(usdToInr);
+    if (isNaN(inr) || isNaN(rate) || inr <= 0 || rate <= 0) return;
+    setFuelSaving(true);
+    setFuelSavedMsg('');
+    try {
+      await supabase
+        .from('fuel_price_config')
+        .update({
+          price_inr:       inr,
+          price_usd:       parseFloat((inr / rate).toFixed(4)),
+          usd_to_inr_rate: rate,
+          source:          'manual',
+          updated_at:      new Date().toISOString(),
+        })
+        .eq('id', 1);
+      setFuelSavedMsg('Fuel price updated — next predictions run will use this value.');
+    } finally {
+      setFuelSaving(false);
+    }
+  };
 
   // Subscription state
   const [subscription, setSubscription] = useState<Subscription | null>(null);
@@ -445,11 +519,12 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!fleetId) return;
-    if (activeTab === 'subscription') loadSubscription();
-    if (activeTab === 'drivers') loadDrivers();
-    if (activeTab === 'audit') loadAuditLogs();
+    if (activeTab === 'subscription')  loadSubscription();
+    if (activeTab === 'drivers')       loadDrivers();
+    if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth]);
+    if (activeTab === 'settings')      loadFuelPrice();
+  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
@@ -498,11 +573,13 @@ export default function AdminPage() {
 
   // ─── Tabs config ─────────────────────────────────────────────────────────────
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: Tab; label: string; icon: React.ReactNode; locked?: boolean }[] = [
     { id: 'subscription',  label: 'Subscription',   icon: <CreditCard size={15} /> },
     { id: 'drivers',       label: 'Drivers',         icon: <Users size={15} /> },
     { id: 'audit',         label: 'Audit Log',       icon: <Shield size={15} /> },
     { id: 'device-health', label: 'Device Health',   icon: <Settings size={15} /> },
+    { id: 'api-access',    label: 'API Access',      icon: <Key size={15} />, locked: !hasApiAccess },
+    { id: 'settings',      label: 'Settings',         icon: <Settings size={15} /> },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -521,19 +598,23 @@ export default function AdminPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 mb-6 bg-gray-900 rounded-xl p-1 border border-gray-800 w-fit">
+      <div className="flex flex-wrap gap-1 mb-6 bg-gray-900 rounded-xl p-1 border border-gray-800 w-fit">
         {tabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => !tab.locked && setActiveTab(tab.id)}
+            title={tab.locked ? 'Upgrade to Pro to unlock API Access' : undefined}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              activeTab === tab.id
-                ? 'bg-blue-600 text-white shadow'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              tab.locked
+                ? 'text-gray-600 cursor-not-allowed'
+                : activeTab === tab.id
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
             }`}
           >
             {tab.icon}
             {tab.label}
+            {tab.locked && <Eye size={12} className="text-gray-600" />}
           </button>
         ))}
       </div>
@@ -627,18 +708,25 @@ export default function AdminPage() {
               {/* Plan cards */}
               <div>
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Available Plans</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
                   {PLAN_CARDS.map(card => {
                     const isCurrent = subscription?.plan === card.plan;
                     return (
                       <div
                         key={card.plan}
-                        className={`bg-gray-900 border rounded-xl p-5 flex flex-col gap-3 transition-all ${
+                        className={`bg-gray-900 border rounded-xl p-5 flex flex-col gap-3 transition-all relative ${
                           isCurrent
                             ? 'border-blue-500 ring-1 ring-blue-500/40'
+                            : card.highlight
+                            ? 'border-teal-600/60 ring-1 ring-teal-600/20 hover:border-teal-500'
                             : 'border-gray-800 hover:border-gray-700'
                         }`}
                       >
+                        {card.highlight && !isCurrent && (
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2.5 py-0.5 bg-teal-600 text-white text-[10px] font-bold rounded-full uppercase tracking-wide">
+                            Popular
+                          </span>
+                        )}
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-white">{card.label}</span>
                           {isCurrent && (
@@ -667,6 +755,10 @@ export default function AdminPage() {
                             className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
                               card.plan === 'enterprise'
                                 ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
+                                : card.plan === 'growth'
+                                ? 'bg-teal-600 hover:bg-teal-500 text-white'
+                                : card.plan === 'pro'
+                                ? 'bg-purple-600 hover:bg-purple-500 text-white'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white'
                             }`}
                           >
@@ -939,6 +1031,102 @@ export default function AdminPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Tab: API Access ────────────────────────────────────────────────────── */}
+      {activeTab === 'api-access' && fleetId && (
+        <ApiAccessTab fleetId={fleetId} />
+      )}
+
+      {/* ── Tab: Settings ─────────────────────────────────────────────────────── */}
+      {activeTab === 'settings' && (
+        <div className="max-w-lg space-y-6">
+
+          {/* Fuel price card */}
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-orange-500/15 rounded-lg">
+                <Fuel className="w-5 h-5 text-orange-400" />
+              </div>
+              <div>
+                <p className="text-white font-semibold">Fuel Price</p>
+                <p className="text-gray-400 text-xs">
+                  Used by the cost-prediction engine. Update whenever the retail price changes.
+                </p>
+              </div>
+            </div>
+
+            {fuelLoading ? (
+              <div className="flex items-center gap-2 text-gray-500 text-sm">
+                <Loader className="w-4 h-4 animate-spin" /> Loading current price…
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-gray-400">
+                      Retail Price (₹ / litre)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      value={fuelPriceInr}
+                      onChange={e => { setFuelPriceInr(e.target.value); setFuelSavedMsg(''); }}
+                      className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-orange-500"
+                      placeholder="103.00"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-gray-400">
+                      USD → INR rate
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      value={usdToInr}
+                      onChange={e => { setUsdToInr(e.target.value); setFuelSavedMsg(''); }}
+                      className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-orange-500"
+                      placeholder="83.00"
+                    />
+                  </div>
+                </div>
+
+                {/* Derived USD price preview */}
+                {fuelPriceInr && usdToInr && !isNaN(parseFloat(fuelPriceInr)) && !isNaN(parseFloat(usdToInr)) && (
+                  <p className="text-xs text-gray-500">
+                    Effective rate used by engine:{' '}
+                    <span className="text-gray-300 font-medium">
+                      ${(parseFloat(fuelPriceInr) / parseFloat(usdToInr)).toFixed(4)} USD/L
+                    </span>
+                  </p>
+                )}
+
+                <button
+                  onClick={saveFuelPrice}
+                  disabled={fuelSaving}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                >
+                  {fuelSaving ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Fuel Price
+                </button>
+
+                {fuelSavedMsg && (
+                  <div className="flex items-center gap-2 px-3 py-2.5 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-xs">
+                    <CheckCircle size={14} className="flex-shrink-0" />
+                    {fuelSavedMsg}
+                  </div>
+                )}
+
+                <p className="text-xs text-gray-600 border-t border-gray-800 pt-3">
+                  Tip: India retail petrol prices are regulated and typically update on the 1st of each month.
+                  Check <span className="text-gray-500">iocl.com</span> for the latest Chennai / TN price.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

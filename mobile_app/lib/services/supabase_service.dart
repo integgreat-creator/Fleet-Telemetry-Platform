@@ -353,6 +353,86 @@ class SupabaseService {
     }
   }
 
+  // ── TRIPS ─────────────────────────────────────────────────────────────────
+
+  /// Saves a completed trip to the `trips` table.
+  /// Returns the new row UUID, or null if the insert fails.
+  Future<String?> saveTrip({
+    required String vehicleId,
+    String? driverAccountId,
+    required DateTime startTime,
+    required DateTime endTime,
+    required double distanceKm,
+    required int durationSeconds,
+    required double avgSpeedKmh,
+    required double maxSpeedKmh,
+    double? startLat,
+    double? startLng,
+    double? endLat,
+    double? endLng,
+  }) async {
+    try {
+      final response = await _client.from('trips').insert({
+        'vehicle_id':       vehicleId,
+        if (driverAccountId != null) 'driver_account_id': driverAccountId,
+        'start_time':       startTime.toIso8601String(),
+        'end_time':         endTime.toIso8601String(),
+        'distance_km':      distanceKm,
+        'duration_seconds': durationSeconds,
+        'avg_speed_kmh':    avgSpeedKmh,
+        'max_speed_kmh':    maxSpeedKmh,
+        if (startLat != null) 'start_lat': startLat,
+        if (startLng != null) 'start_lng': startLng,
+        if (endLat   != null) 'end_lat':   endLat,
+        if (endLng   != null) 'end_lng':   endLng,
+      }).select('id').single();
+      return response['id'] as String?;
+    } catch (e) {
+      debugPrint('saveTrip error: $e');
+      return null;
+    }
+  }
+
+  // ── DRIVER BEHAVIOUR ──────────────────────────────────────────────────────
+
+  /// Saves a per-trip driver-behaviour summary to the `driver_behavior` table.
+  Future<void> saveDriverBehaviour({
+    required String vehicleId,
+    String? driverAccountId,
+    String? tripId,
+    required int harshBrakingCount,
+    required int harshAccelerationCount,
+    required int excessiveRpmCount,
+    required int excessiveSpeedCount,
+    required int overspeedCount,
+    required int idleTimeSeconds,
+    required double averageEngineLoad,
+    required double driverScore,
+    required DateTime tripStart,
+    required DateTime tripEnd,
+  }) async {
+    try {
+      await _client.from('driver_behavior').insert({
+        'vehicle_id':               vehicleId,
+        if (driverAccountId != null) 'driver_account_id': driverAccountId,
+        if (tripId != null)          'trip_id':            tripId,
+        'harsh_braking_count':       harshBrakingCount,
+        'harsh_acceleration_count':  harshAccelerationCount,
+        'excessive_rpm_count':       excessiveRpmCount,
+        'excessive_speed_count':     excessiveSpeedCount,
+        'overspeed_count':           overspeedCount,
+        'idle_time_seconds':         idleTimeSeconds,
+        'average_engine_load':       averageEngineLoad,
+        'driver_score':              driverScore,
+        'trip_start':                tripStart.toIso8601String(),
+        'trip_end':                  tripEnd.toIso8601String(),
+      });
+      debugPrint('saveDriverBehaviour: saved (trip=$tripId)');
+    } catch (e) {
+      debugPrint('saveDriverBehaviour error: $e');
+    }
+  }
+
   // ── ALERTS ────────────────────────────────────────────────────────────────
 
   Future<void> createAlert(

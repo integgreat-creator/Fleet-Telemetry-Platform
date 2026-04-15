@@ -1,6 +1,7 @@
 package com.example.vehicle_telemetry.channels
 
 import android.content.Context
+import com.example.vehicle_telemetry.bluetooth.BleService
 import com.example.vehicle_telemetry.bluetooth.BluetoothService
 import com.example.vehicle_telemetry.obd.OBDCommandEngine
 import io.flutter.plugin.common.BinaryMessenger
@@ -8,36 +9,46 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-class OBDChannelHandler(messenger: BinaryMessenger, context: Context) : MethodChannel.MethodCallHandler {
+class OBDChannelHandler(messenger: BinaryMessenger, context: Context) :
+    MethodChannel.MethodCallHandler {
+
     private val methodChannel = MethodChannel(messenger, "obd_channel")
-    private val eventChannel = EventChannel(messenger, "obd_event_channel")
-    
+    private val eventChannel  = EventChannel(messenger, "obd_event_channel")
     private var eventSink: EventChannel.EventSink? = null
-    private val bluetoothService: BluetoothService
+
+    private val classicService: BluetoothService
+    private val bleService: BleService
     private val obdEngine: OBDCommandEngine
 
+    // Populated during getAvailableDevices; consulted at connectAdapter time.
+    private val deviceTypeMap = mutableMapOf<String, String>() // address → "ble"|"classic"
+    private var activeBle     = false
+
     init {
-        methodChannel.setMethodCallHandler(this)
-        
-        bluetoothService = BluetoothService(
-            context = context,
-            onDataReceived = { data -> obdEngine.handleResponse(data) },
-            onStatusChanged = { status ->
-                sendEvent(mapOf("type" to "status", "value" to status))
-            }
+        classicService = BluetoothService(
+            context         = context,
+            onDataReceived  = { data   -> obdEngine.handleResponse(data) },
+            onStatusChanged = { status -> sendEvent(mapOf("type" to "status", "value" to status)) }
         )
 
+        bleService = BleService(context).apply {
+            onDataReceived  = { data   -> obdEngine.handleResponse(data) }
+            onStatusChanged = { status -> sendEvent(mapOf("type" to "status", "value" to status)) }
+        }
+
         obdEngine = OBDCommandEngine(
-            bluetoothService = bluetoothService,
+            writeCommand  = { cmd ->
+                if (activeBle) bleService.write(cmd) else classicService.write(cmd)
+            },
             onBatchResult = { batch ->
                 sendEvent(mapOf("type" to "sensor_batch", "data" to batch.toString()))
             },
-            onVinRead = { vin ->
-                // Send VIN to Flutter via the existing EventChannel.
-                // vin is null when the vehicle doesn't support Mode 09 or timed out.
+            onVinRead     = { vin ->
                 sendEvent(mapOf("type" to "vin", "value" to (vin ?: "")))
             }
         )
+
+        methodChannel.setMethodCallHandler(this)
 
         eventChannel.setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -51,35 +62,56 @@ class OBDChannelHandler(messenger: BinaryMessenger, context: Context) : MethodCh
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+
             "getAvailableDevices" -> {
-                bluetoothService.startDiscovery { devices ->
-                    // Since startDiscovery is async, we send the first set of results
-                    // and keep updating via EventChannel if needed, 
-                    // but for this method call we'll return what we have immediately
-                    result.success(devices)
+                deviceTypeMap.clear()
+
+                // ── BLE scan: results trickle in and are forwarded via EventChannel ──
+                bleService.onScanResults = { bleDevices ->
+                    bleDevices.forEach { d ->
+                        d["address"]?.let { addr -> deviceTypeMap[addr] = "ble" }
+                    }
+                    sendEvent(mapOf("type" to "scan_update", "devices" to bleDevices))
+                }
+                bleService.startScan()
+
+                // ── Classic discovery: one-shot callback when ~12 s scan finishes ──
+                classicService.startDiscovery { classicDevices ->
+                    bleService.stopScan()
+                    val withType = classicDevices.map { d ->
+                        d["address"]?.let { addr -> deviceTypeMap[addr] = "classic" }
+                        d + mapOf("deviceType" to "classic")
+                    }
+                    result.success(withType)
                 }
             }
+
             "connectAdapter" -> {
-                val address = call.argument<String>("address")
-                if (address != null) {
-                    bluetoothService.connect(address)
-                    result.success(true)
-                } else {
+                val address = call.argument<String>("address") ?: run {
                     result.error("INVALID_ADDRESS", "Address is required", null)
+                    return
                 }
-            }
-            "disconnectAdapter" -> {
-                bluetoothService.disconnect()
+                activeBle = deviceTypeMap[address] == "ble"
+                if (activeBle) bleService.connect(address) else classicService.connect(address)
                 result.success(true)
             }
+
+            "disconnectAdapter" -> {
+                if (activeBle) bleService.disconnect() else classicService.disconnect()
+                activeBle = false
+                result.success(true)
+            }
+
             "startSensorPolling" -> {
                 obdEngine.start()
                 result.success(true)
             }
+
             "stopSensorPolling" -> {
                 obdEngine.stop()
                 result.success(true)
             }
+
             else -> result.notImplemented()
         }
     }

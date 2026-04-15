@@ -1,9 +1,9 @@
 /**
  * invite-api edge function
  *
- * Handles the QR invite flow (Path A):
+ * Handles the QR invite flow (Path A — mobile-initiated invites):
  *
- * POST { action: 'create', vehicle_name, driver_phone, driver_email?, fleet_id }
+ * POST { action: 'create', driver_phone, fleet_id, vehicle_name?, driver_email? }
  *   → creates invitation row, returns { token, invite_url }
  *     also sends an invite email to driver_email if provided
  *
@@ -16,6 +16,9 @@
  *
  * GET  ?action=poll&token=<token>
  *   → returns { status } for the web dashboard to poll
+ *
+ * POST { action: 'revoke', token }
+ *   → marks the invitation as 'revoked' (fleet manager only)
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -70,6 +73,7 @@ serve(async (req) => {
 
     if (error || !data) return err("Invitation not found", 404);
     if (data.status === "accepted") return err("Invitation already accepted", 410);
+    if (data.status === "revoked")  return err("Invitation has been revoked", 410);
     if (new Date(data.expires_at) < new Date()) return err("Invitation has expired", 410);
 
     return json(data);
@@ -80,7 +84,6 @@ serve(async (req) => {
     const token = url.searchParams.get("token");
     if (!token) return err("token is required");
 
-    // Verify caller is authenticated
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) return err("Missing Authorization header", 401);
 
@@ -121,9 +124,12 @@ serve(async (req) => {
     const { data: { user } } = await userClient.auth.getUser();
     if (!user) return err("Unauthorized", 401);
 
-    const { vehicle_name, driver_phone, driver_email, fleet_id } = body;
-    if (!vehicle_name || !driver_phone || !fleet_id) {
-      return err("vehicle_name, driver_phone, and fleet_id are required");
+    const { driver_phone, driver_email, fleet_id } = body;
+    // vehicle_name is now optional — driver vehicle is registered via OBD connection
+    const vehicle_name: string = (body.vehicle_name as string | undefined)?.trim() || 'TBD';
+
+    if (!driver_phone || !fleet_id) {
+      return err("driver_phone and fleet_id are required");
     }
 
     const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -148,7 +154,7 @@ serve(async (req) => {
         fleet_id,
         fleet_name:   fleet.name,
         invite_token: token,
-        vehicle_name: vehicle_name.trim(),
+        vehicle_name: vehicle_name,
         driver_phone: driver_phone.trim(),
         driver_email: driver_email?.trim() ?? null,
         status:       "pending",
@@ -166,8 +172,8 @@ serve(async (req) => {
         const emailHtml = `
           <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:32px">
             <h2 style="color:#00BFA5">You've been invited to FTPGo</h2>
-            <p>Your fleet manager has added you to <strong>${body.fleet_name ?? 'a fleet'}</strong>.</p>
-            <p>Vehicle: <strong>${body.vehicle_name ?? 'Your Vehicle'}</strong></p>
+            <p>Your fleet manager has added you to <strong>${fleet.name}</strong>.</p>
+            ${vehicle_name !== 'TBD' ? `<p>Vehicle: <strong>${vehicle_name}</strong></p>` : ''}
             <p>Install the FTPGo app and scan the QR code, or tap the button below:</p>
             <a href="ftpgo://join?token=${token}"
                style="display:inline-block;background:#00BFA5;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
@@ -180,9 +186,8 @@ serve(async (req) => {
           </div>
         `;
 
-        // Use Supabase admin to send email via their SMTP
         await adminClient.auth.admin.inviteUserByEmail(driverEmail, {
-          data: { invite_token: token, fleet_name: body.fleet_name },
+          data: { invite_token: token, fleet_name: fleet.name },
           redirectTo: `ftpgo://join?token=${token}`,
         }).catch(() => null); // non-fatal — email is best-effort
       } catch (_) {
@@ -195,6 +200,57 @@ serve(async (req) => {
       invite_url: `ftpgo://join?token=${token}`,
       invite_id:  invite.id,
     });
+  }
+
+  // ── revoke: fleet manager cancels a pending invitation ────────────────────
+  if (body.action === "revoke") {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return err("Missing Authorization header", 401);
+
+    const userClient = createClient(SUPABASE_URL, ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user } } = await userClient.auth.getUser();
+    if (!user) return err("Unauthorized", 401);
+
+    const { token } = body;
+    if (!token) return err("token is required");
+
+    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    // Fetch the invitation and verify it belongs to a fleet owned by this user
+    const { data: invite, error: fetchErr } = await adminClient
+      .from("invitations")
+      .select("id, fleet_id, status")
+      .eq("invite_token", token)
+      .single();
+
+    if (fetchErr || !invite) return err("Invitation not found", 404);
+
+    // Confirm the caller owns the fleet this invitation belongs to
+    const { data: fleet, error: fleetErr } = await adminClient
+      .from("fleets")
+      .select("id")
+      .eq("id", invite.fleet_id)
+      .eq("manager_id", user.id)
+      .maybeSingle();
+
+    if (fleetErr || !fleet) return err("Access denied", 403);
+
+    if (invite.status !== "pending") {
+      return err(`Cannot revoke an invitation with status '${invite.status}'`, 409);
+    }
+
+    const { error: updateErr } = await adminClient
+      .from("invitations")
+      .update({ status: "revoked" })
+      .eq("id", invite.id);
+
+    if (updateErr) return err(updateErr.message, 500);
+
+    return json({ success: true });
   }
 
   // ── accept: driver accepts the invitation on mobile app ───────────────────
@@ -217,6 +273,7 @@ serve(async (req) => {
 
     if (inviteErr || !invite) return err("Invitation not found", 404);
     if (invite.status === "accepted") return err("Invitation already accepted", 410);
+    if (invite.status === "revoked")  return err("Invitation has been revoked", 410);
     if (new Date(invite.expires_at) < new Date()) return err("Invitation has expired", 410);
 
     // Create or retrieve the driver's auth user
@@ -254,7 +311,6 @@ serve(async (req) => {
     }
 
     // Generate a sign-in link / session for the new user using service role
-    // This gives the mobile app a valid Supabase session immediately after QR scan.
     try {
       const { data: linkData } = await adminClient.auth.admin.generateLink({
         type: "magiclink",
@@ -262,7 +318,6 @@ serve(async (req) => {
         options: { data: { fleet_id: invite.fleet_id } },
       });
       if (linkData?.properties) {
-        // Exchange the hashed token for a session
         const supabaseUser = createClient(SUPABASE_URL, ANON_KEY);
         const { data: sessionData } = await supabaseUser.auth.verifyOtp({
           token_hash: linkData.properties.hashed_token,

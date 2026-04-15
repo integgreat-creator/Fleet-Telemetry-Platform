@@ -17,7 +17,11 @@ import 'package:vehicle_telemetry/services/obd_service.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/services/vin_decoder_service.dart';
+import 'package:vehicle_telemetry/services/subscription_service.dart';
+import 'package:vehicle_telemetry/providers/subscription_provider.dart';
 import 'package:vehicle_telemetry/widgets/connection_status.dart';
+import 'package:vehicle_telemetry/widgets/locked_screen.dart';
+import 'package:vehicle_telemetry/widgets/upgrade_bottom_sheet.dart';
 import 'package:vehicle_telemetry/bluetooth/bt_connection_state.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,6 +41,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Bottom navigation tab index
   int _selectedTab = 0;
+
+  // Subscription banner dismiss state (trial-only banners can be dismissed)
+  bool _bannerDismissed = false;
 
   @override
   void initState() {
@@ -58,8 +65,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final vehicleProvider = context.read<VehicleProvider>();
-      await vehicleProvider.loadVehicles();
+      final vehicleProvider      = context.read<VehicleProvider>();
+      final subscriptionProvider = context.read<SubscriptionProvider>();
+      await Future.wait([
+        vehicleProvider.loadVehicles(),
+        subscriptionProvider.loadForUser(),
+      ]);
       // ❸ Drivers are no longer fixed to one vehicle — they connect dynamically
       // via OBD each session. No auto-selection on login.
     });
@@ -228,6 +239,27 @@ class _HomeScreenState extends State<HomeScreen> {
     final fleetId = prefs.getString('fleet_id') ?? authProvider.driverFleetId;
 
     try {
+      // ── Vehicle limit check ──────────────────────────────────────────────
+      // Fleet managers go through createOrFindVehicleByVin (direct INSERT).
+      // The DB has no trigger for that path, so we check here first.
+      // Drivers use the create_vehicle_for_driver RPC which enforces the limit
+      // server-side, but we do a pre-check here for a better UX error message.
+      if (fleetId != null) {
+        final limitResult =
+            await SubscriptionService.instance.checkVehicleLimit(fleetId);
+        if (!limitResult.allowed) {
+          if (!mounted) return;
+          final subProvider = context.read<SubscriptionProvider>();
+          await UpgradeBottomSheet.show(
+            context:         context,
+            result:          limitResult,
+            planDisplayName: subProvider.planDisplayName,
+            isManager:       !authProvider.isDriver,
+          );
+          return;
+        }
+      }
+
       final supabaseService = SupabaseService();
       final Vehicle vehicle;
 
@@ -353,62 +385,146 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bgPrimary,
-      appBar: _buildAppBar(),
-      body: IndexedStack(
-        index: _selectedTab,
-        children: [
-          // Tab 0 — Dashboard: OBD connect prompt OR live sensor view
-          Consumer<VehicleProvider>(
-            builder: (context, vp, _) {
-              if (vp.selectedVehicle == null &&
-                  _connectionState != BtConnectionState.connected) {
-                return _buildObdConnectPrompt();
-              }
-              return const DashboardScreen();
-            },
+    return Consumer<SubscriptionProvider>(
+      builder: (context, sub, _) {
+        final hardExpired = sub.isExpired && !sub.isInGrace;
+
+        return Scaffold(
+          backgroundColor: AppColors.bgPrimary,
+          appBar: _buildAppBar(),
+          body: Column(
+            children: [
+              // ── Subscription status banner ─────────────────────────────
+              _buildSubscriptionBanner(sub),
+
+              // ── Main content ───────────────────────────────────────────
+              Expanded(
+                child: IndexedStack(
+                  index: _selectedTab,
+                  children: [
+                    // Tab 0 — Dashboard
+                    Consumer<VehicleProvider>(
+                      builder: (context, vp, _) {
+                        if (vp.selectedVehicle == null &&
+                            _connectionState != BtConnectionState.connected) {
+                          return _buildObdConnectPrompt(hardExpired: hardExpired);
+                        }
+                        return const DashboardScreen();
+                      },
+                    ),
+                    // Tab 1 — Activity (gated: trip_history)
+                    sub.featureAccess('trip_history') != 'none'
+                        ? const ActivityScreen()
+                        : const LockedScreen(featureName: 'Activity History'),
+                    // Tab 2 — Alerts (gated: overspeed_alerts)
+                    sub.featureAccess('overspeed_alerts') != 'none'
+                        ? const AlertsScreen()
+                        : const LockedScreen(featureName: 'Alerts'),
+                    // Tab 3 — Profile (always accessible)
+                    const ProfileScreen(),
+                  ],
+                ),
+              ),
+            ],
           ),
-          // Tab 1 — Activity: 7-day sensor history charts
-          const ActivityScreen(),
-          // Tab 2 — Alerts
-          const AlertsScreen(),
-          // Tab 3 — Profile
-          const ProfileScreen(),
-        ],
-      ),
-      // FAB only visible on Dashboard tab and only when OBD prompt is not shown
-      floatingActionButton: _selectedTab == 0
-          ? Consumer<VehicleProvider>(
-              builder: (context, vp, _) {
-                final showPrompt = vp.selectedVehicle == null &&
-                    _connectionState != BtConnectionState.connected;
-                if (showPrompt) return const SizedBox.shrink();
-                return FloatingActionButton.extended(
-                  onPressed: _connectionState == BtConnectionState.connected
-                      ? _disconnect
-                      : _connectToBluetooth,
-                  icon: Icon(
-                    _connectionState == BtConnectionState.connected
-                        ? Icons.bluetooth_connected_rounded
-                        : Icons.bluetooth_rounded,
-                  ),
-                  label: Text(
-                    _connectionState == BtConnectionState.connected
-                        ? 'Disconnect'
-                        : 'Connect OBD-II',
-                  ),
-                  backgroundColor: _connectionState == BtConnectionState.connected
-                      ? AppColors.statusError
-                      : AppColors.accentBlue,
-                  foregroundColor: AppColors.textPrimary,
-                  elevation: 4,
-                );
-              },
-            )
-          : null,
-      bottomNavigationBar: _buildBottomNav(),
+          // FAB: disabled when subscription is hard-expired and not connected
+          floatingActionButton: _selectedTab == 0
+              ? Consumer<VehicleProvider>(
+                  builder: (context, vp, _) {
+                    final showPrompt = vp.selectedVehicle == null &&
+                        _connectionState != BtConnectionState.connected;
+                    if (showPrompt) return const SizedBox.shrink();
+                    // Disable connect (but not disconnect) when hard expired
+                    final canConnect = !hardExpired ||
+                        _connectionState == BtConnectionState.connected;
+                    return FloatingActionButton.extended(
+                      onPressed: canConnect
+                          ? (_connectionState == BtConnectionState.connected
+                              ? _disconnect
+                              : _connectToBluetooth)
+                          : null,
+                      icon: Icon(
+                        _connectionState == BtConnectionState.connected
+                            ? Icons.bluetooth_connected_rounded
+                            : Icons.bluetooth_rounded,
+                      ),
+                      label: Text(
+                        _connectionState == BtConnectionState.connected
+                            ? 'Disconnect'
+                            : hardExpired
+                                ? 'Subscription expired'
+                                : 'Connect OBD-II',
+                      ),
+                      backgroundColor: _connectionState ==
+                              BtConnectionState.connected
+                          ? AppColors.statusError
+                          : hardExpired
+                              ? AppColors.textLabel
+                              : AppColors.accentBlue,
+                      foregroundColor: AppColors.textPrimary,
+                      elevation: 4,
+                    );
+                  },
+                )
+              : null,
+          bottomNavigationBar: _buildBottomNav(),
+        );
+      },
     );
+  }
+
+  // ── Subscription status banner ───────────────────────────────────────────────
+
+  Widget _buildSubscriptionBanner(SubscriptionProvider sub) {
+    // Nothing to show while loading or if subscription is healthy
+    if (sub.loading) return const SizedBox.shrink();
+
+    final hardExpired = sub.isExpired && !sub.isInGrace;
+    final days        = sub.trialDaysLeft;
+    final isTrial     = sub.status == 'trial';
+
+    // Hard expired — persistent red (non-dismissible)
+    if (hardExpired) {
+      return _BannerStrip(
+        color:       const Color(0xFFEF4444),
+        icon:        Icons.lock_rounded,
+        message:     'Fleet subscription has expired. Some features are unavailable.',
+        dismissible: false,
+      );
+    }
+
+    // Grace period — persistent orange (non-dismissible)
+    if (sub.isInGrace) {
+      return _BannerStrip(
+        color:       const Color(0xFFF97316),
+        icon:        Icons.warning_amber_rounded,
+        message:     'Fleet subscription expired. Contact your manager — '
+                     'access will be restricted soon.',
+        dismissible: false,
+      );
+    }
+
+    // Trial with ≤ 7 days left — dismissible
+    if (isTrial && days != null && days <= 7 && !_bannerDismissed) {
+      final color = days <= 1
+          ? const Color(0xFFEF4444)   // red
+          : days <= 3
+              ? const Color(0xFFF97316) // orange
+              : const Color(0xFFF59E0B); // amber
+      final text = days == 0
+          ? 'Your fleet\'s trial expires today. Contact your fleet manager.'
+          : 'Your fleet\'s trial ends in $days day${days == 1 ? '' : 's'}. '
+            'Contact your fleet manager.';
+      return _BannerStrip(
+        color:       color,
+        icon:        Icons.schedule_rounded,
+        message:     text,
+        dismissible: true,
+        onDismiss:   () => setState(() => _bannerDismissed = true),
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -517,7 +633,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ❸ Shown on every login until driver plugs in their OBD adapter.
   // Adapts its UI to reflect the current connection state.
-  Widget _buildObdConnectPrompt() {
+  Widget _buildObdConnectPrompt({ bool hardExpired = false }) {
     final isConnecting = _connectionState == BtConnectionState.connecting;
     final isError      = _connectionState == BtConnectionState.error;
 
@@ -611,14 +727,28 @@ class _HomeScreenState extends State<HomeScreen> {
             // Action button — hidden while connecting
             if (!isConnecting)
               ElevatedButton.icon(
-                onPressed: _connectToBluetooth,
-                icon: Icon(isError ? Icons.refresh : Icons.bluetooth),
+                onPressed: hardExpired ? null : _connectToBluetooth,
+                icon: Icon(
+                  hardExpired
+                      ? Icons.lock_rounded
+                      : isError
+                          ? Icons.refresh
+                          : Icons.bluetooth,
+                ),
                 label: Text(
-                  isError ? 'Try Again' : 'Connect OBD-II',
+                  hardExpired
+                      ? 'Subscription expired'
+                      : isError
+                          ? 'Try Again'
+                          : 'Connect OBD-II',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isError ? Colors.red : Colors.blue,
+                  backgroundColor: hardExpired
+                      ? Colors.grey[800]
+                      : isError
+                          ? Colors.red
+                          : Colors.blue,
                   padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -805,4 +935,58 @@ class _VehicleEntrySheetState extends State<_VehicleEntrySheet> {
         ),
         errorStyle: const TextStyle(color: Colors.redAccent, fontSize: 12),
       );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _BannerStrip — thin coloured status strip shown below the AppBar
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _BannerStrip extends StatelessWidget {
+  final Color        color;
+  final IconData     icon;
+  final String       message;
+  final bool         dismissible;
+  final VoidCallback? onDismiss;
+
+  const _BannerStrip({
+    required this.color,
+    required this.icon,
+    required this.message,
+    required this.dismissible,
+    this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width:   double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      color:   color.withOpacity(0.18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color:    color,
+                fontSize: 12,
+                height:   1.4,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          if (dismissible && onDismiss != null) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap:   onDismiss,
+              child: Icon(Icons.close_rounded, size: 15, color: color),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }

@@ -16,6 +16,7 @@ class BluetoothService {
   // BLE state
   fbp.BluetoothDevice?         _bleDevice;
   fbp.BluetoothCharacteristic? _bleWriteCharacteristic;
+  bool                         _bleWriteWithoutResponse = false;
 
   // Classic state
   classic.BluetoothConnection? _classicConnection;
@@ -155,23 +156,64 @@ class BluetoothService {
       });
 
       final services = await device.discoverServices();
+
+      // Prefer ELM327 BLE profile (service FFE0, characteristic FFE1).
+      // If not found fall back to the first writable characteristic on any service.
+      fbp.BluetoothCharacteristic? preferredWriteChar;   // FFE1 if present
+      fbp.BluetoothCharacteristic? fallbackWriteChar;    // any other writable char
+      bool preferredWithoutResponse = false;
+      bool fallbackWithoutResponse  = false;
+
       for (final service in services) {
+        final isElm327Service = service.serviceUuid
+            .toString()
+            .toLowerCase()
+            .contains('ffe0');
+
         for (final characteristic in service.characteristics) {
-          if (characteristic.properties.write ||
-              characteristic.properties.writeWithoutResponse) {
-            _bleWriteCharacteristic = characteristic;
-          }
+          // Enable notifications on every notify/indicate characteristic so
+          // OBD responses flow in regardless of which service they come from.
           if (characteristic.properties.notify ||
               characteristic.properties.indicate) {
-            await characteristic.setNotifyValue(true);
-            characteristic.lastValueStream.listen((data) {
-              if (data.isNotEmpty) {
-                _dataController.add(utf8.decode(data, allowMalformed: true));
-              }
-            });
+            try {
+              await characteristic.setNotifyValue(true);
+              characteristic.lastValueStream.listen((data) {
+                if (data.isNotEmpty) {
+                  _dataController.add(utf8.decode(data, allowMalformed: true));
+                }
+              });
+            } catch (e) {
+              debugPrint('BLE: could not enable notify on '
+                  '${characteristic.characteristicUuid}: $e');
+            }
+          }
+
+          // Identify write-capable characteristics
+          final canWrite = characteristic.properties.write ||
+              characteristic.properties.writeWithoutResponse;
+          if (!canWrite) continue;
+
+          final isElm327Char = characteristic.characteristicUuid
+              .toString()
+              .toLowerCase()
+              .contains('ffe1');
+
+          if (isElm327Service && isElm327Char && preferredWriteChar == null) {
+            // FFE1 on ELM327 BLE adapters always uses write-without-response
+            preferredWriteChar        = characteristic;
+            preferredWithoutResponse  = characteristic.properties.writeWithoutResponse;
+          } else if (fallbackWriteChar == null) {
+            fallbackWriteChar        = characteristic;
+            fallbackWithoutResponse  = characteristic.properties.writeWithoutResponse &&
+                !characteristic.properties.write;
           }
         }
       }
+
+      _bleWriteCharacteristic  = preferredWriteChar ?? fallbackWriteChar;
+      _bleWriteWithoutResponse = preferredWriteChar != null
+          ? preferredWithoutResponse
+          : fallbackWithoutResponse;
 
       if (_bleWriteCharacteristic != null) {
         _connectionController.add(BtConnectionState.connected);
@@ -260,7 +302,12 @@ class BluetoothService {
     final bytes = utf8.encode('$command\r');
     if (_connectionType == ConnectionType.ble &&
         _bleWriteCharacteristic != null) {
-      await _bleWriteCharacteristic!.write(bytes, withoutResponse: false);
+      // Use writeWithoutResponse for ELM327 FFE1 (WRITE_TYPE_NO_RESPONSE);
+      // use write-with-response for any other characteristic that supports it.
+      await _bleWriteCharacteristic!.write(
+        bytes,
+        withoutResponse: _bleWriteWithoutResponse,
+      );
     } else if (_connectionType == ConnectionType.classic &&
         _classicConnection != null) {
       _classicConnection!.output.add(bytes);
@@ -295,6 +342,7 @@ class BluetoothService {
   void _reset() {
     _bleDevice               = null;
     _bleWriteCharacteristic  = null;
+    _bleWriteWithoutResponse = false;
     _classicConnection       = null;
     _classicDevice           = null;
     _connectionType          = ConnectionType.none;

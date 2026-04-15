@@ -4,6 +4,9 @@ import 'package:uuid/uuid.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
+import 'package:vehicle_telemetry/providers/subscription_provider.dart';
+import 'package:vehicle_telemetry/services/subscription_service.dart';
+import 'package:vehicle_telemetry/widgets/upgrade_bottom_sheet.dart';
 
 class VehicleFormScreen extends StatefulWidget {
   final String? vehicleId;
@@ -58,13 +61,32 @@ class _VehicleFormScreenState extends State<VehicleFormScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() { _isLoading = true; });
 
-    final vehicleProvider = context.read<VehicleProvider>();
-    final authProvider = context.read<AuthProvider>();
-    final userId = authProvider.user!.id;
+    final vehicleProvider      = context.read<VehicleProvider>();
+    final authProvider         = context.read<AuthProvider>();
+    final subscriptionProvider = context.read<SubscriptionProvider>();
+    final userId               = authProvider.user!.id;
+
+    // ── Vehicle limit check (new vehicles only) ────────────────────────────
+    if (widget.vehicleId == null) {
+      final fleetId = subscriptionProvider.fleetId;
+      if (fleetId != null) {
+        final limitResult =
+            await SubscriptionService.instance.checkVehicleLimit(fleetId);
+        if (!limitResult.allowed) {
+          if (!mounted) return;
+          setState(() { _isLoading = false; });
+          await UpgradeBottomSheet.show(
+            context:         context,
+            result:          limitResult,
+            planDisplayName: subscriptionProvider.planDisplayName,
+            isManager:       !authProvider.isDriver,
+          );
+          return;
+        }
+      }
+    }
 
     final vehicle = Vehicle(
       id:         widget.vehicleId ?? const Uuid().v4(),

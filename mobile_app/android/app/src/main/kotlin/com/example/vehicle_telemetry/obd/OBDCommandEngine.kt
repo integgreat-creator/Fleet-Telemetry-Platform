@@ -1,6 +1,5 @@
 package com.example.vehicle_telemetry.obd
 
-import com.example.vehicle_telemetry.bluetooth.BluetoothService
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -25,7 +24,7 @@ import java.util.concurrent.TimeUnit
  * so OBDService can resolve them with a single enum lookup.
  */
 class OBDCommandEngine(
-    private val bluetoothService: BluetoothService,
+    private val writeCommand: (String) -> Unit,
     private val onBatchResult: (JSONObject) -> Unit,
     private val onVinRead: ((String?) -> Unit)? = null
 ) {
@@ -155,7 +154,7 @@ class OBDCommandEngine(
         Thread {
             try {
                 for ((index, cmd) in initCommands.withIndex()) {
-                    bluetoothService.write("$cmd\r")
+                    writeCommand("$cmd\r")
                     Thread.sleep(if (index == 0) 2000L else 500L)
                 }
 
@@ -184,7 +183,7 @@ class OBDCommandEngine(
         vinResolved  = false
         vinReadingMode = true
 
-        bluetoothService.write("0902\r")
+        writeCommand("0902\r")
 
         val deadline = System.currentTimeMillis() + VIN_TIMEOUT_MS
         while (!vinResolved && System.currentTimeMillis() < deadline) {
@@ -221,7 +220,7 @@ class OBDCommandEngine(
 
     private fun sendPids(pids: Map<String, String>) {
         for (pid in pids.keys) {
-            bluetoothService.write("$pid\r")
+            writeCommand("$pid\r")
             Thread.sleep(100)
         }
     }
