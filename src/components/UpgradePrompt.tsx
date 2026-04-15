@@ -35,7 +35,7 @@ export default function UpgradePrompt({ feature, title, description, onNavigateT
 
   const promptTitle = title ?? `${featureLabel} is not available on your plan`;
   const promptDesc  = description ??
-    `You're currently on the ${planDisplayName || plan ?? 'Trial'} plan. ` +
+    `You're currently on the ${planDisplayName || (plan ?? 'Trial')} plan. ` +
     `Upgrade to ${requiredLabel} or above to unlock this feature.`;
 
   return (

@@ -125,7 +125,6 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl     = Deno.env.get('SUPABASE_URL')!;
     const anonKey         = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRoleKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const fuelPriceUsd    = parseFloat(Deno.env.get('FUEL_PRICE_USD') || '1.50');
     const authHeader      = req.headers.get('Authorization') || '';
 
     // Verify the caller is authenticated
@@ -141,6 +140,20 @@ Deno.serve(async (req: Request) => {
 
     // Service-role client for reading across RLS
     const db = createClient(supabaseUrl, serviceRoleKey);
+
+    // ── Live fuel price from fuel_price_config table ──────────────────────
+    // Falls back to FUEL_PRICE_USD env var, then to 1.24 USD/L (≈ ₹103)
+    let fuelPriceUsd: number;
+    const { data: priceRow } = await db
+      .from('fuel_price_config')
+      .select('price_usd')
+      .eq('id', 1)
+      .maybeSingle();
+    if (priceRow?.price_usd != null) {
+      fuelPriceUsd = Number(priceRow.price_usd);
+    } else {
+      fuelPriceUsd = parseFloat(Deno.env.get('FUEL_PRICE_USD') || '1.24');
+    }
 
     // Determine which vehicles to process
     const url = new URL(req.url);

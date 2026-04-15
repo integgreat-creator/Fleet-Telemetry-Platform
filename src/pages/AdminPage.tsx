@@ -12,6 +12,9 @@ import {
   Trash2,
   Crown,
   Key,
+  Fuel,
+  Save,
+  Loader,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -79,7 +82,7 @@ interface DeviceHealth {
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
-type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access';
+type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -334,6 +337,53 @@ export default function AdminPage() {
 
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
+  // ── Fuel price settings state ────────────────────────────────────────────
+  const [fuelPriceInr,   setFuelPriceInr]   = useState('103.00');
+  const [usdToInr,       setUsdToInr]       = useState('83.00');
+  const [fuelSaving,     setFuelSaving]     = useState(false);
+  const [fuelSavedMsg,   setFuelSavedMsg]   = useState('');
+  const [fuelLoading,    setFuelLoading]    = useState(false);
+
+  const loadFuelPrice = useCallback(async () => {
+    setFuelLoading(true);
+    try {
+      const { data } = await supabase
+        .from('fuel_price_config')
+        .select('price_inr, usd_to_inr_rate')
+        .eq('id', 1)
+        .maybeSingle();
+      if (data) {
+        setFuelPriceInr(String(data.price_inr));
+        setUsdToInr(String(data.usd_to_inr_rate));
+      }
+    } finally {
+      setFuelLoading(false);
+    }
+  }, []);
+
+  const saveFuelPrice = async () => {
+    const inr  = parseFloat(fuelPriceInr);
+    const rate = parseFloat(usdToInr);
+    if (isNaN(inr) || isNaN(rate) || inr <= 0 || rate <= 0) return;
+    setFuelSaving(true);
+    setFuelSavedMsg('');
+    try {
+      await supabase
+        .from('fuel_price_config')
+        .update({
+          price_inr:       inr,
+          price_usd:       parseFloat((inr / rate).toFixed(4)),
+          usd_to_inr_rate: rate,
+          source:          'manual',
+          updated_at:      new Date().toISOString(),
+        })
+        .eq('id', 1);
+      setFuelSavedMsg('Fuel price updated — next predictions run will use this value.');
+    } finally {
+      setFuelSaving(false);
+    }
+  };
+
   // Subscription state
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [vehicleCount, setVehicleCount] = useState(0);
@@ -469,11 +519,12 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!fleetId) return;
-    if (activeTab === 'subscription') loadSubscription();
-    if (activeTab === 'drivers') loadDrivers();
-    if (activeTab === 'audit') loadAuditLogs();
+    if (activeTab === 'subscription')  loadSubscription();
+    if (activeTab === 'drivers')       loadDrivers();
+    if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth]);
+    if (activeTab === 'settings')      loadFuelPrice();
+  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
@@ -528,6 +579,7 @@ export default function AdminPage() {
     { id: 'audit',         label: 'Audit Log',       icon: <Shield size={15} /> },
     { id: 'device-health', label: 'Device Health',   icon: <Settings size={15} /> },
     { id: 'api-access',    label: 'API Access',      icon: <Key size={15} />, locked: !hasApiAccess },
+    { id: 'settings',      label: 'Settings',         icon: <Settings size={15} /> },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -985,6 +1037,97 @@ export default function AdminPage() {
       {/* ── Tab: API Access ────────────────────────────────────────────────────── */}
       {activeTab === 'api-access' && fleetId && (
         <ApiAccessTab fleetId={fleetId} />
+      )}
+
+      {/* ── Tab: Settings ─────────────────────────────────────────────────────── */}
+      {activeTab === 'settings' && (
+        <div className="max-w-lg space-y-6">
+
+          {/* Fuel price card */}
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-orange-500/15 rounded-lg">
+                <Fuel className="w-5 h-5 text-orange-400" />
+              </div>
+              <div>
+                <p className="text-white font-semibold">Fuel Price</p>
+                <p className="text-gray-400 text-xs">
+                  Used by the cost-prediction engine. Update whenever the retail price changes.
+                </p>
+              </div>
+            </div>
+
+            {fuelLoading ? (
+              <div className="flex items-center gap-2 text-gray-500 text-sm">
+                <Loader className="w-4 h-4 animate-spin" /> Loading current price…
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-gray-400">
+                      Retail Price (₹ / litre)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      value={fuelPriceInr}
+                      onChange={e => { setFuelPriceInr(e.target.value); setFuelSavedMsg(''); }}
+                      className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-orange-500"
+                      placeholder="103.00"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-gray-400">
+                      USD → INR rate
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      value={usdToInr}
+                      onChange={e => { setUsdToInr(e.target.value); setFuelSavedMsg(''); }}
+                      className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-orange-500"
+                      placeholder="83.00"
+                    />
+                  </div>
+                </div>
+
+                {/* Derived USD price preview */}
+                {fuelPriceInr && usdToInr && !isNaN(parseFloat(fuelPriceInr)) && !isNaN(parseFloat(usdToInr)) && (
+                  <p className="text-xs text-gray-500">
+                    Effective rate used by engine:{' '}
+                    <span className="text-gray-300 font-medium">
+                      ${(parseFloat(fuelPriceInr) / parseFloat(usdToInr)).toFixed(4)} USD/L
+                    </span>
+                  </p>
+                )}
+
+                <button
+                  onClick={saveFuelPrice}
+                  disabled={fuelSaving}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                >
+                  {fuelSaving ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Fuel Price
+                </button>
+
+                {fuelSavedMsg && (
+                  <div className="flex items-center gap-2 px-3 py-2.5 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-xs">
+                    <CheckCircle size={14} className="flex-shrink-0" />
+                    {fuelSavedMsg}
+                  </div>
+                )}
+
+                <p className="text-xs text-gray-600 border-t border-gray-800 pt-3">
+                  Tip: India retail petrol prices are regulated and typically update on the 1st of each month.
+                  Check <span className="text-gray-500">iocl.com</span> for the latest Chennai / TN price.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
