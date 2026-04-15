@@ -148,7 +148,8 @@ Deno.serve(async (req: Request) => {
           id, fleet_id, name, zone_type, shape,
           center_lat, center_lng, radius_metres,
           coordinates,
-          time_restriction_start, time_restriction_end
+          time_restriction_start, time_restriction_end,
+          is_active
         )
       `)
       .eq('vehicle_id', vehicleId)
@@ -176,6 +177,8 @@ Deno.serve(async (req: Request) => {
     for (const assignment of assignments as any[]) {
       const zone = assignment.geofences;
       if (!zone) continue;
+      // Skip zones that were deactivated after the assignment was created
+      if (zone.is_active === false) continue;
 
       // ── Geometry check ──────────────────────────────────────────────────────
       let isNowInside: boolean;
