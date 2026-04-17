@@ -10,18 +10,37 @@
  * regardless of the calling user's RLS context, while still checking that
  * the caller has the right to trigger generation (fleet manager / owner).
  *
- * Maintenance rules (mileage-based; time-based as fallback):
+ * Maintenance rules (read from maintenance_rules DB table first; falls back
+ * to the hardcoded FALLBACK_RULES array when the table is empty):
  *   oil_change       every 10 000 km | 365 days
  *   tire_rotation    every  8 000 km
  *   air_filter       every 20 000 km | 365 days
- *   engine_check     every 50 000 km | 730 days  (full service)
+ *   engine_check     every 50 000 km | 730 days
  *   brake_inspection every 30 000 km
+ *
+ * Last-service baseline (used instead of vehicle.created_at):
+ *   Reads maintenance_logs for each service type to get the most recent
+ *   service_date and odometer_km. Falls back to vehicle.created_at / 0 km
+ *   when no log exists (first-time setup).
+ *
+ * Status computation:
+ *   overdue  → remaining km ≤ 0, OR remaining days ≤ 0
+ *   due      → remaining km ≤ urgency_near_km
+ *   upcoming → everything else
+ *
+ * DELETE strategy (fixes pre-existing bug):
+ *   Only deletes predictions with status != 'completed', preserving any
+ *   services the user has already marked as serviced.
+ *
+ * Alert events:
+ *   Writes a vehicle_events row for every 'due' or 'overdue' prediction
+ *   so AlertsPage shows actionable maintenance alerts.
  *
  * Cost projections (weekly / monthly) derived from:
  *   - Recent average daily km (from trips in last 30 days)
  *   - Recent average fuel consumption rate (sensor_data: engineFuelRate L/h)
  *   - Recent average speed            (sensor_data: speed km/h)
- *   - Fuel price constant (1.50 USD/L — configurable via FUEL_PRICE_USD env)
+ *   - Fuel price (live from fuel_price_config; fallback: FUEL_PRICE_USD env)
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -32,57 +51,37 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
 };
 
-// ── Maintenance rule definitions ─────────────────────────────────────────────
+// ── Hardcoded fallback rules (used when maintenance_rules table is empty) ─────
 
 interface MaintenanceRule {
   type:          string;
   description:   string;
   intervalKm:    number;
   intervalDays:  number | null;
-  urgencyNearKm: number;  // within this many km remaining → "high"
-  urgencyFarKm:  number;  // within this many km remaining → "medium"
+  urgencyNearKm: number;
+  urgencyFarKm:  number;
 }
 
-const MAINTENANCE_RULES: MaintenanceRule[] = [
+const FALLBACK_RULES: MaintenanceRule[] = [
   {
-    type:          'oil_change',
-    description:   'Engine oil & filter replacement',
-    intervalKm:    10_000,
-    intervalDays:  365,
-    urgencyNearKm: 1_000,
-    urgencyFarKm:  2_500,
+    type: 'oil_change',        description: 'Engine oil & filter replacement',
+    intervalKm: 10_000, intervalDays: 365,  urgencyNearKm: 1_000,  urgencyFarKm: 2_500,
   },
   {
-    type:          'tire_rotation',
-    description:   'Rotate tyres to ensure even wear',
-    intervalKm:    8_000,
-    intervalDays:  null,
-    urgencyNearKm: 800,
-    urgencyFarKm:  2_000,
+    type: 'tire_rotation',     description: 'Rotate tyres to ensure even wear',
+    intervalKm: 8_000,  intervalDays: null, urgencyNearKm: 800,    urgencyFarKm: 2_000,
   },
   {
-    type:          'air_filter',
-    description:   'Engine air filter replacement',
-    intervalKm:    20_000,
-    intervalDays:  365,
-    urgencyNearKm: 2_000,
-    urgencyFarKm:  5_000,
+    type: 'air_filter',        description: 'Engine air filter replacement',
+    intervalKm: 20_000, intervalDays: 365,  urgencyNearKm: 2_000,  urgencyFarKm: 5_000,
   },
   {
-    type:          'brake_inspection',
-    description:   'Brake pad & rotor inspection',
-    intervalKm:    30_000,
-    intervalDays:  null,
-    urgencyNearKm: 3_000,
-    urgencyFarKm:  7_500,
+    type: 'brake_inspection',  description: 'Brake pad & rotor inspection',
+    intervalKm: 30_000, intervalDays: null, urgencyNearKm: 3_000,  urgencyFarKm: 7_500,
   },
   {
-    type:          'engine_check',
-    description:   'Full engine & emissions service',
-    intervalKm:    50_000,
-    intervalDays:  730,
-    urgencyNearKm: 5_000,
-    urgencyFarKm:  12_000,
+    type: 'engine_check',      description: 'Full engine & emissions service',
+    intervalKm: 50_000, intervalDays: 730,  urgencyNearKm: 5_000,  urgencyFarKm: 12_000,
   },
 ];
 
@@ -92,10 +91,17 @@ function urgencyFor(
   remainingKm: number,
   rule: MaintenanceRule,
 ): 'low' | 'medium' | 'high' | 'critical' {
-  if (remainingKm <= 0)               return 'critical';
+  if (remainingKm <= 0)                  return 'critical';
   if (remainingKm <= rule.urgencyNearKm) return 'high';
   if (remainingKm <= rule.urgencyFarKm)  return 'medium';
   return 'low';
+}
+
+function statusFor(remainingKm: number, remainingDays: number | null): 'upcoming' | 'due' | 'overdue' {
+  if (remainingKm <= 0) return 'overdue';
+  if (remainingDays !== null && remainingDays <= 0) return 'overdue';
+  if (remainingKm <= 1_000) return 'due';   // within urgencyNear threshold
+  return 'upcoming';
 }
 
 function addDays(date: Date, days: number): Date {
@@ -107,6 +113,9 @@ function addDays(date: Date, days: number): Date {
 function dateOnly(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
+function round3(n: number): number { return Math.round(n * 1000) / 1000; }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 
@@ -122,10 +131,10 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const supabaseUrl     = Deno.env.get('SUPABASE_URL')!;
-    const anonKey         = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const serviceRoleKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const authHeader      = req.headers.get('Authorization') || '';
+    const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
+    const anonKey        = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const authHeader     = req.headers.get('Authorization') || '';
 
     // Verify the caller is authenticated
     const authClient = createClient(supabaseUrl, anonKey, {
@@ -138,38 +147,50 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Service-role client for reading across RLS
+    // Service-role client for reading/writing across RLS
     const db = createClient(supabaseUrl, serviceRoleKey);
 
-    // ── Live fuel price from fuel_price_config table ──────────────────────
-    // Falls back to FUEL_PRICE_USD env var, then to 1.24 USD/L (≈ ₹103)
+    // ── Live fuel price ───────────────────────────────────────────────────────
     let fuelPriceUsd: number;
     const { data: priceRow } = await db
       .from('fuel_price_config')
       .select('price_usd')
       .eq('id', 1)
       .maybeSingle();
-    if (priceRow?.price_usd != null) {
-      fuelPriceUsd = Number(priceRow.price_usd);
-    } else {
-      fuelPriceUsd = parseFloat(Deno.env.get('FUEL_PRICE_USD') || '1.24');
-    }
+    fuelPriceUsd = priceRow?.price_usd != null
+      ? Number(priceRow.price_usd)
+      : parseFloat(Deno.env.get('FUEL_PRICE_USD') || '1.24');
 
-    // Determine which vehicles to process
+    // ── Load maintenance rules from DB (fallback to hardcoded) ────────────────
+    const { data: dbRules } = await db
+      .from('maintenance_rules')
+      .select('service_type, description, interval_km, interval_days, urgency_near_km, urgency_far_km')
+      .is('vehicle_id', null)          // global defaults only
+      .eq('is_active', true);
+
+    const rules: MaintenanceRule[] = (dbRules && dbRules.length > 0)
+      ? (dbRules as any[]).map((r: any) => ({
+          type:          r.service_type,
+          description:   r.description ?? r.service_type,
+          intervalKm:    Number(r.interval_km)    || 10_000,
+          intervalDays:  r.interval_days != null ? Number(r.interval_days) : null,
+          urgencyNearKm: Number(r.urgency_near_km) || 1_000,
+          urgencyFarKm:  Number(r.urgency_far_km)  || 2_500,
+        }))
+      : FALLBACK_RULES;
+
+    // ── Determine which vehicles to process ───────────────────────────────────
     const url = new URL(req.url);
     const singleVehicleId = url.searchParams.get('vehicle_id');
 
     let vehicleIds: string[];
-
     if (singleVehicleId) {
       vehicleIds = [singleVehicleId];
     } else {
-      // All vehicles for fleets managed by this user OR owned directly
       const { data: vehicles } = await db
         .from('vehicles')
         .select('id')
         .or(`owner_id.eq.${user.id},fleet_id.in.(${await getFleetIds(db, user.id)})`);
-
       vehicleIds = (vehicles || []).map((v: any) => v.id as string);
     }
 
@@ -184,7 +205,7 @@ Deno.serve(async (req: Request) => {
 
     for (const vehicleId of vehicleIds) {
       const [maint, cost] = await Promise.all([
-        generateMaintenancePredictions(db, vehicleId),
+        generateMaintenancePredictions(db, vehicleId, rules),
         generateCostPredictions(db, vehicleId, fuelPriceUsd),
       ]);
       totalMaint += maint;
@@ -193,9 +214,9 @@ Deno.serve(async (req: Request) => {
 
     return new Response(
       JSON.stringify({
-        generated: vehicleIds.length,
-        maintenance_predictions: totalMaint,
-        cost_predictions: totalCost,
+        generated:                vehicleIds.length,
+        maintenance_predictions:  totalMaint,
+        cost_predictions:         totalCost,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
@@ -217,7 +238,6 @@ async function getFleetIds(
     .from('fleets')
     .select('id')
     .eq('manager_id', userId);
-
   if (!data || data.length === 0) return "''";
   return (data as any[]).map((f: any) => `'${f.id}'`).join(',');
 }
@@ -225,10 +245,12 @@ async function getFleetIds(
 // ── Maintenance predictions ────────────────────────────────────────────────────
 
 async function generateMaintenancePredictions(
-  db: ReturnType<typeof createClient>,
+  db:        ReturnType<typeof createClient>,
   vehicleId: string,
+  rules:     MaintenanceRule[],
 ): Promise<number> {
-  // Total distance driven (all recorded trips)
+
+  // Total distance driven (all recorded trips — the odometer source)
   const { data: tripAgg } = await db
     .from('trips')
     .select('distance_km')
@@ -239,60 +261,128 @@ async function generateMaintenancePredictions(
     0,
   );
 
-  // Vehicle created_at for time-based fallback
+  // Vehicle metadata (created_at for fallback when no service log exists)
   const { data: vehicle } = await db
     .from('vehicles')
-    .select('created_at')
+    .select('id, fleet_id, name, created_at')
     .eq('id', vehicleId)
     .single();
 
-  const vehicleAgeMs   = vehicle
-    ? Date.now() - new Date(vehicle.created_at).getTime()
-    : 0;
-  const vehicleAgeDays = vehicleAgeMs / 86_400_000;
+  const vehicleCreatedAt = vehicle ? new Date(vehicle.created_at) : new Date();
+  const fleetId          = vehicle?.fleet_id ?? null;
+
+  // Last service records from maintenance_logs (the authoritative baseline)
+  // Get the most recent log per service_type for this vehicle
+  const { data: serviceLogs } = await db
+    .from('maintenance_logs')
+    .select('service_type, service_date, odometer_km')
+    .eq('vehicle_id', vehicleId)
+    .order('service_date', { ascending: false });
+
+  // Build a map: service_type → { lastDate, lastKm }
+  const lastService: Record<string, { date: Date; km: number }> = {};
+  for (const log of (serviceLogs || []) as any[]) {
+    if (!lastService[log.service_type]) {
+      lastService[log.service_type] = {
+        date: new Date(log.service_date),
+        km:   parseFloat(log.odometer_km) || 0,
+      };
+    }
+  }
 
   const now = new Date();
   const toInsert: any[] = [];
+  const alertsToInsert: any[] = [];
 
-  for (const rule of MAINTENANCE_RULES) {
-    // Compute how many complete intervals have elapsed
-    const completedIntervals = Math.floor(totalKm / rule.intervalKm);
-    // Next service due at this odometer reading
-    const dueAtKm = (completedIntervals + 1) * rule.intervalKm;
-    const remainingKm = dueAtKm - totalKm;
+  for (const rule of rules) {
+    // ── Odometer-based calculation ──────────────────────────────────────────
+    const lastKm = lastService[rule.type]?.km ?? 0;
+    // Distance driven since last service (or since tracking began)
+    const kmSinceService = Math.max(0, totalKm - lastKm);
+    const remainingKm    = rule.intervalKm - kmSinceService;
+    const dueAtKm        = lastKm + rule.intervalKm;
 
-    // Time-based due date (if the rule has an intervalDays)
-    let dueDate: string | null = null;
+    // ── Time-based calculation ──────────────────────────────────────────────
+    let dueDate:      string | null = null;
+    let remainingDays: number | null = null;
+
     if (rule.intervalDays !== null) {
-      const completedTimeIntervals = Math.floor(vehicleAgeDays / rule.intervalDays);
-      const nextDueDays = (completedTimeIntervals + 1) * rule.intervalDays;
-      const remainingDays = nextDueDays - vehicleAgeDays;
-      dueDate = dateOnly(addDays(now, Math.max(0, Math.ceil(remainingDays))));
+      const lastDate = lastService[rule.type]?.date ?? vehicleCreatedAt;
+      const dueDateObj = addDays(lastDate, rule.intervalDays);
+      dueDate       = dateOnly(dueDateObj);
+      remainingDays = Math.ceil((dueDateObj.getTime() - now.getTime()) / 86_400_000);
     }
 
     const urgency    = urgencyFor(remainingKm, rule);
-    // Confidence: higher when close to due; rough heuristic
-    const confidence = Math.min(1.0, 1 - remainingKm / rule.intervalKm);
+    const status     = statusFor(remainingKm, remainingDays);
+    // Confidence: higher as we approach the service interval
+    const rawConf    = Math.min(1.0, kmSinceService / rule.intervalKm);
+    const confidence = parseFloat(rawConf.toFixed(2));
 
     toInsert.push({
       vehicle_id:      vehicleId,
       prediction_type: rule.type,
       description:     rule.description,
-      due_at_km:       dueAtKm,
+      due_at_km:       parseFloat(dueAtKm.toFixed(1)),
       due_date:        dueDate,
       urgency,
-      confidence:      parseFloat(confidence.toFixed(2)),
+      confidence,
+      status,
     });
+
+    // Generate alert event for due / overdue services
+    if ((status === 'due' || status === 'overdue') && fleetId) {
+      const kmLabel = remainingKm <= 0
+        ? `${Math.abs(Math.round(remainingKm))} km overdue`
+        : `due in ${Math.round(remainingKm)} km`;
+
+      alertsToInsert.push({
+        vehicle_id:  vehicleId,
+        fleet_id:    fleetId,
+        event_type:  status === 'overdue' ? 'maintenance_overdue' : 'maintenance_due',
+        severity:    status === 'overdue' ? 'critical' : 'warning',
+        title:       `${rule.description} ${status === 'overdue' ? 'overdue' : 'due soon'}`,
+        description: `${rule.description} is ${kmLabel}. ` +
+                     (dueDate ? `Time-based due date: ${dueDate}.` : ''),
+        metadata: {
+          service_type:  rule.type,
+          due_at_km:     dueAtKm,
+          remaining_km:  Math.round(remainingKm),
+          due_date:      dueDate,
+        },
+      });
+    }
   }
 
-  // Replace existing predictions for this vehicle (fresh run)
+  // ── STATUS-AWARE DELETE: preserve completed records ─────────────────────────
+  // This fixes the pre-existing bug where all predictions were wiped on every run.
   await db
     .from('maintenance_predictions')
     .delete()
-    .eq('vehicle_id', vehicleId);
+    .eq('vehicle_id', vehicleId)
+    .neq('status', 'completed');
 
   if (toInsert.length > 0) {
     await db.from('maintenance_predictions').insert(toInsert);
+  }
+
+  // ── Write alert events (upsert-style: delete today's + re-insert) ───────────
+  // Avoids duplicate alerts on repeated runs in the same day.
+  if (alertsToInsert.length > 0 && fleetId) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Remove today's maintenance alerts for this vehicle to avoid duplication
+    await db
+      .from('vehicle_events')
+      .delete()
+      .eq('vehicle_id', vehicleId)
+      .in('event_type', ['maintenance_due', 'maintenance_overdue'])
+      .gte('timestamp', todayStart.toISOString());
+
+    await db.from('vehicle_events').insert(
+      alertsToInsert.map(a => ({ ...a, timestamp: new Date().toISOString() })),
+    );
   }
 
   return toInsert.length;
@@ -301,8 +391,8 @@ async function generateMaintenancePredictions(
 // ── Cost predictions ──────────────────────────────────────────────────────────
 
 async function generateCostPredictions(
-  db: ReturnType<typeof createClient>,
-  vehicleId: string,
+  db:           ReturnType<typeof createClient>,
+  vehicleId:    string,
   fuelPriceUsd: number,
 ): Promise<number> {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
@@ -318,9 +408,7 @@ async function generateCostPredictions(
     (s: number, t: any) => s + (parseFloat(t.distance_km) || 0),
     0,
   );
-  const dailyKm = recentTrips && recentTrips.length > 0
-    ? totalRecentKm / 30
-    : 0;
+  const dailyKm = recentTrips && recentTrips.length > 0 ? totalRecentKm / 30 : 0;
 
   // Average fuel rate (L/h) from recent sensor_data
   const { data: fuelRateRows } = await db
@@ -349,18 +437,16 @@ async function generateCostPredictions(
     : 0;
 
   // Fuel consumption per km = fuelRate(L/h) / speed(km/h)
-  // Guard against near-zero speed to avoid infinity
   const fuelPerKm = avgSpeedKmh > 5 ? avgFuelRateLph / avgSpeedKmh : 0;
 
-  // Weekly & monthly projections
-  const weeklyKm    = dailyKm * 7;
-  const monthlyKm   = dailyKm * 30;
-  const weeklyFuelL = weeklyKm  * fuelPerKm;
+  const weeklyKm     = dailyKm * 7;
+  const monthlyKm    = dailyKm * 30;
+  const weeklyFuelL  = weeklyKm  * fuelPerKm;
   const monthlyFuelL = monthlyKm * fuelPerKm;
 
-  const weeklyFuelCost   = weeklyFuelL   * fuelPriceUsd;
-  const monthlyFuelCost  = monthlyFuelL  * fuelPriceUsd;
-  const avgCostPerKm     = fuelPerKm * fuelPriceUsd;
+  const weeklyFuelCost  = weeklyFuelL  * fuelPriceUsd;
+  const monthlyFuelCost = monthlyFuelL * fuelPriceUsd;
+  const avgCostPerKm    = fuelPerKm * fuelPriceUsd;
 
   const today = dateOnly(new Date());
   const toUpsert = [
@@ -392,8 +478,3 @@ async function generateCostPredictions(
 
   return toUpsert.length;
 }
-
-// ── Arithmetic helpers ────────────────────────────────────────────────────────
-
-function round2(n: number): number { return Math.round(n * 100) / 100; }
-function round3(n: number): number { return Math.round(n * 1000) / 1000; }

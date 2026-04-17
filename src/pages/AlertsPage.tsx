@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Filter, AlertTriangle, Wifi, WifiOff, Navigation, Clock,
   Shield, SlidersHorizontal, Bell, BellOff, RotateCcw, Save,
-  Loader, ChevronDown, CheckCircle2, MapPin,
+  Loader, ChevronDown, CheckCircle2, MapPin, Wrench,
 } from 'lucide-react';
 import { supabase, type Alert, type Vehicle, type Threshold } from '../lib/supabase';
 import { realtimeService } from '../services/realtimeService';
@@ -42,6 +42,9 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   geofence_exit:               <MapPin className="w-4 h-4" />,
   geofence_dwell:              <Clock className="w-4 h-4" />,
   night_movement:              <Shield className="w-4 h-4" />,
+  // Maintenance events
+  maintenance_due:             <Wrench className="w-4 h-4" />,
+  maintenance_overdue:         <Wrench className="w-4 h-4" />,
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -59,6 +62,9 @@ const EVENT_LABELS: Record<string, string> = {
   geofence_exit:               'Zone Exit',
   geofence_dwell:              'Zone Dwell',
   night_movement:              'Night Movement',
+  // Maintenance events
+  maintenance_due:             'Service Due Soon',
+  maintenance_overdue:         'Service Overdue',
 };
 
 // ─── All known sensor types with optimal defaults ─────────────────────────────

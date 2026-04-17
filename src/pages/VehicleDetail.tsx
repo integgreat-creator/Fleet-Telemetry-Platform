@@ -1,9 +1,47 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Settings, X, Save, Bell, BellOff, Loader } from 'lucide-react';
+import { ArrowLeft, Settings, X, Save, Bell, BellOff, Loader,
+         Wrench, CheckCircle, AlertTriangle, Clock, History } from 'lucide-react';
 import { supabase, type Vehicle, type SensorData, type Threshold } from '../lib/supabase';
 import { realtimeService } from '../services/realtimeService';
 import { vehicleSimulator } from '../services/simulatorService';
 import SensorCard from '../components/SensorCard';
+import { useSubscription } from '../hooks/useSubscription';
+
+// ── Maintenance types (local to this file) ────────────────────────────────────
+
+interface VehiclePrediction {
+  id:              string;
+  prediction_type: string;
+  description:     string | null;
+  due_at_km:       number | null;
+  due_date:        string | null;
+  urgency:         string;
+  status:          'upcoming' | 'due' | 'overdue' | 'completed';
+}
+
+interface VehicleServiceLog {
+  id:           string;
+  service_type: string;
+  service_date: string;
+  odometer_km:  number | null;
+  cost:         number | null;
+  notes:        string | null;
+}
+
+const SERVICE_LABELS: Record<string, string> = {
+  oil_change:       'Oil Change',
+  tire_rotation:    'Tyre Rotation',
+  air_filter:       'Air Filter',
+  brake_inspection: 'Brake Inspection',
+  engine_check:     'Engine Check',
+};
+
+const PRED_STATUS_STYLE: Record<string, { badge: string; text: string; label: string }> = {
+  overdue:   { badge: 'bg-red-500/20 text-red-400 border border-red-500/30',      text: 'text-red-400',    label: 'Overdue'  },
+  due:       { badge: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30', text: 'text-yellow-400', label: 'Due Soon' },
+  upcoming:  { badge: 'bg-blue-500/20 text-blue-400 border border-blue-500/30',    text: 'text-blue-400',   label: 'Upcoming' },
+  completed: { badge: 'bg-green-500/20 text-green-400 border border-green-500/30', text: 'text-green-400',  label: 'Done'     },
+};
 
 interface VehicleDetailProps {
   vehicle: Vehicle;
@@ -235,10 +273,91 @@ function ThresholdPanel({ vehicle, sensorTypes, onClose }: ThresholdPanelProps) 
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export default function VehicleDetail({ vehicle, onBack }: VehicleDetailProps) {
+  const { fleetId } = useSubscription();
+
+  // ── Tab state ──────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<'sensors' | 'maintenance'>('sensors');
+
+  // ── Sensor state ───────────────────────────────────────────────────────────
   const [sensorData, setSensorData]     = useState<Map<string, SensorData>>(new Map());
   const [previousData, setPreviousData] = useState<Map<string, number>>(new Map());
   const [showThresholds, setShowThresholds] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
+
+  // ── Maintenance state ──────────────────────────────────────────────────────
+  const [predictions,   setPredictions]   = useState<VehiclePrediction[]>([]);
+  const [serviceLogs,   setServiceLogs]   = useState<VehicleServiceLog[]>([]);
+  const [maintLoading,  setMaintLoading]  = useState(false);
+  const [serviceModal,  setServiceModal]  = useState<VehiclePrediction | null>(null);
+  // Mark-as-serviced form state
+  const [svcDate,  setSvcDate]  = useState(new Date().toISOString().slice(0, 10));
+  const [svcKm,    setSvcKm]    = useState('');
+  const [svcCost,  setSvcCost]  = useState('');
+  const [svcNotes, setSvcNotes] = useState('');
+  const [svcSaving,setSvcSaving]= useState(false);
+  const [svcError, setSvcError] = useState('');
+
+  const loadMaintenance = async () => {
+    setMaintLoading(true);
+    try {
+      const [predsRes, logsRes] = await Promise.all([
+        supabase
+          .from('maintenance_predictions')
+          .select('id, prediction_type, description, due_at_km, due_date, urgency, status')
+          .eq('vehicle_id', vehicle.id)
+          .neq('status', 'completed')
+          .order('status', { ascending: false })
+          .order('due_date', { ascending: true }),
+        supabase
+          .from('maintenance_logs')
+          .select('id, service_type, service_date, odometer_km, cost, notes')
+          .eq('vehicle_id', vehicle.id)
+          .order('service_date', { ascending: false })
+          .limit(20),
+      ]);
+      if (predsRes.data) setPredictions(predsRes.data as VehiclePrediction[]);
+      if (logsRes.data)  setServiceLogs(logsRes.data  as VehicleServiceLog[]);
+    } catch (e) {
+      console.error('Maintenance load error:', e);
+    } finally {
+      setMaintLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'maintenance') loadMaintenance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, vehicle.id]);
+
+  const handleMarkServiced = async () => {
+    if (!serviceModal || !fleetId) return;
+    setSvcSaving(true);
+    setSvcError('');
+    try {
+      const { error: logErr } = await supabase.from('maintenance_logs').insert({
+        vehicle_id:   vehicle.id,
+        fleet_id:     fleetId,
+        service_type: serviceModal.prediction_type,
+        service_date: svcDate,
+        odometer_km:  svcKm   ? parseFloat(svcKm)   : null,
+        cost:         svcCost ? parseFloat(svcCost)  : null,
+        notes:        svcNotes.trim() || null,
+      });
+      if (logErr) throw logErr;
+      await supabase
+        .from('maintenance_predictions')
+        .update({ status: 'completed' })
+        .eq('id', serviceModal.id);
+      setServiceModal(null);
+      setSvcDate(new Date().toISOString().slice(0, 10));
+      setSvcKm(''); setSvcCost(''); setSvcNotes('');
+      await loadMaintenance();
+    } catch (e: any) {
+      setSvcError(e.message ?? 'Save failed.');
+    } finally {
+      setSvcSaving(false);
+    }
+  };
 
   // Keep a stable ref to sensorData for the realtime callback
   const sensorDataRef = useRef(sensorData);
@@ -326,6 +445,27 @@ export default function VehicleDetail({ vehicle, onBack }: VehicleDetailProps) {
         </div>
       </div>
 
+      {/* ── Tab switcher ───────────────────────────────────────────────────── */}
+      <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
+        {([
+          { id: 'sensors',     label: 'Sensors',     icon: Settings },
+          { id: 'maintenance', label: 'Maintenance',  icon: Wrench   },
+        ] as const).map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === t.id
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+            }`}
+          >
+            <t.icon className="w-4 h-4" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* ── Vehicle info strip ─────────────────────────────────────────────── */}
       <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
         <div className="grid grid-cols-3 gap-6">
@@ -358,45 +498,224 @@ export default function VehicleDetail({ vehicle, onBack }: VehicleDetailProps) {
       </div>
 
       {/* ── Sensor grid ────────────────────────────────────────────────────── */}
-      {loadingHistory ? (
-        <div className="flex items-center justify-center py-16 bg-gray-900 rounded-lg border border-gray-800">
-          <Loader className="w-8 h-8 animate-spin text-blue-500" />
+      {activeTab === 'sensors' && (
+        <>
+          {loadingHistory ? (
+            <div className="flex items-center justify-center py-16 bg-gray-900 rounded-lg border border-gray-800">
+              <Loader className="w-8 h-8 animate-spin text-blue-500" />
+            </div>
+          ) : sensors.length === 0 ? (
+            <div className="text-center py-16 bg-gray-900 rounded-lg border border-gray-800">
+              <div className="p-4 rounded-full bg-gray-800 w-fit mx-auto mb-4">
+                <Settings className="w-8 h-8 text-gray-600" />
+              </div>
+              <p className="text-white font-medium mb-2">No sensor data yet</p>
+              <p className="text-gray-500 text-sm">
+                Connect the OBD adapter via the mobile app, or start the simulation to generate readings.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-white">
+                  {isSimulating ? 'Live Sensor Data' : 'Last Known Sensor Readings'}
+                </h2>
+                <span className="text-xs text-gray-500">
+                  {sensors.length} sensor{sensors.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {sensors.map((sensor) => {
+                  const config = vehicleSimulator.getSensorConfig(sensor.sensor_type);
+                  return (
+                    <SensorCard
+                      key={sensor.sensor_type}
+                      sensorType={sensor.sensor_type}
+                      value={sensor.value}
+                      unit={sensor.unit}
+                      normalMin={config.normal_min}
+                      normalMax={config.normal_max}
+                      previousValue={previousData.get(sensor.sensor_type)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Maintenance tab ────────────────────────────────────────────────── */}
+      {activeTab === 'maintenance' && (
+        <div className="space-y-6">
+          {maintLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader className="w-8 h-8 animate-spin text-blue-500" />
+            </div>
+          ) : (
+            <>
+              {/* Predictions */}
+              <div>
+                <h2 className="text-lg font-bold text-white mb-3">Service Schedule</h2>
+                {predictions.length === 0 ? (
+                  <div className="bg-gray-900 rounded-xl border border-gray-800 p-10 text-center">
+                    <Wrench className="w-10 h-10 text-gray-700 mx-auto mb-3" />
+                    <p className="text-gray-400 font-medium">No predictions for this vehicle</p>
+                    <p className="text-gray-600 text-sm mt-1">
+                      Go to the Maintenance page and click "Refresh Predictions".
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {predictions.map(pred => {
+                      const style = PRED_STATUS_STYLE[pred.status] ?? PRED_STATUS_STYLE.upcoming;
+                      const label = SERVICE_LABELS[pred.prediction_type] ?? pred.prediction_type;
+                      return (
+                        <div key={pred.id} className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <p className="text-white font-semibold text-sm">{label}</p>
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${style.badge}`}>
+                              {style.label}
+                            </span>
+                          </div>
+                          {pred.description && (
+                            <p className="text-xs text-gray-500 mb-2">{pred.description}</p>
+                          )}
+                          <div className="space-y-1 mb-3">
+                            {pred.due_at_km != null && (
+                              <p className="text-xs text-gray-400">
+                                Due at: <span className={`font-semibold ${style.text}`}>
+                                  {pred.due_at_km.toLocaleString('en-IN')} km
+                                </span>
+                              </p>
+                            )}
+                            {pred.due_date && (
+                              <p className="text-xs text-gray-400">
+                                By: <span className={`font-semibold ${style.text}`}>
+                                  {new Date(pred.due_date).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}
+                                </span>
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => { setServiceModal(pred); setSvcDate(new Date().toISOString().slice(0,10)); }}
+                            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-green-600/20 hover:bg-green-600/30 border border-green-600/30 text-green-400 text-xs font-medium transition-colors"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            Mark as Serviced
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Service history */}
+              <div>
+                <h2 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+                  <History className="w-5 h-5 text-gray-400" />
+                  Service History
+                </h2>
+                {serviceLogs.length === 0 ? (
+                  <p className="text-gray-500 text-sm">No service records yet for this vehicle.</p>
+                ) : (
+                  <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-800">
+                          {['Service', 'Date', 'Odometer', 'Cost', 'Notes'].map(col => (
+                            <th key={col} className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                              {col}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {serviceLogs.map(log => (
+                          <tr key={log.id} className="hover:bg-gray-800/40 transition-colors">
+                            <td className="px-4 py-3 text-sm text-gray-300">
+                              {SERVICE_LABELS[log.service_type] ?? log.service_type}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-300">
+                              {new Date(log.service_date).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-300">
+                              {log.odometer_km != null ? `${log.odometer_km.toLocaleString('en-IN')} km` : '—'}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-300">
+                              {log.cost != null ? `₹${log.cost.toLocaleString('en-IN')}` : '—'}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
+                              {log.notes ?? '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
-      ) : sensors.length === 0 ? (
-        <div className="text-center py-16 bg-gray-900 rounded-lg border border-gray-800">
-          <div className="p-4 rounded-full bg-gray-800 w-fit mx-auto mb-4">
-            <Settings className="w-8 h-8 text-gray-600" />
-          </div>
-          <p className="text-white font-medium mb-2">No sensor data yet</p>
-          <p className="text-gray-500 text-sm">
-            Connect the OBD adapter via the mobile app, or start the simulation to generate readings.
-          </p>
-        </div>
-      ) : (
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-white">
-              {isSimulating ? 'Live Sensor Data' : 'Last Known Sensor Readings'}
-            </h2>
-            <span className="text-xs text-gray-500">
-              {sensors.length} sensor{sensors.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {sensors.map((sensor) => {
-              const config = vehicleSimulator.getSensorConfig(sensor.sensor_type);
-              return (
-                <SensorCard
-                  key={sensor.sensor_type}
-                  sensorType={sensor.sensor_type}
-                  value={sensor.value}
-                  unit={sensor.unit}
-                  normalMin={config.normal_min}
-                  normalMax={config.normal_max}
-                  previousValue={previousData.get(sensor.sensor_type)}
-                />
-              );
-            })}
+      )}
+
+      {/* ── Mark-as-Serviced modal ──────────────────────────────────────────── */}
+      {serviceModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-start justify-between p-5 border-b border-gray-800">
+              <div>
+                <h2 className="text-white font-bold">Mark as Serviced</h2>
+                <p className="text-gray-400 text-sm mt-0.5">
+                  {SERVICE_LABELS[serviceModal.prediction_type] ?? serviceModal.prediction_type} — {vehicle.name}
+                </p>
+              </div>
+              <button onClick={() => setServiceModal(null)} className="text-gray-500 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="block text-xs text-gray-400 font-medium mb-1">Service Date *</label>
+                <input type="date" value={svcDate} max={new Date().toISOString().slice(0,10)}
+                  onChange={e => setSvcDate(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 font-medium mb-1">Odometer (km)</label>
+                <input type="number" placeholder="e.g. 45000" value={svcKm} min="0"
+                  onChange={e => setSvcKm(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 font-medium mb-1">Cost (₹)</label>
+                <input type="number" placeholder="e.g. 1200" value={svcCost} min="0"
+                  onChange={e => setSvcCost(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 font-medium mb-1">Notes</label>
+                <textarea placeholder="Optional notes…" value={svcNotes} rows={2}
+                  onChange={e => setSvcNotes(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-none" />
+              </div>
+              {svcError && (
+                <p className="text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{svcError}</p>
+              )}
+            </div>
+            <div className="flex gap-3 px-5 pb-5">
+              <button onClick={() => setServiceModal(null)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 hover:text-white text-sm font-medium transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleMarkServiced} disabled={svcSaving || !svcDate}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold transition-colors">
+                {svcSaving ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                {svcSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
           </div>
         </div>
       )}
