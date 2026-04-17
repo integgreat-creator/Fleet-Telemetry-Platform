@@ -9,6 +9,7 @@ import 'package:vehicle_telemetry/providers/sensor_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/activity_screen.dart';
 import 'package:vehicle_telemetry/screens/alerts_screen.dart';
+import 'package:vehicle_telemetry/screens/maintenance_screen.dart';
 import 'package:vehicle_telemetry/screens/bluetooth_scan_screen.dart';
 import 'package:vehicle_telemetry/screens/dashboard_screen.dart';
 import 'package:vehicle_telemetry/screens/profile_screen.dart';
@@ -420,7 +421,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     sub.featureAccess('overspeed_alerts') != 'none'
                         ? const AlertsScreen()
                         : const LockedScreen(featureName: 'Alerts'),
-                    // Tab 3 — Profile (always accessible)
+                    // Tab 3 — Maintenance (gated: maintenance_alerts)
+                    sub.featureAccess('maintenance_alerts') != 'none'
+                        ? const MaintenanceScreen()
+                        : const LockedScreen(featureName: 'Maintenance'),
+                    // Tab 4 — Profile (always accessible)
                     const ProfileScreen(),
                   ],
                 ),
@@ -620,6 +625,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.notifications_outlined),
             activeIcon: Icon(Icons.notifications_rounded),
             label: 'Alerts',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.build_outlined),
+            activeIcon: Icon(Icons.build_rounded),
+            label: 'Maintenance',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person_outline_rounded),
