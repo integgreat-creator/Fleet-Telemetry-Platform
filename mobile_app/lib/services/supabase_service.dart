@@ -1,10 +1,9 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vehicle_telemetry/config/supabase_config.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/models/threshold.dart';
 import 'package:vehicle_telemetry/models/sensor_data.dart';
+import 'offline_queue_service.dart';
 
 class SupabaseService {
   static final SupabaseService _instance = SupabaseService._internal();
@@ -12,210 +11,256 @@ class SupabaseService {
   SupabaseService._internal();
 
   final _client = SupabaseConfig.client;
+  final _queue  = OfflineQueueService();
 
-  // ── OFFLINE QUEUE ─────────────────────────────────────────────────────────
-  static const _offlineQueueKey = 'sensor_offline_queue';
-
-  Future<void> _enqueueOffline(Map<String, dynamic> payload) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_offlineQueueKey) ?? [];
-    raw.add(jsonEncode(payload));
-    // Cap queue at 500 entries to avoid unbounded growth
-    if (raw.length > 500) raw.removeAt(0);
-    await prefs.setStringList(_offlineQueueKey, raw);
-  }
-
-  /// Call this when connectivity is restored to flush the offline queue.
-  Future<void> flushOfflineQueue() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_offlineQueueKey) ?? [];
-    if (raw.isEmpty) return;
-
-    final failed = <String>[];
-    for (final item in raw) {
-      try {
-        final payload = jsonDecode(item) as Map<String, dynamic>;
-        await _client.functions.invoke('sensor-api', body: payload);
-      } catch (_) {
-        failed.add(item); // keep failed items for next attempt
-      }
-    }
-    await prefs.setStringList(_offlineQueueKey, failed);
-  }
-
-  int get offlineQueueLength {
-    // Synchronous peek — actual count read asynchronously if needed
-    return 0; // Placeholder: call getOfflineQueueLength() for actual count
-  }
-
-  Future<int> getOfflineQueueLength() async {
-    final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList(_offlineQueueKey) ?? []).length;
-  }
-
-  // ── VEHICLES ──────────────────────────────────────────────────────────────
-
-  /// Loads all vehicles the current user can access (RLS-filtered).
-  /// Returns vehicles without thresholds — use [getVehiclesWithThresholds]
-  /// for the joined version.
-  Future<List<Vehicle>> getVehicles() async {
+  // ── Offline-resilient RPC helper ──────────────────────────────────────────
+  //
+  // Call any event-reporting RPC through this wrapper.  On success it returns
+  // normally.  On failure (no internet, server error) the call is enqueued in
+  // OfflineQueueService and retried automatically when connectivity resumes.
+  //
+  // Do NOT use this for high-frequency calls (heartbeats, location fixes) —
+  // those are intentionally fire-and-forget.
+  Future<void> _rpcWithFallback(
+    String rpc,
+    Map<String, dynamic> params,
+  ) async {
     try {
-      final response = await _client
-          .from('vehicles')
-          .select()
-          .order('created_at', ascending: false);
-      return (response as List)
-          .map((json) => Vehicle.fromJson(json as Map<String, dynamic>))
-          .toList();
+      await _client.rpc(rpc, params: params);
     } catch (e) {
-      print('Error fetching vehicles: $e');
+      debugPrint('SupabaseService: $rpc failed ($e) — queuing for retry');
+      await _queue.enqueue(rpc: rpc, params: params);
+    }
+  }
+
+  // ── Vehicle CRUD ─────────────────────────────────────────────────────────
+
+  Future<List<Vehicle>> getVehicles() async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) {
+      debugPrint('getVehicles: no authenticated user');
       return [];
     }
-  }
 
-  /// N+1 FIX: Fetches vehicles AND their thresholds in a single Supabase
-  /// query using a relational select join.
-  /// Returns a map: { vehicle → [thresholds] }
-  Future<Map<Vehicle, List<Threshold>>> getVehiclesWithThresholds() async {
     try {
-      final response = await _client
-          .from('vehicles')
-          .select('*, thresholds(*)')
-          .order('created_at', ascending: false);
+      // ── Resolve driver_accounts row ──────────────────────────────────────
+      // The mobile app is invite-only. Every valid user has a driver_accounts
+      // row written by the fleet manager. We use it to scope the vehicle list.
+      String? assignedVehicleId;
+      String? fleetId;
 
-      final result = <Vehicle, List<Threshold>>{};
-      for (final json in response as List) {
-        final vehicle = Vehicle.fromJson(json as Map<String, dynamic>);
-        final thresholdsList = (json['thresholds'] as List? ?? [])
-            .map((t) => Threshold.fromJson(t as Map<String, dynamic>))
-            .toList();
-        result[vehicle] = thresholdsList;
+      try {
+        final driverRow = await _client
+            .from('driver_accounts')
+            .select('fleet_id, vehicle_id')
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (driverRow != null) {
+          fleetId           = driverRow['fleet_id']   as String?;
+          assignedVehicleId = driverRow['vehicle_id'] as String?;
+        }
+      } catch (e) {
+        debugPrint('getVehicles: driver_accounts lookup failed — $e');
       }
-      return result;
+
+      // ── Driver vehicle scope ─────────────────────────────────────────────
+      // Drivers see ONLY:
+      //   1. Vehicles they personally connected via OBD (owner_id = userId)
+      //   2. The vehicle pre-assigned to them in driver_accounts.vehicle_id
+      //
+      // They do NOT see the full fleet to protect privacy between drivers.
+      final idsToFetch = <String>{};
+
+      // Their OBD-connected vehicles
+      try {
+        final owned = await _client
+            .from('vehicles')
+            .select('id')
+            .eq('owner_id', userId);
+        for (final row in owned) {
+          idsToFetch.add(row['id'] as String);
+        }
+      } catch (_) {}
+
+      // Their pre-assigned vehicle (may differ from owner_id if manager added it)
+      if (assignedVehicleId != null) {
+        idsToFetch.add(assignedVehicleId);
+      }
+
+      if (idsToFetch.isNotEmpty) {
+        final rows = await _client
+            .from('vehicles')
+            .select()
+            .inFilter('id', idsToFetch.toList())
+            .order('created_at', ascending: false);
+        final vehicles = rows.map<Vehicle>((j) => Vehicle.fromJson(j)).toList();
+        debugPrint('getVehicles: ${vehicles.length} vehicle(s) for driver $userId');
+        return vehicles;
+      }
+
+      // No vehicles yet — driver hasn't connected via OBD yet and no
+      // pre-assignment. Return empty so the home screen waits for OBD.
+      debugPrint('getVehicles: no vehicles found for driver $userId (fleet: $fleetId)');
+      return [];
     } catch (e) {
-      print('Error fetching vehicles with thresholds: $e');
-      return {};
-    }
-  }
-
-  // ── Vehicle registration: two paths depending on caller role ────────────
-
-  /// **Fleet managers / owners**: direct INSERT — they have full RLS access.
-  /// Finds by VIN first (upsert behaviour) so reconnecting the same vehicle
-  /// never creates a duplicate.
-  Future<Vehicle> createOrFindVehicleByVin({
-    required String vin,
-    required String name,
-    String? make,
-    String? model,
-    int? year,
-    required String ownerId,
-    String? fleetId,
-  }) async {
-    // 1. Try to find an existing vehicle with this exact VIN
-    try {
-      final existing = await _client
-          .from('vehicles')
-          .select()
-          .eq('vin', vin)
-          .limit(1);
-
-      if (existing is List && (existing as List).isNotEmpty) {
-        return Vehicle.fromJson(existing.first as Map<String, dynamic>);
-      }
-    } catch (_) {
-      // Not found or transient error — fall through to create
-    }
-
-    // 2. Insert new vehicle row.
-    // Only include columns that are guaranteed to exist in the base schema
-    // (migration 20260227043631). Extended columns like fuel_type are added
-    // by migration 20260418 — if that hasn't been applied yet the INSERT
-    // would fail with "column does not exist". We rely on DB defaults for
-    // those fields and the Vehicle.fromJson() null-safety fallbacks on read.
-    final insertData = <String, dynamic>{
-      'vin':          vin,
-      'name':         name,
-      'make':         make  ?? '',
-      'model':        model ?? '',
-      'year':         year  ?? DateTime.now().year,
-      'owner_id':     ownerId,
-      'is_active':    true,
-      'health_score': 100.0,
-    };
-    if (fleetId != null) insertData['fleet_id'] = fleetId;
-
-    final response = await _client
-        .from('vehicles')
-        .insert(insertData)
-        .select()
-        .single();
-
-    return Vehicle.fromJson(response as Map<String, dynamic>);
-  }
-
-  /// **Drivers**: must go through the `create_vehicle_for_driver` SECURITY
-  /// DEFINER RPC because drivers cannot directly INSERT into `vehicles` (RLS).
-  /// The RPC also seeds default thresholds and links the driver in
-  /// driver_accounts.
-  ///
-  /// If the RPC is unavailable (migration not yet applied), throws an
-  /// Exception with the real Supabase error so the caller can surface it.
-  Future<Vehicle> getOrCreateVehicleByVin({
-    required String userId,
-    required String vin,
-    required String name,
-    String? make,
-    String? model,
-    int? year,
-    String? fleetId,
-  }) async {
-    try {
-      final response = await _client.rpc(
-        'create_vehicle_for_driver',
-        params: {
-          'p_vin':       vin,
-          'p_name':      name,
-          if (make      != null) 'p_make':     make,
-          if (model     != null) 'p_model':    model,
-          if (year      != null) 'p_year':     year,
-          'p_fuel_type': 'petrol',
-          if (fleetId   != null) 'p_fleet_id': fleetId,
-        },
-      );
-
-      // PostgREST may return the single row as a Map or as a 1-element List
-      final Map<String, dynamic> json;
-      if (response is List && (response as List).isNotEmpty) {
-        json = response.first as Map<String, dynamic>;
-      } else if (response is Map<String, dynamic>) {
-        json = response;
-      } else {
-        throw Exception('Unexpected RPC response type: ${response.runtimeType}');
-      }
-
-      return Vehicle.fromJson(json);
-    } catch (e) {
-      // Surface the real error (Supabase message, constraint name, etc.)
-      // so operators can diagnose missing migrations / RLS issues.
-      debugPrint('create_vehicle_for_driver RPC error: $e');
-      // Strip nested "Exception:" prefix if present
-      final msg = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
-      throw Exception(msg);
+      debugPrint('getVehicles error: $e');
+      return [];
     }
   }
 
   Future<Vehicle?> createVehicle(Vehicle vehicle) async {
     try {
+      final data = vehicle.toJson();
+
+      // vehicles.vin is NOT NULL UNIQUE — generate a timestamped placeholder
+      // when the user leaves the VIN field blank in the manual-add form.
+      if (data['vin'] == null || (data['vin'] as String?)?.isEmpty == true) {
+        data['vin'] = 'VIN-${DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      // Provide sensible defaults for columns the Dart model doesn't carry
+      // but that may lack server-side defaults on older DB instances.
+      data.putIfAbsent('is_active',    () => true);
+      data.putIfAbsent('health_score', () => 100);
+      data.putIfAbsent('fuel_type',    () => 'petrol');
+
       final response = await _client
           .from('vehicles')
-          // FIX: use toInsertJson() to avoid sending id/timestamps
-          .insert(vehicle.toInsertJson())
+          .insert(data)
           .select()
           .single();
-      return Vehicle.fromJson(response as Map<String, dynamic>);
+      return Vehicle.fromJson(response);
     } catch (e) {
-      print('Error creating vehicle: $e');
+      debugPrint('Error creating vehicle: $e');
+      return null;
+    }
+  }
+
+  /// Find an existing vehicle by VIN or create a new one automatically.
+  ///
+  /// Called by HomeScreen when the OBD adapter returns a VIN via Mode 09
+  /// PID 02 and NHTSA successfully decodes the make/model/year.
+  ///
+  /// If a vehicle with [vin] already exists in the fleet the existing record
+  /// is returned unchanged — no duplicate is created.
+  Future<Vehicle?> getOrCreateVehicleByVin({
+    required String vin,
+    required String make,
+    required String model,
+    required int    year,
+    String? fleetId,
+  }) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) {
+        debugPrint('getOrCreateVehicleByVin: no authenticated user');
+        return null;
+      }
+
+      // ── Resolve fleet_id if not provided ─────────────────────────────────
+      // Drivers created via "Create Driver" have a driver_accounts row with
+      // fleet_id.  If the caller didn't pass one, look it up now.
+      String? resolvedFleetId = fleetId;
+      if (resolvedFleetId == null) {
+        try {
+          final row = await _client
+              .from('driver_accounts')
+              .select('fleet_id')
+              .eq('user_id', userId)
+              .maybeSingle();
+          if (row != null) resolvedFleetId = row['fleet_id'] as String?;
+          if (resolvedFleetId == null) {
+            debugPrint('getOrCreateVehicleByVin: no driver_accounts row found for $userId — vehicle will be created without fleet_id');
+          }
+        } catch (e) {
+          // Non-fatal: driver may not be in driver_accounts (e.g. signed up directly).
+          // The vehicle will be created with fleet_id=null and can be backfilled later.
+          debugPrint('getOrCreateVehicleByVin: driver_accounts lookup failed: $e');
+        }
+      }
+
+      // ── Check for an existing vehicle ─────────────────────────────────────
+      // For driver-keyed VINs (Mode 09 not supported) search by owner_id so
+      // we never create duplicate "My Vehicle" records across reconnects.
+      List<dynamic> existingRows;
+      if (vin.startsWith('DRIVER-')) {
+        existingRows = await _client
+            .from('vehicles')
+            .select()
+            .eq('owner_id', userId)
+            .limit(1);
+      } else {
+        existingRows = await _client
+            .from('vehicles')
+            .select()
+            .eq('vin', vin)
+            .limit(1);
+      }
+
+      if (existingRows.isNotEmpty) {
+        debugPrint('Vehicle already registered — using existing record');
+        final existing = Vehicle.fromJson(existingRows.first as Map<String, dynamic>);
+        // If fleet_id was missing, backfill it now.
+        if (existing.fleetId == null && resolvedFleetId != null) {
+          await _client
+              .from('vehicles')
+              .update({'fleet_id': resolvedFleetId})
+              .eq('id', existing.id);
+          debugPrint('Backfilled fleet_id on vehicle ${existing.id}');
+        }
+        return existing;
+      }
+
+      // ── Create new vehicle record ─────────────────────────────────────────
+      final displayName = vin.startsWith('DRIVER-')
+          ? 'My Vehicle'
+          : '$year $make $model';
+
+      final insertData = <String, dynamic>{
+        'name':         displayName,
+        'vin':          vin,
+        'make':         make,
+        'model':        model,
+        'year':         year,
+        'owner_id':     userId,
+        'fleet_id':     resolvedFleetId,
+        'is_active':    true,
+        'health_score': 100,
+        'fuel_type':    'petrol',
+      };
+
+      final response = await _client
+          .from('vehicles')
+          .insert(insertData)
+          .select()
+          .single();
+
+      debugPrint('Auto-registered vehicle: $displayName ($vin)');
+      return Vehicle.fromJson(response);
+    } catch (e) {
+      // PostgreSQL unique-violation code 23505: the VIN already exists but our
+      // earlier SELECT missed it (possible RLS timing or race condition).
+      // Recover by fetching the existing row instead of failing entirely.
+      final msg = e.toString();
+      if (msg.contains('23505') || msg.contains('unique') || msg.contains('duplicate')) {
+        debugPrint('getOrCreateVehicleByVin: VIN already exists — fetching existing record for $vin');
+        try {
+          final lookupField = vin.startsWith('DRIVER-') ? 'owner_id' : 'vin';
+          final lookupValue = vin.startsWith('DRIVER-')
+              ? (_client.auth.currentUser?.id ?? '')
+              : vin;
+          final existing = await _client
+              .from('vehicles')
+              .select()
+              .eq(lookupField, lookupValue)
+              .limit(1)
+              .single();
+          return Vehicle.fromJson(existing);
+        } catch (fetchErr) {
+          debugPrint('getOrCreateVehicleByVin: recovery fetch also failed: $fetchErr');
+        }
+      }
+      debugPrint('getOrCreateVehicleByVin error: $e');
       return null;
     }
   }
@@ -224,14 +269,13 @@ class SupabaseService {
     try {
       final response = await _client
           .from('vehicles')
-          // FIX: use toUpdateJson() to only send mutable fields
-          .update(vehicle.toUpdateJson())
+          .update(vehicle.toJson())
           .eq('id', vehicle.id)
           .select()
           .single();
-      return Vehicle.fromJson(response as Map<String, dynamic>);
+      return Vehicle.fromJson(response);
     } catch (e) {
-      print('Error updating vehicle: $e');
+      debugPrint('Error updating vehicle: $e');
       return null;
     }
   }
@@ -241,12 +285,12 @@ class SupabaseService {
       await _client.from('vehicles').delete().eq('id', vehicleId);
       return true;
     } catch (e) {
-      print('Error deleting vehicle: $e');
+      debugPrint('Error deleting vehicle: $e');
       return false;
     }
   }
 
-  // ── THRESHOLDS ────────────────────────────────────────────────────────────
+  // ── Thresholds ────────────────────────────────────────────────────────────
 
   Future<List<Threshold>> getThresholds(String vehicleId) async {
     try {
@@ -254,11 +298,9 @@ class SupabaseService {
           .from('thresholds')
           .select()
           .eq('vehicle_id', vehicleId);
-      return (response as List)
-          .map((json) => Threshold.fromJson(json as Map<String, dynamic>))
-          .toList();
+      return (response as List).map((j) => Threshold.fromJson(j)).toList();
     } catch (e) {
-      print('Error fetching thresholds: $e');
+      debugPrint('Error fetching thresholds: $e');
       return [];
     }
   }
@@ -267,12 +309,12 @@ class SupabaseService {
     try {
       final response = await _client
           .from('thresholds')
-          .upsert(threshold.toUpsertJson(), onConflict: 'vehicle_id,sensor_type')
+          .insert(threshold.toJson())
           .select()
           .single();
-      return Threshold.fromJson(response as Map<String, dynamic>);
+      return Threshold.fromJson(response);
     } catch (e) {
-      print('Error upserting threshold: $e');
+      debugPrint('Error creating threshold: $e');
       return null;
     }
   }
@@ -281,313 +323,495 @@ class SupabaseService {
     try {
       final response = await _client
           .from('thresholds')
-          .update(threshold.toUpsertJson())
+          .update(threshold.toJson())
           .eq('id', threshold.id)
           .select()
           .single();
-      return Threshold.fromJson(response as Map<String, dynamic>);
+      return Threshold.fromJson(response);
     } catch (e) {
-      print('Error updating threshold: $e');
+      debugPrint('Error updating threshold: $e');
       return null;
     }
   }
 
-  // ── SENSOR HISTORY ───────────────────────────────────────────────────────
+  // ── Sensor data – BATCH write (1 Edge Function call per OBD poll cycle) ──
+  //
+  // Sending all readings from one poll cycle in a single HTTP request reduces
+  // Edge Function invocations from N (one per sensor) to 1.  On Supabase Free
+  // this extends the monthly invocation budget ~70×.
 
-  /// Fetches up to [limit] sensor readings for [vehicleId] from the last
-  /// [days] days, ordered oldest-first so charts render left→right.
-  /// Returns raw maps: { sensor_type, value, unit, timestamp }
-  Future<List<Map<String, dynamic>>> getSensorHistory({
-    required String vehicleId,
-    int days  = 7,
-    int limit = 4000,
-  }) async {
-    final since = DateTime.now().subtract(Duration(days: days));
+  Future<bool> saveSensorBatch(
+    String vehicleId,
+    Map<SensorType, SensorData> batch,
+  ) async {
+    if (batch.isEmpty) return true;
+
+    final readings = batch.values.map((sd) => {
+      'vehicle_id': vehicleId,
+      'sensor_type': sd.type.name,
+      'value': sd.value,
+      'unit': sd.unit,
+      'timestamp': sd.timestamp.toIso8601String(),
+    }).toList();
+
+    try {
+      // Single invocation for the entire poll cycle.
+      await _client.functions.invoke(
+        'sensor-api',
+        body: {'readings': readings},
+      );
+      // Update last_active_at so the dashboard shows live vs stale status.
+      await _updateLastActiveAt(vehicleId);
+      return true;
+    } catch (e) {
+      debugPrint('Batch Edge Function call failed ($e) – falling back to direct insert');
+      try {
+        await _client.from('sensor_data').insert(readings);
+        await _updateLastActiveAt(vehicleId);
+        return true;
+      } catch (innerError) {
+        debugPrint('Direct batch insert also failed ($innerError) – queuing for retry');
+        await _queue.enqueue(
+          rpc: 'sensor_batch',
+          params: {'vehicle_id': vehicleId, 'readings': readings},
+        );
+        return false;
+      }
+    }
+  }
+
+  /// Stamp the vehicle's last_connected column with the current UTC time.
+  /// Called on every successful sensor batch upload.
+  Future<void> _updateLastActiveAt(String vehicleId) async {
+    try {
+      await _client
+          .from('vehicles')
+          .update({'last_connected': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', vehicleId);
+    } catch (e) {
+      debugPrint('last_connected update error: $e');
+    }
+  }
+
+  /// Update the driver_accounts row to point at a new vehicle.
+  /// Called from HomeScreen after OBD auto-detects and registers a vehicle.
+  Future<void> updateDriverVehicle(String vehicleId) async {
+    try {
+      final userId = _client.auth.currentUser?.id;
+      if (userId == null) return;
+      await _client
+          .from('driver_accounts')
+          .update({'vehicle_id': vehicleId})
+          .eq('user_id', userId);
+      debugPrint('driver_accounts.vehicle_id updated to $vehicleId');
+    } catch (e) {
+      debugPrint('updateDriverVehicle error: $e');
+    }
+  }
+
+  /// Legacy single-reading save kept for compatibility (threshold alert path).
+  Future<bool> saveSensorData(String vehicleId, SensorData sensorData) async {
+    return saveSensorBatch(vehicleId, {sensorData.type: sensorData});
+  }
+
+  // ── Driver behavior ───────────────────────────────────────────────────────
+
+  /// Create a new driver_behavior session row when OBD connects.
+  /// Returns the row id so [SensorProvider] can update it incrementally.
+  Future<String?> createDriverBehaviorSession(
+    String vehicleId,
+    DateTime tripStart,
+  ) async {
     try {
       final response = await _client
-          .from('sensor_data')
-          .select('sensor_type, value, unit, timestamp')
-          .eq('vehicle_id', vehicleId)
-          .gte('timestamp', since.toIso8601String())
-          .order('timestamp', ascending: true)
-          .limit(limit);
-      return List<Map<String, dynamic>>.from(response as List);
-    } catch (e) {
-      debugPrint('getSensorHistory error: $e');
-      return [];
-    }
-  }
-
-  // ── SENSOR DATA ───────────────────────────────────────────────────────────
-
-  Future<bool> saveSensorData(
-    String vehicleId,
-    SensorData sensorData, {
-    String? driverAccountId,   // MOB-2: optional driver attribution
-  }) async {
-    final payload = <String, dynamic>{
-      'vehicle_id':   vehicleId,
-      'sensor_type':  sensorData.type.name,
-      'value':        sensorData.value,
-      'unit':         sensorData.unit,
-      'timestamp':    sensorData.timestamp.toIso8601String(),
-      if (driverAccountId != null) 'driver_account_id': driverAccountId,
-    };
-
-    // Primary path: edge function (handles anomaly detection + threshold checks)
-    try {
-      await _client.functions.invoke('sensor-api', body: payload);
-      return true;
-    } catch (e) {
-      print('sensor-api edge function failed: $e');
-    }
-
-    // Fallback: direct insert
-    try {
-      await _client.from('sensor_data').insert(payload);
-      return true;
-    } catch (e) {
-      print('Direct sensor insert also failed — queuing offline: $e');
-      await _enqueueOffline(payload);
-      return false;
-    }
-  }
-
-  // ── TRIPS ─────────────────────────────────────────────────────────────────
-
-  /// Saves a completed trip to the `trips` table.
-  /// Returns the new row UUID, or null if the insert fails.
-  Future<String?> saveTrip({
-    required String vehicleId,
-    String? driverAccountId,
-    required DateTime startTime,
-    required DateTime endTime,
-    required double distanceKm,
-    required int durationSeconds,
-    required double avgSpeedKmh,
-    required double maxSpeedKmh,
-    double? startLat,
-    double? startLng,
-    double? endLat,
-    double? endLng,
-  }) async {
-    try {
-      final response = await _client.from('trips').insert({
-        'vehicle_id':       vehicleId,
-        if (driverAccountId != null) 'driver_account_id': driverAccountId,
-        'start_time':       startTime.toIso8601String(),
-        'end_time':         endTime.toIso8601String(),
-        'distance_km':      distanceKm,
-        'duration_seconds': durationSeconds,
-        'avg_speed_kmh':    avgSpeedKmh,
-        'max_speed_kmh':    maxSpeedKmh,
-        if (startLat != null) 'start_lat': startLat,
-        if (startLng != null) 'start_lng': startLng,
-        if (endLat   != null) 'end_lat':   endLat,
-        if (endLng   != null) 'end_lng':   endLng,
-      }).select('id').single();
+          .from('driver_behavior')
+          .insert({
+            'vehicle_id':              vehicleId,
+            'trip_start':              tripStart.toUtc().toIso8601String(),
+            'harsh_braking_count':     0,
+            'harsh_acceleration_count': 0,
+            'excessive_rpm_count':     0,
+            'excessive_speed_count':   0,
+            'average_engine_load':     0.0,
+            'driver_score':            100.0,
+          })
+          .select()
+          .single();
+      debugPrint('driver_behavior session created: ${response['id']}');
       return response['id'] as String?;
     } catch (e) {
-      debugPrint('saveTrip error: $e');
+      debugPrint('createDriverBehaviorSession error: $e');
       return null;
     }
   }
 
-  // ── DRIVER BEHAVIOUR ──────────────────────────────────────────────────────
-
-  /// Saves a per-trip driver-behaviour summary to the `driver_behavior` table.
-  Future<void> saveDriverBehaviour({
-    required String vehicleId,
-    String? driverAccountId,
-    String? tripId,
-    required int harshBrakingCount,
-    required int harshAccelerationCount,
-    required int excessiveRpmCount,
-    required int excessiveSpeedCount,
-    required int overspeedCount,
-    required int idleTimeSeconds,
-    required double averageEngineLoad,
-    required double driverScore,
-    required DateTime tripStart,
-    required DateTime tripEnd,
+  /// Update the running driver_behavior session with latest event counts.
+  /// Score formula mirrors the fleet-intelligence Edge Function:
+  ///   score = 100 - (braking*2) - (accel*2) - (rpm*1) - (speed*3)  clamped [0, 100]
+  Future<void> updateDriverBehavior({
+    required String sessionId,
+    required int    harshBrakingCount,
+    required int    harshAccelCount,
+    required int    excessiveRpmCount,
+    required int    excessiveSpeedCount,
+    required double avgEngineLoad,
   }) async {
     try {
-      await _client.from('driver_behavior').insert({
-        'vehicle_id':               vehicleId,
-        if (driverAccountId != null) 'driver_account_id': driverAccountId,
-        if (tripId != null)          'trip_id':            tripId,
-        'harsh_braking_count':       harshBrakingCount,
-        'harsh_acceleration_count':  harshAccelerationCount,
-        'excessive_rpm_count':       excessiveRpmCount,
-        'excessive_speed_count':     excessiveSpeedCount,
-        'overspeed_count':           overspeedCount,
-        'idle_time_seconds':         idleTimeSeconds,
-        'average_engine_load':       averageEngineLoad,
-        'driver_score':              driverScore,
-        'trip_start':                tripStart.toIso8601String(),
-        'trip_end':                  tripEnd.toIso8601String(),
-      });
-      debugPrint('saveDriverBehaviour: saved (trip=$tripId)');
+      final score = (100
+              - harshBrakingCount   * 2
+              - harshAccelCount     * 2
+              - excessiveRpmCount   * 1
+              - excessiveSpeedCount * 3)
+          .clamp(0, 100)
+          .toDouble();
+      await _client.from('driver_behavior').update({
+        'harsh_braking_count':     harshBrakingCount,
+        'harsh_acceleration_count': harshAccelCount,
+        'excessive_rpm_count':     excessiveRpmCount,
+        'excessive_speed_count':   excessiveSpeedCount,
+        'average_engine_load':     avgEngineLoad,
+        'driver_score':            score,
+      }).eq('id', sessionId);
+      debugPrint('driver_behavior updated — score: $score');
     } catch (e) {
-      debugPrint('saveDriverBehaviour error: $e');
+      debugPrint('updateDriverBehavior error: $e');
     }
   }
 
-  // ── ALERTS ────────────────────────────────────────────────────────────────
+  /// Stamp trip_end on the session row when OBD disconnects.
+  Future<void> closeDriverBehaviorSession(String sessionId) async {
+    try {
+      await _client.from('driver_behavior').update({
+        'trip_end': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', sessionId);
+      debugPrint('driver_behavior session closed: $sessionId');
+    } catch (e) {
+      debugPrint('closeDriverBehaviorSession error: $e');
+    }
+  }
+
+  // ── Alerts ────────────────────────────────────────────────────────────────
 
   Future<void> createAlert(
     String vehicleId,
     SensorData sensorData,
-    String message, {
-    String severity = 'warning',
-  }) async {
+    String message,
+  ) async {
     try {
       await _client.from('alerts').insert({
-        'vehicle_id':   vehicleId,
-        'sensor_type':  sensorData.type.name,
-        'message':      message,
-        // FIX: was sending 'threshold_exceeded: true' — not a DB column
-        'severity':     severity,
-        'value':        sensorData.value,
+        'vehicle_id': vehicleId,
+        'sensor_type': sensorData.type.name,
+        'message': message,
+        'severity': 'warning',
+        'value': sensorData.value,
+        'threshold_exceeded': true,
       });
     } catch (e) {
-      print('Error creating alert: $e');
+      debugPrint('Error creating alert: $e');
     }
   }
 
-  // ── SENSOR REGISTRY ───────────────────────────────────────────────────────
+  // ── Anti-tamper / device-event reporting ──────────────────────────────────
 
-  /// Returns all sensors seen for a vehicle (auto-populated by DB trigger).
-  Future<List<Map<String, dynamic>>> getSensorRegistry(String vehicleId) async {
+  /// Report a device lifecycle event to Supabase.
+  ///
+  /// [eventType] must be one of: 'normal_disconnect', 'device_offline',
+  /// 'possible_tampering', 'device_reconnected'.
+  ///
+  /// Call with 'normal_disconnect' in [SensorProvider.stopMonitoring] so the
+  /// backend knows this was a graceful OBD disconnect and can distinguish it
+  /// from an unexpected data loss.
+  Future<void> reportNormalDisconnect(
+    String vehicleId, {
+    double? lastRpm,
+    String? offlineReason,
+  }) async {
+    await _rpcWithFallback('report_device_event', {
+      'p_vehicle_id':     vehicleId,
+      'p_event_type':     'normal_disconnect',
+      'p_last_rpm':       lastRpm,
+      'p_offline_reason': offlineReason,
+    });
+    debugPrint('reportNormalDisconnect: sent for $vehicleId (rpm: $lastRpm)');
+  }
+
+  /// Report a connectivity-loss event so the backend immediately knows
+  /// the reason before heartbeats stop arriving.
+  /// This intentionally does NOT use _rpcWithFallback — if we have no
+  /// connectivity the call will fail and we accept that; queueing a
+  /// connectivity_lost event to send later would be misleading.
+  Future<void> reportConnectivityLost(String vehicleId) async {
     try {
-      final response = await _client
-          .from('sensor_registry')
-          .select()
-          .eq('vehicle_id', vehicleId)
-          .order('reading_count', ascending: false);
-      return List<Map<String, dynamic>>.from(response as List);
+      await _client.rpc('report_device_event', params: {
+        'p_vehicle_id':     vehicleId,
+        'p_event_type':     'device_offline',
+        'p_offline_reason': 'connectivity_lost',
+      });
+      debugPrint('reportConnectivityLost: sent for $vehicleId');
     } catch (e) {
-      print('Error fetching sensor registry: $e');
+      debugPrint('reportConnectivityLost failed (expected if no internet): $e');
+    }
+  }
+
+  /// Send a heartbeat to Supabase — called every 10 seconds by HeartbeatService.
+  Future<void> sendHeartbeat({
+    required String  vehicleId,
+    double?          lat,
+    double?          lng,
+    bool             gpsAvailable = true,
+    String           networkType  = 'unknown',
+    int?             batteryLevel,
+  }) async {
+    try {
+      await _client.rpc('send_heartbeat', params: {
+        'p_vehicle_id':    vehicleId,
+        'p_lat':           lat,
+        'p_lng':           lng,
+        'p_gps_available': gpsAvailable,
+        'p_network_type':  networkType,
+        'p_battery_level': batteryLevel,
+      });
+    } catch (e) {
+      debugPrint('sendHeartbeat error: $e');
+    }
+  }
+
+  // ── Trip gap reporting ────────────────────────────────────────────────────
+
+  /// Report a trip gap — called by LocationService when no GPS fix is
+  /// received for > 5 minutes during an active trip.
+  Future<void> reportTripGap({
+    required String tripId,
+    required String vehicleId,
+    double? lastLat,
+    double? lastLng,
+  }) async {
+    await _rpcWithFallback('report_trip_gap', {
+      'p_trip_id':    tripId,
+      'p_vehicle_id': vehicleId,
+      'p_gap_start':  DateTime.now().toUtc().toIso8601String(),
+      'p_last_lat':   lastLat,
+      'p_last_lng':   lastLng,
+    });
+    debugPrint('reportTripGap: gap opened for trip $tripId');
+  }
+
+  /// Close a trip gap when GPS fixes resume — called by LocationService.
+  Future<void> closeTripGap({required String tripId}) async {
+    await _rpcWithFallback('close_trip_gap', {
+      'p_trip_id': tripId,
+      'p_gap_end': DateTime.now().toUtc().toIso8601String(),
+    });
+    debugPrint('closeTripGap: gap closed for trip $tripId');
+  }
+
+  // ── Tampering / mock GPS reporting ───────────────────────────────────────
+
+  /// Report a `possible_tampering` event with an optional reason and metadata.
+  /// Used by LocationService when it detects mock/fake GPS coordinates.
+  Future<void> reportPossibleTampering({
+    required String vehicleId,
+    required String reason,
+    Map<String, dynamic> metadata = const {},
+  }) async {
+    await _rpcWithFallback('report_device_event', {
+      'p_vehicle_id': vehicleId,
+      'p_event_type': 'possible_tampering',
+      'p_metadata':   {'reason': reason, ...metadata},
+    });
+    debugPrint('reportPossibleTampering: $reason for $vehicleId');
+  }
+
+  // ── Movement anomaly reporting ────────────────────────────────────────────
+
+  /// Report a movement anomaly detected on-device:
+  ///   gps_speed_mismatch  — GPS speed ≈ 0 but position changed
+  ///   excessive_idle      — engine on, no movement for > 15 min
+  Future<void> reportMovementAnomaly({
+    required String vehicleId,
+    required String eventType,
+    double? speedObdKmh,
+    double? speedGpsKmh,
+    double? movementDistanceM,
+    int?    idleDurationMins,
+    double? lastRpm,
+  }) async {
+    await _rpcWithFallback('report_device_event', {
+      'p_vehicle_id':          vehicleId,
+      'p_event_type':          eventType,
+      'p_last_rpm':            lastRpm,
+      'p_speed_obd_kmh':       speedObdKmh,
+      'p_speed_gps_kmh':       speedGpsKmh,
+      'p_movement_distance_m': movementDistanceM,
+      'p_idle_duration_mins':  idleDurationMins,
+    });
+    debugPrint('reportMovementAnomaly: $eventType for $vehicleId');
+  }
+
+  /// Resolve an open movement anomaly event — called when the condition clears
+  /// (e.g. vehicle starts moving after excessive idle).
+  Future<void> resolveMovementEvent(String vehicleId, String eventType) async {
+    try {
+      await _client.rpc('resolve_movement_event', params: {
+        'p_vehicle_id': vehicleId,
+        'p_event_type': eventType,
+      });
+      debugPrint('resolveMovementEvent: $eventType for $vehicleId');
+    } catch (e) {
+      debugPrint('resolveMovementEvent error: $e');
+    }
+  }
+
+  // ── Location / trip tracking ──────────────────────────────────────────────
+
+  /// Create a trip record in Supabase when the OBD session starts.
+  /// Returns the new trip id, or null on failure.
+  Future<String?> startTrip({
+    required String vehicleId,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      final response = await _client.rpc('start_trip', params: {
+        'p_vehicle_id': vehicleId,
+        'p_lat':        lat,
+        'p_lng':        lng,
+      });
+      return response as String?;
+    } catch (e) {
+      debugPrint('startTrip error: $e');
+      return null;
+    }
+  }
+
+  /// Close the current trip when the OBD session ends.
+  Future<void> endTrip({
+    required String tripId,
+    required double endLat,
+    required double endLng,
+    required double distanceKm,
+  }) async {
+    try {
+      await _client.rpc('end_trip', params: {
+        'p_trip_id':     tripId,
+        'p_end_lat':     endLat,
+        'p_end_lng':     endLng,
+        'p_distance_km': distanceKm,
+      });
+      debugPrint('endTrip: trip $tripId closed (${distanceKm.toStringAsFixed(2)} km)');
+    } catch (e) {
+      debugPrint('endTrip error: $e');
+    }
+  }
+
+  /// Record a single GPS position during an active trip.
+  Future<void> recordLocation({
+    required String  vehicleId,
+    required String  tripId,
+    required double  lat,
+    required double  lng,
+    double?          speed,
+    double?          heading,
+    double?          accuracy,
+    double?          altitude,
+    bool?            ignitionStatus,
+  }) async {
+    try {
+      await _client.rpc('record_vehicle_location', params: {
+        'p_vehicle_id':       vehicleId,
+        'p_trip_id':          tripId,
+        'p_lat':              lat,
+        'p_lng':              lng,
+        'p_speed':            speed,
+        'p_heading':          heading,
+        'p_accuracy':         accuracy,
+        'p_altitude':         altitude,
+        'p_ignition_status':  ignitionStatus,
+      });
+    } catch (e) {
+      debugPrint('recordLocation error: $e');
+    }
+  }
+
+  // ── Fuel event reporting ──────────────────────────────────────────────────
+
+  /// Report a refuel or fuel theft event detected on-device.
+  ///
+  /// [type]  must be one of: 'refuel', 'fuel_theft', 'excessive_idle'
+  /// [value] is the % change (rise for refuel, drop for theft)
+  Future<void> reportFuelEvent({
+    required String vehicleId,
+    required String type,
+    required double value,
+    required String message,
+    double? locationLat,
+    double? locationLng,
+  }) async {
+    try {
+      await _client.from('fuel_events').insert({
+        'vehicle_id':   vehicleId,
+        'type':         type,
+        'timestamp':    DateTime.now().toUtc().toIso8601String(),
+        'value':        value,
+        'message':      message,
+        if (locationLat != null) 'location_lat': locationLat,
+        if (locationLng != null) 'location_lng': locationLng,
+      });
+      debugPrint('reportFuelEvent: $type for vehicle $vehicleId (${value.toStringAsFixed(1)} %)');
+    } catch (e) {
+      debugPrint('reportFuelEvent error: $e');
+    }
+  }
+
+  // ── Geofence support ──────────────────────────────────────────────────────
+
+  /// Fetch all active geofences for [fleetId].
+  /// Returns a list of raw maps; [GeofenceService] converts them to typed objects.
+  Future<List<dynamic>> fetchGeofences({required String fleetId}) async {
+    try {
+      final response = await _client.rpc(
+        'get_fleet_geofences',
+        params: {'p_fleet_id': fleetId},
+      );
+      return (response as List?) ?? [];
+    } catch (e) {
+      debugPrint('fetchGeofences error: $e');
       return [];
     }
   }
 
-  // ── DEVICE HEALTH ─────────────────────────────────────────────────────────
-
-  Future<void> updateDeviceHealth({
-    required String vehicleId,
-    String deviceType = 'obd2',
-    String? deviceId,
-    int? signalStrength,
-    double? batteryLevel,
-    bool isOnline = true,
-    String? errorCode,
-    String? errorMessage,
+  /// Report a geofence boundary crossing (entry or exit) to the backend.
+  ///
+  /// The backend trigger on vehicle_locations also detects violations; this
+  /// mobile call is a fast-path that fires immediately on each GPS fix so
+  /// fleet managers see alerts within seconds rather than waiting for the
+  /// next trigger evaluation.
+  Future<void> reportGeofenceViolation({
+    required String  vehicleId,
+    required String  geofenceId,
+    required String  geofenceName,
+    required String  violationType, // 'exit' | 'enter'
+    required double  lat,
+    required double  lng,
+    String?          tripId,
+    double?          speedKmh,
   }) async {
     try {
-      await _client.from('device_health').upsert({
-        'vehicle_id':     vehicleId,
-        'device_type':    deviceType,
-        'device_id':      deviceId,
-        'signal_strength': signalStrength,
-        'battery_level':  batteryLevel,
-        'last_ping_at':   DateTime.now().toIso8601String(),
-        'is_online':      isOnline,
-        'error_code':     errorCode,
-        'error_message':  errorMessage,
-        'updated_at':     DateTime.now().toIso8601String(),
-      }, onConflict: 'vehicle_id,device_type');
-    } catch (e) {
-      print('Error updating device health: $e');
-    }
-  }
-
-  // ── VEHICLE LOGS (GPS heartbeat) ──────────────────────────────────────────
-
-  /// Saves a GPS + ignition heartbeat to vehicle_logs.
-  /// Called every 15 seconds from SensorProvider when monitoring is active.
-  Future<void> saveVehicleLog({
-    required String vehicleId,
-    required double latitude,
-    required double longitude,
-    double accuracy = 0,
-    double altitude = 0,
-    double speed = 0,
-    bool ignitionStatus = false,
-    bool isMockGps = false,
-    String? driverAccountId,   // MOB-2: optional driver attribution
-  }) async {
-    final payload = <String, dynamic>{
-      'vehicle_id':      vehicleId,
-      'speed':           speed,
-      'ignition_status': ignitionStatus,
-      'latitude':        latitude,
-      'longitude':       longitude,
-      'accuracy_metres': accuracy,
-      'altitude':        altitude,
-      'is_mock_gps':     isMockGps,
-      'timestamp':       DateTime.now().toIso8601String(),
-      if (driverAccountId != null) 'driver_account_id': driverAccountId,
-    };
-
-    try {
-      await _client.from('vehicle_logs').insert(payload);
-    } catch (e) {
-      print('saveVehicleLog error: $e');
-      // Queue offline — separate low-priority queue
-      await _enqueueOfflineLog(payload);
-    }
-  }
-
-  static const _offlineLogQueueKey = 'vehicle_log_offline_queue';
-
-  Future<void> _enqueueOfflineLog(Map<String, dynamic> payload) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_offlineLogQueueKey) ?? [];
-    raw.add(jsonEncode(payload));
-    if (raw.length > 200) raw.removeAt(0); // lower cap than sensor queue
-    await prefs.setStringList(_offlineLogQueueKey, raw);
-  }
-
-  Future<void> flushOfflineLogQueue() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_offlineLogQueueKey) ?? [];
-    if (raw.isEmpty) return;
-    final failed = <String>[];
-    for (final item in raw) {
-      try {
-        await _client.from('vehicle_logs').insert(jsonDecode(item));
-      } catch (_) {
-        failed.add(item);
-      }
-    }
-    await prefs.setStringList(_offlineLogQueueKey, failed);
-  }
-
-  // ── VEHICLE EVENTS (system events) ───────────────────────────────────────
-
-  /// Creates a system event record (device offline, tamper, unauthorized movement, etc.)
-  Future<void> createVehicleEvent({
-    required String vehicleId,
-    required String fleetId,
-    required String eventType,
-    required String title,
-    required String description,
-    String severity = 'warning',
-    Map<String, dynamic> metadata = const {},
-  }) async {
-    try {
-      await _client.from('vehicle_events').insert({
-        'vehicle_id':  vehicleId,
-        'fleet_id':    fleetId,
-        'event_type':  eventType,
-        'severity':    severity,
-        'title':       title,
-        'description': description,
-        'metadata':    metadata,
+      // The trigger already inserts into geofence_violations; we call
+      // report_device_event so the violation also appears in the existing
+      // alerts pipeline (AlertsPage, FleetOverview active alerts, etc.).
+      await _client.rpc('report_device_event', params: {
+        'p_vehicle_id':  vehicleId,
+        'p_event_type':  'geofence_violation',
+        'p_stop_lat':    lat,
+        'p_stop_lng':    lng,
       });
+      debugPrint(
+        'reportGeofenceViolation: $violationType "$geofenceName" '
+        'for vehicle $vehicleId',
+      );
     } catch (e) {
-      print('createVehicleEvent error: $e');
+      debugPrint('reportGeofenceViolation error: $e');
     }
   }
 }
