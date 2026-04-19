@@ -15,6 +15,10 @@ import {
   Fuel,
   Save,
   Loader,
+  ToggleLeft,
+  ToggleRight,
+  Globe,
+  Bell,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -82,7 +86,32 @@ interface DeviceHealth {
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
-type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings';
+type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings' | 'thresholds';
+
+// ─── Threshold sensor config ──────────────────────────────────────────────────
+
+const THRESHOLD_SENSORS = [
+  { key: 'rpm',                label: 'Engine RPM',             unit: 'RPM',  defaultMin: null, defaultMax: 4500 },
+  { key: 'speed',              label: 'Vehicle Speed',          unit: 'km/h', defaultMin: null, defaultMax: 120  },
+  { key: 'coolantTemp',        label: 'Coolant Temperature',    unit: '°C',   defaultMin: null, defaultMax: 105  },
+  { key: 'batteryVoltage',     label: 'Battery Voltage',        unit: 'V',    defaultMin: 11.5, defaultMax: null },
+  { key: 'controlModuleVoltage', label: 'Module Voltage',       unit: 'V',    defaultMin: 11.5, defaultMax: null },
+  { key: 'engineLoad',         label: 'Engine Load',            unit: '%',    defaultMin: null, defaultMax: 85   },
+  { key: 'fuelLevel',          label: 'Fuel Level',             unit: '%',    defaultMin: 15,   defaultMax: null },
+  { key: 'intakeAirTemp',      label: 'Intake Air Temperature', unit: '°C',   defaultMin: null, defaultMax: 65   },
+  { key: 'throttlePosition',   label: 'Throttle Position',      unit: '%',    defaultMin: null, defaultMax: null },
+  { key: 'maf',                label: 'Mass Air Flow',          unit: 'g/s',  defaultMin: null, defaultMax: null },
+  { key: 'fuelPressure',       label: 'Fuel Pressure',          unit: 'kPa',  defaultMin: null, defaultMax: null },
+  { key: 'engineOilTemp',      label: 'Engine Oil Temp',        unit: '°C',   defaultMin: null, defaultMax: 130  },
+];
+
+interface ThresholdRow {
+  sensor_type:   string;
+  min_value:     string;
+  max_value:     string;
+  alert_enabled: boolean;
+  dirty:         boolean;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -408,6 +437,15 @@ export default function AdminPage() {
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
 
+  // Threshold state
+  const [threshVehicles,    setThreshVehicles]    = useState<{ id: string; name: string }[]>([]);
+  const [threshVehicleId,   setThreshVehicleId]   = useState<string>('__fleet__');
+  const [thresholdRows,     setThresholdRows]     = useState<Map<string, ThresholdRow>>(new Map());
+  const [threshLoading,     setThreshLoading]     = useState(false);
+  const [threshSaving,      setThreshSaving]      = useState(false);
+  const [threshSaveOk,      setThreshSaveOk]      = useState(false);
+  const [threshError,       setThreshError]       = useState<string | null>(null);
+
   // Fleet context
   const [fleetId, setFleetId] = useState<string | null>(null);
 
@@ -517,6 +555,108 @@ export default function AdminPage() {
     }
   }, [fleetId]);
 
+  const loadFleetVehicles = useCallback(async () => {
+    if (!fleetId) return;
+    const { data } = await supabase
+      .from('vehicles')
+      .select('id, name')
+      .eq('fleet_id', fleetId)
+      .order('name');
+    setThreshVehicles(data ?? []);
+  }, [fleetId]);
+
+  const loadThresholds = useCallback(async (vehicleId: string) => {
+    if (!fleetId) return;
+    setThreshLoading(true);
+    setThreshError(null);
+    try {
+      const isFleet = vehicleId === '__fleet__';
+      const { data, error } = isFleet
+        ? await supabase.from('thresholds').select('*').eq('fleet_id', fleetId).is('vehicle_id', null)
+        : await supabase.from('thresholds').select('*').eq('vehicle_id', vehicleId);
+      if (error) throw error;
+
+      const rows = new Map<string, ThresholdRow>();
+      THRESHOLD_SENSORS.forEach(s => {
+        rows.set(s.key, {
+          sensor_type:   s.key,
+          min_value:     s.defaultMin != null ? String(s.defaultMin) : '',
+          max_value:     s.defaultMax != null ? String(s.defaultMax) : '',
+          alert_enabled: true,
+          dirty:         false,
+        });
+      });
+      for (const row of (data ?? [])) {
+        if (rows.has(row.sensor_type)) {
+          rows.set(row.sensor_type, {
+            sensor_type:   row.sensor_type,
+            min_value:     row.min_value != null ? String(row.min_value) : '',
+            max_value:     row.max_value != null ? String(row.max_value) : '',
+            alert_enabled: row.alert_enabled ?? true,
+            dirty:         false,
+          });
+        }
+      }
+      setThresholdRows(rows);
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Failed to load thresholds');
+    } finally {
+      setThreshLoading(false);
+    }
+  }, [fleetId]);
+
+  const saveThresholds = async () => {
+    if (!fleetId) return;
+    setThreshSaving(true);
+    setThreshSaveOk(false);
+    setThreshError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${session!.access_token}`,
+        'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY,
+      };
+      const baseUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/threshold-api`;
+      const isFleet = threshVehicleId === '__fleet__';
+
+      for (const row of Array.from(thresholdRows.values())) {
+        const payload: Record<string, unknown> = {
+          sensor_type:   row.sensor_type,
+          min_value:     row.min_value !== '' ? parseFloat(row.min_value) : null,
+          max_value:     row.max_value !== '' ? parseFloat(row.max_value) : null,
+          alert_enabled: row.alert_enabled,
+          ...(isFleet ? { fleet_id: fleetId } : { vehicle_id: threshVehicleId }),
+        };
+        const res = await fetch(baseUrl, { method: 'POST', headers, body: JSON.stringify(payload) });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error((body as any).error ?? `Save failed (${res.status})`);
+        }
+      }
+      setThreshSaveOk(true);
+      setThresholdRows(prev => {
+        const m = new Map(prev);
+        m.forEach((v, k) => m.set(k, { ...v, dirty: false }));
+        return m;
+      });
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Unexpected error');
+    } finally {
+      setThreshSaving(false);
+    }
+  };
+
+  const updateThreshRow = (key: string, field: keyof ThresholdRow, value: string | boolean) => {
+    setThresholdRows(prev => {
+      const m = new Map(prev);
+      const row = m.get(key);
+      if (row) m.set(key, { ...row, [field]: value, dirty: true });
+      return m;
+    });
+    setThreshSaveOk(false);
+  };
+
   useEffect(() => {
     if (!fleetId) return;
     if (activeTab === 'subscription')  loadSubscription();
@@ -524,7 +664,8 @@ export default function AdminPage() {
     if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
     if (activeTab === 'settings')      loadFuelPrice();
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice]);
+    if (activeTab === 'thresholds')    { loadFleetVehicles(); loadThresholds(threshVehicleId); }
+  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, loadFleetVehicles, loadThresholds, threshVehicleId]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
@@ -574,12 +715,13 @@ export default function AdminPage() {
   // ─── Tabs config ─────────────────────────────────────────────────────────────
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; locked?: boolean }[] = [
-    { id: 'subscription',  label: 'Subscription',   icon: <CreditCard size={15} /> },
-    { id: 'drivers',       label: 'Drivers',         icon: <Users size={15} /> },
-    { id: 'audit',         label: 'Audit Log',       icon: <Shield size={15} /> },
-    { id: 'device-health', label: 'Device Health',   icon: <Settings size={15} /> },
-    { id: 'api-access',    label: 'API Access',      icon: <Key size={15} />, locked: !hasApiAccess },
-    { id: 'settings',      label: 'Settings',         icon: <Settings size={15} /> },
+    { id: 'subscription',  label: 'Subscription',  icon: <CreditCard size={15} /> },
+    { id: 'drivers',       label: 'Drivers',        icon: <Users size={15} /> },
+    { id: 'thresholds',    label: 'Thresholds',     icon: <Bell size={15} /> },
+    { id: 'audit',         label: 'Audit Log',      icon: <Shield size={15} /> },
+    { id: 'device-health', label: 'Device Health',  icon: <Settings size={15} /> },
+    { id: 'api-access',    label: 'API Access',     icon: <Key size={15} />, locked: !hasApiAccess },
+    { id: 'settings',      label: 'Settings',       icon: <Settings size={15} /> },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -1037,6 +1179,117 @@ export default function AdminPage() {
       {/* ── Tab: API Access ────────────────────────────────────────────────────── */}
       {activeTab === 'api-access' && fleetId && (
         <ApiAccessTab fleetId={fleetId} />
+      )}
+
+      {/* ── Tab: Thresholds ───────────────────────────────────────────────────── */}
+      {activeTab === 'thresholds' && (
+        <div className="space-y-5 max-w-2xl">
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+
+            {/* Scope selector */}
+            <div className="flex flex-wrap items-center gap-3 mb-5">
+              <div className="flex items-center gap-2">
+                <Globe size={15} className="text-gray-400" />
+                <label className="text-sm text-gray-400 whitespace-nowrap">Apply to:</label>
+              </div>
+              <select
+                value={threshVehicleId}
+                onChange={e => {
+                  setThreshVehicleId(e.target.value);
+                  setThreshSaveOk(false);
+                  loadThresholds(e.target.value);
+                }}
+                className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="__fleet__">All fleet vehicles (fleet default)</option>
+                {threshVehicles.map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+              {threshVehicleId === '__fleet__' && (
+                <span className="text-xs text-purple-400 bg-purple-900/30 border border-purple-700/40 px-2 py-1 rounded-lg">
+                  Fleet-wide default — overridden by per-vehicle settings
+                </span>
+              )}
+            </div>
+
+            {/* Sensor rows header */}
+            <div className="grid grid-cols-[1fr_88px_88px_40px] gap-2 px-2 mb-2">
+              <span className="text-xs text-gray-500 uppercase tracking-wide">Sensor</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">Min</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">Max</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">On</span>
+            </div>
+
+            {threshLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader className="w-5 h-5 text-blue-400 animate-spin" />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {THRESHOLD_SENSORS.map(sensor => {
+                  const row = thresholdRows.get(sensor.key);
+                  if (!row) return null;
+                  return (
+                    <div
+                      key={sensor.key}
+                      className={`grid grid-cols-[1fr_88px_88px_40px] gap-2 items-center px-3 py-2.5 rounded-xl border ${
+                        row.dirty ? 'border-blue-700/50 bg-blue-900/10' : 'border-gray-800 bg-gray-800/30'
+                      }`}
+                    >
+                      <div>
+                        <p className="text-sm text-white font-medium">{sensor.label}</p>
+                        <p className="text-xs text-gray-500">{sensor.unit}</p>
+                      </div>
+                      <input
+                        type="number"
+                        value={row.min_value}
+                        onChange={e => updateThreshRow(sensor.key, 'min_value', e.target.value)}
+                        placeholder="—"
+                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="number"
+                        value={row.max_value}
+                        onChange={e => updateThreshRow(sensor.key, 'max_value', e.target.value)}
+                        placeholder="—"
+                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                      />
+                      <button
+                        onClick={() => updateThreshRow(sensor.key, 'alert_enabled', !row.alert_enabled)}
+                        className="flex justify-center"
+                        title={row.alert_enabled ? 'Alerts enabled' : 'Alerts disabled'}
+                      >
+                        {row.alert_enabled
+                          ? <ToggleRight className="w-6 h-6 text-green-400" />
+                          : <ToggleLeft  className="w-6 h-6 text-gray-600" />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {threshError && (
+              <p className="text-xs text-red-400 text-center mt-3">{threshError}</p>
+            )}
+
+            <button
+              onClick={saveThresholds}
+              disabled={threshSaving || threshLoading}
+              className="mt-5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium text-sm transition-colors"
+            >
+              {threshSaving
+                ? <Loader className="w-4 h-4 animate-spin" />
+                : threshSaveOk
+                  ? <CheckCircle className="w-4 h-4 text-green-300" />
+                  : <Save className="w-4 h-4" />}
+              {threshSaving ? 'Saving…' : threshSaveOk
+                ? (threshVehicleId === '__fleet__' ? 'Applied to fleet!' : 'Saved!')
+                : 'Save Thresholds'}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ── Tab: Settings ─────────────────────────────────────────────────────── */}
