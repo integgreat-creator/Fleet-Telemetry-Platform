@@ -299,7 +299,7 @@ serve(async (req) => {
       const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
         phone,
         email: email ?? undefined,
-        password: `VS_${invite.invite_token.substring(0, 12)}`, // temporary password from token
+        password: generateToken(), // crypto-random temporary password
         email_confirm: true,
         phone_confirm: true,
         user_metadata: { name: invite.vehicle_name, fleet_id: invite.fleet_id },
