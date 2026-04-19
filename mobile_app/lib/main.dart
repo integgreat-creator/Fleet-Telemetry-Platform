@@ -230,10 +230,10 @@ class _AppHomeState extends State<_AppHome> {
     );
   }
 
-  /// Parses `vehiclesense://join?token=<token>` and stores the token
+  /// Parses `ftpgo://join?token=<token>` and stores the token
   /// in [InviteProvider] so the router redirects to [InviteAcceptScreen].
   void _handleDeepLink(Uri uri) {
-    if (uri.scheme == 'vehiclesense' && uri.host == 'join') {
+    if (uri.scheme == 'ftpgo' && uri.host == 'join') {
       final token = uri.queryParameters['token'];
       if (token != null && token.isNotEmpty) {
         context.read<InviteProvider>().setPendingToken(token);

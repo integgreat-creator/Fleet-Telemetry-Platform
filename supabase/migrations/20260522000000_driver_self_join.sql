@@ -43,6 +43,8 @@ CREATE TRIGGER trg_fleet_join_code
 -- broader one that lets drivers search by join_code while managers still see
 -- their own fleet details.
 DROP POLICY IF EXISTS "Fleet managers can view their own fleets" ON fleets;
+DROP POLICY IF EXISTS "managers_view_own_fleets" ON fleets;
+DROP POLICY IF EXISTS "authenticated_lookup_fleet_by_join_code" ON fleets;
 
 CREATE POLICY "managers_view_own_fleets"
   ON fleets FOR SELECT TO authenticated
@@ -62,6 +64,8 @@ CREATE POLICY "authenticated_lookup_fleet_by_join_code"
 --
 -- Application logic (getFleetByJoinCode) validates the join_code before the
 -- INSERT — the DB constraint is just a safety net.
+
+DROP POLICY IF EXISTS "drivers_self_join_fleet" ON driver_accounts;
 
 CREATE POLICY "drivers_self_join_fleet"
   ON driver_accounts FOR INSERT TO authenticated

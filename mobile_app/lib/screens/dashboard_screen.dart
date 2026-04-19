@@ -7,7 +7,8 @@ import 'package:vehicle_telemetry/widgets/sensor_card.dart';
 import 'package:vehicle_telemetry/screens/threshold_config_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({Key? key}) : super(key: key);
+  final bool isObdConnected;
+  const DashboardScreen({Key? key, this.isObdConnected = false}) : super(key: key);
 
   // Sensors grouped by category
   static const Map<String, List<SensorType>> _categorySensors = {
@@ -128,7 +129,7 @@ class DashboardScreen extends StatelessWidget {
         final sensorData = sensorProvider.latestSensorData;
 
         if (sensorData.isEmpty) {
-          return _buildEmptyState();
+          return _buildEmptyState(isObdConnected);
         }
 
         return DefaultTabController(
@@ -197,29 +198,31 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 
-  // Empty state when no OBD data
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(bool obdConnected) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.sensors_off,
+          Icon(
+            obdConnected ? Icons.hourglass_top : Icons.sensors_off,
             size: 64,
             color: Colors.grey,
           ),
           const SizedBox(height: 16),
-          const Text(
-            'No sensor data available',
-            style: TextStyle(
+          Text(
+            obdConnected ? 'Waiting for sensor data…' : 'No sensor data available',
+            style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Connect to OBD-II to start monitoring',
+            obdConnected
+                ? 'Data will appear once the OBD-II adapter starts reporting'
+                : 'Connect to OBD-II to start monitoring',
             style: TextStyle(color: Colors.grey.shade600),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
