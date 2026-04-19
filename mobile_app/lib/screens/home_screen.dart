@@ -10,6 +10,7 @@ import 'package:vehicle_telemetry/screens/alerts_screen.dart';
 import 'package:vehicle_telemetry/screens/bluetooth_scan_screen.dart';
 import 'package:vehicle_telemetry/screens/dashboard_screen.dart';
 import 'package:vehicle_telemetry/screens/settings_screen.dart';
+import 'package:vehicle_telemetry/screens/trips_screen.dart';
 import 'package:vehicle_telemetry/screens/vehicle_list_screen.dart';
 import 'package:vehicle_telemetry/services/bluetooth_service.dart';
 import 'package:vehicle_telemetry/services/heartbeat_service.dart';
@@ -365,6 +366,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildDashboardTab(sensorProvider, vehicleProvider),
               const VehicleListScreen(),
               const AlertsScreen(),
+              const TripsScreen(),
               const SettingsScreen(),
             ],
           ),
@@ -404,6 +406,10 @@ class _HomeScreenState extends State<HomeScreen> {
               BottomNavigationBarItem(
                 icon: _buildAlertBadgeIcon(sensorProvider),
                 label: 'Alerts',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.route_outlined),
+                label: 'Trips',
               ),
               const BottomNavigationBarItem(
                 icon: Icon(Icons.settings),
