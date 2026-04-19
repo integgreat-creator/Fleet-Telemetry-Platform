@@ -455,7 +455,8 @@ export default function AlertsPage() {
             .subscribe();
         }
       }
-      if (vehiclesRes.data) setVehicles(vehiclesRes.data as Vehicle[]);
+      if (vehiclesRes.error) console.error('AlertsPage vehicles query failed:', vehiclesRes.error);
+      if (vehiclesRes.data)  setVehicles(vehiclesRes.data as Vehicle[]);
     } catch (e) {
       console.error('Error loading alerts/events:', e);
     } finally {
