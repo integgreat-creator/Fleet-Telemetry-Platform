@@ -555,49 +555,94 @@ export default function AdminPage() {
     }
   }, [fleetId]);
 
-  const loadFleetVehicles = useCallback(async () => {
+  // Builds a Map seeded with sensor defaults — always call this first so rows
+  // are never blank even if the DB query fails.
+  const buildDefaultRows = (): Map<string, ThresholdRow> => {
+    const m = new Map<string, ThresholdRow>();
+    THRESHOLD_SENSORS.forEach(s => {
+      m.set(s.key, {
+        sensor_type:   s.key,
+        min_value:     s.defaultMin != null ? String(s.defaultMin) : '',
+        max_value:     s.defaultMax != null ? String(s.defaultMax) : '',
+        alert_enabled: true,
+        dirty:         false,
+      });
+    });
+    return m;
+  };
+
+  // Merges saved DB rows into a default-seeded map and returns it.
+  const mergeDbRows = (defaults: Map<string, ThresholdRow>, dbRows: any[]): Map<string, ThresholdRow> => {
+    const m = new Map(defaults);
+    for (const row of dbRows) {
+      if (m.has(row.sensor_type)) {
+        m.set(row.sensor_type, {
+          sensor_type:   row.sensor_type,
+          min_value:     row.min_value != null ? String(row.min_value) : '',
+          max_value:     row.max_value != null ? String(row.max_value) : '',
+          alert_enabled: row.alert_enabled ?? true,
+          dirty:         false,
+        });
+      }
+    }
+    return m;
+  };
+
+  // Called when Thresholds tab first opens — loads vehicles + thresholds for
+  // the first vehicle. Defaults are shown immediately so the form is never blank.
+  const initThresholds = useCallback(async () => {
     if (!fleetId) return;
-    const { data } = await supabase
-      .from('vehicles')
-      .select('id, name')
-      .eq('fleet_id', fleetId)
-      .order('name');
-    setThreshVehicles(data ?? []);
+    setThreshLoading(true);
+    setThreshError(null);
+    setThresholdRows(buildDefaultRows());
+
+    try {
+      const { data: vehicleData } = await supabase
+        .from('vehicles').select('id, name').eq('fleet_id', fleetId).order('name');
+      const vehicles = vehicleData ?? [];
+      setThreshVehicles(vehicles);
+
+      const pickId = vehicles.length > 0 ? vehicles[0].id : '__fleet__';
+      setThreshVehicleId(pickId);
+
+      if (pickId === '__fleet__') {
+        // Fleet-level requires the migration — skip the load and keep defaults
+        setThreshError('Select a specific vehicle to configure thresholds, or run migration 20260521000000_thresholds_fleet_scope.sql to enable fleet-wide defaults.');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('thresholds').select('*').eq('vehicle_id', pickId);
+      if (error) throw error;
+      setThresholdRows(mergeDbRows(buildDefaultRows(), data ?? []));
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Failed to load thresholds');
+    } finally {
+      setThreshLoading(false);
+    }
   }, [fleetId]);
 
+  // Called from the vehicle-selector dropdown onChange.
   const loadThresholds = useCallback(async (vehicleId: string) => {
     if (!fleetId) return;
     setThreshLoading(true);
     setThreshError(null);
+    setThresholdRows(buildDefaultRows()); // show defaults immediately
+
     try {
       const isFleet = vehicleId === '__fleet__';
       const { data, error } = isFleet
         ? await supabase.from('thresholds').select('*').eq('fleet_id', fleetId).is('vehicle_id', null)
         : await supabase.from('thresholds').select('*').eq('vehicle_id', vehicleId);
-      if (error) throw error;
-
-      const rows = new Map<string, ThresholdRow>();
-      THRESHOLD_SENSORS.forEach(s => {
-        rows.set(s.key, {
-          sensor_type:   s.key,
-          min_value:     s.defaultMin != null ? String(s.defaultMin) : '',
-          max_value:     s.defaultMax != null ? String(s.defaultMax) : '',
-          alert_enabled: true,
-          dirty:         false,
-        });
-      });
-      for (const row of (data ?? [])) {
-        if (rows.has(row.sensor_type)) {
-          rows.set(row.sensor_type, {
-            sensor_type:   row.sensor_type,
-            min_value:     row.min_value != null ? String(row.min_value) : '',
-            max_value:     row.max_value != null ? String(row.max_value) : '',
-            alert_enabled: row.alert_enabled ?? true,
-            dirty:         false,
-          });
+      if (error) {
+        if (error.message?.includes('fleet_id')) {
+          setThreshError('Run migration 20260521000000_thresholds_fleet_scope.sql in Supabase Studio to enable fleet-wide thresholds.');
+        } else {
+          setThreshError(error.message);
         }
+        return;
       }
-      setThresholdRows(rows);
+      setThresholdRows(mergeDbRows(buildDefaultRows(), data ?? []));
     } catch (e: any) {
       setThreshError(e?.message ?? 'Failed to load thresholds');
     } finally {
@@ -664,8 +709,8 @@ export default function AdminPage() {
     if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
     if (activeTab === 'settings')      loadFuelPrice();
-    if (activeTab === 'thresholds')    { loadFleetVehicles(); loadThresholds(threshVehicleId); }
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, loadFleetVehicles, loadThresholds, threshVehicleId]);
+    if (activeTab === 'thresholds')    initThresholds();
+  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, initThresholds]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
