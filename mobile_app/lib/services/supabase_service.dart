@@ -814,4 +814,52 @@ class SupabaseService {
       debugPrint('reportGeofenceViolation error: $e');
     }
   }
+
+  // ── Fleet self-join ──────────────────────────────────────────────────────
+
+  /// Looks up a fleet by its 6-character join code.
+  /// Returns `{'id': String, 'name': String}` or null if not found.
+  Future<Map<String, String>?> getFleetByJoinCode(String code) async {
+    try {
+      final rows = await _client
+          .from('fleets')
+          .select('id, name')
+          .eq('join_code', code.trim().toUpperCase())
+          .limit(1);
+      if (rows.isEmpty) return null;
+      return {
+        'id':   rows.first['id']   as String,
+        'name': rows.first['name'] as String,
+      };
+    } catch (e) {
+      debugPrint('getFleetByJoinCode error: $e');
+      return null;
+    }
+  }
+
+  /// Creates a driver_accounts row for the current user in [fleetId].
+  /// Called after the driver confirms the fleet via join code.
+  Future<bool> selfJoinFleet({
+    required String fleetId,
+    required String name,
+    required String email,
+    String? phone,
+  }) async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return false;
+    try {
+      await _client.from('driver_accounts').insert({
+        'user_id':  userId,
+        'fleet_id': fleetId,
+        'name':     name,
+        'email':    email,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
+      });
+      debugPrint('selfJoinFleet: joined fleet $fleetId as $name');
+      return true;
+    } catch (e) {
+      debugPrint('selfJoinFleet error: $e');
+      return false;
+    }
+  }
 }

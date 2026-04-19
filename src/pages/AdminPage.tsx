@@ -19,6 +19,8 @@ import {
   ToggleRight,
   Globe,
   Bell,
+  Copy,
+  Link2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -532,7 +534,10 @@ export default function AdminPage() {
   const [threshError,       setThreshError]       = useState<string | null>(null);
 
   // Fleet context
-  const [fleetId, setFleetId] = useState<string | null>(null);
+  const [fleetId,       setFleetId]       = useState<string | null>(null);
+  const [fleetName,     setFleetName]     = useState<string>('');
+  const [fleetJoinCode, setFleetJoinCode] = useState<string>('');
+  const [joinCodeCopied, setJoinCodeCopied] = useState(false);
 
   // ── Fetch fleet on mount ────────────────────────────────────────────────────
 
@@ -542,13 +547,24 @@ export default function AdminPage() {
       if (!user) return;
       const { data } = await supabase
         .from('fleets')
-        .select('id')
+        .select('id, name, join_code')
         .eq('manager_id', user.id)
         .single();
-      if (data) setFleetId(data.id);
+      if (data) {
+        setFleetId(data.id);
+        setFleetName(data.name ?? '');
+        setFleetJoinCode(data.join_code ?? '');
+      }
     };
     fetchFleet();
   }, []);
+
+  const handleCopyJoinCode = () => {
+    if (!fleetJoinCode) return;
+    navigator.clipboard.writeText(fleetJoinCode);
+    setJoinCodeCopied(true);
+    setTimeout(() => setJoinCodeCopied(false), 2000);
+  };
 
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
 
@@ -683,7 +699,7 @@ export default function AdminPage() {
 
     try {
       const { data: vehicleData } = await supabase
-        .from('vehicles').select('id, name').eq('fleet_id', fleetId).order('name');
+        .from('vehicles').select('id, name').order('name');
       const vehicles = vehicleData ?? [];
       setThreshVehicles(vehicles);
 
@@ -1440,6 +1456,50 @@ export default function AdminPage() {
       {/* ── Tab: Settings ─────────────────────────────────────────────────────── */}
       {activeTab === 'settings' && (
         <div className="max-w-lg space-y-6">
+
+          {/* Fleet join code card */}
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-500/15 rounded-lg">
+                <Link2 className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <p className="text-white font-semibold">Fleet Join Code</p>
+                <p className="text-gray-400 text-xs">
+                  Share this code with drivers so they can join your fleet from the mobile app — no invite needed.
+                </p>
+              </div>
+            </div>
+
+            {fleetName && (
+              <p className="text-xs text-gray-500">
+                Fleet: <span className="text-gray-300 font-medium">{fleetName}</span>
+              </p>
+            )}
+
+            <div className="flex items-center gap-3">
+              <div className="flex-1 flex items-center justify-center bg-gray-800 border border-gray-700 rounded-xl py-4">
+                <span className="text-3xl font-mono font-bold tracking-[0.3em] text-white">
+                  {fleetJoinCode || '——'}
+                </span>
+              </div>
+              <button
+                onClick={handleCopyJoinCode}
+                disabled={!fleetJoinCode}
+                className="flex flex-col items-center gap-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl transition-colors disabled:opacity-40"
+                title="Copy join code"
+              >
+                {joinCodeCopied
+                  ? <CheckCircle className="w-5 h-5 text-green-400" />
+                  : <Copy className="w-5 h-5 text-gray-400" />}
+                <span className="text-[10px] text-gray-500">{joinCodeCopied ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Drivers open the FTPGo mobile app → tap <span className="text-gray-400">Join Fleet</span> → enter this code to be added to your fleet automatically.
+            </p>
+          </div>
 
           {/* Fuel price card */}
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-5">

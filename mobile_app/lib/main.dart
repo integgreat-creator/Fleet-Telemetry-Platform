@@ -12,6 +12,7 @@ import 'package:vehicle_telemetry/providers/subscription_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/home_screen.dart';
 import 'package:vehicle_telemetry/screens/invite_accept_screen.dart';
+import 'package:vehicle_telemetry/screens/join_fleet_screen.dart';
 import 'package:vehicle_telemetry/screens/login_screen.dart';
 import 'package:vehicle_telemetry/services/notification_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -250,7 +251,12 @@ class _AppHomeState extends State<_AppHome> {
           return InviteAcceptScreen(token: invite.pendingToken!);
         }
 
-        // Authenticated driver / fleet manager → main app
+        // Authenticated but not yet in any fleet → join fleet
+        if (auth.noFleetLinked) {
+          return const JoinFleetScreen();
+        }
+
+        // Authenticated driver in a fleet → main app
         if (auth.isAuthenticated) {
           return const HomeScreen();
         }
