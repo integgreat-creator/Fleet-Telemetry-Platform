@@ -9,7 +9,7 @@ import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/alerts_screen.dart';
 import 'package:vehicle_telemetry/screens/bluetooth_scan_screen.dart';
 import 'package:vehicle_telemetry/screens/dashboard_screen.dart';
-import 'package:vehicle_telemetry/screens/settings_screen.dart';
+import 'package:vehicle_telemetry/screens/profile_screen.dart';
 import 'package:vehicle_telemetry/screens/trips_screen.dart';
 import 'package:vehicle_telemetry/screens/vehicle_list_screen.dart';
 import 'package:vehicle_telemetry/services/bluetooth_service.dart';
@@ -367,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const VehicleListScreen(),
               const AlertsScreen(),
               const TripsScreen(),
-              const SettingsScreen(),
+              const ProfileScreen(),
             ],
           ),
           floatingActionButton: _currentTab == 0
