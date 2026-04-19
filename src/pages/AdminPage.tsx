@@ -90,20 +90,105 @@ type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access'
 
 // ─── Threshold sensor config ──────────────────────────────────────────────────
 
-const THRESHOLD_SENSORS = [
-  { key: 'rpm',                label: 'Engine RPM',             unit: 'RPM',  defaultMin: null, defaultMax: 4500 },
-  { key: 'speed',              label: 'Vehicle Speed',          unit: 'km/h', defaultMin: null, defaultMax: 120  },
-  { key: 'coolantTemp',        label: 'Coolant Temperature',    unit: '°C',   defaultMin: null, defaultMax: 105  },
-  { key: 'batteryVoltage',     label: 'Battery Voltage',        unit: 'V',    defaultMin: 11.5, defaultMax: null },
-  { key: 'controlModuleVoltage', label: 'Module Voltage',       unit: 'V',    defaultMin: 11.5, defaultMax: null },
-  { key: 'engineLoad',         label: 'Engine Load',            unit: '%',    defaultMin: null, defaultMax: 85   },
-  { key: 'fuelLevel',          label: 'Fuel Level',             unit: '%',    defaultMin: 15,   defaultMax: null },
-  { key: 'intakeAirTemp',      label: 'Intake Air Temperature', unit: '°C',   defaultMin: null, defaultMax: 65   },
-  { key: 'throttlePosition',   label: 'Throttle Position',      unit: '%',    defaultMin: null, defaultMax: null },
-  { key: 'maf',                label: 'Mass Air Flow',          unit: 'g/s',  defaultMin: null, defaultMax: null },
-  { key: 'fuelPressure',       label: 'Fuel Pressure',          unit: 'kPa',  defaultMin: null, defaultMax: null },
-  { key: 'engineOilTemp',      label: 'Engine Oil Temp',        unit: '°C',   defaultMin: null, defaultMax: 130  },
+type SensorDef = { key: string; label: string; unit: string; defaultMin: number | null; defaultMax: number | null };
+
+const THRESHOLD_SENSOR_GROUPS: Array<{ category: string; sensors: SensorDef[] }> = [
+  {
+    category: 'Engine & Core',
+    sensors: [
+      { key: 'rpm',              label: 'Engine RPM',            unit: 'RPM',     defaultMin: null, defaultMax: 4500 },
+      { key: 'coolantTemp',      label: 'Coolant Temperature',   unit: '°C',      defaultMin: null, defaultMax: 105  },
+      { key: 'coolantTemp2',     label: 'Coolant Temp 2',        unit: '°C',      defaultMin: null, defaultMax: 105  },
+      { key: 'engineLoad',       label: 'Engine Load',           unit: '%',       defaultMin: null, defaultMax: 85   },
+      { key: 'engineOilTemp',    label: 'Engine Oil Temp',       unit: '°C',      defaultMin: null, defaultMax: 130  },
+      { key: 'timingAdvance',    label: 'Timing Advance',        unit: '° BTDC',  defaultMin: -20,  defaultMax: 45   },
+      { key: 'manifoldPressure', label: 'Manifold Pressure',     unit: 'kPa',     defaultMin: 20,   defaultMax: 105  },
+      { key: 'exhaustGasTempBank1', label: 'Exhaust Gas Temp',   unit: '°C',      defaultMin: null, defaultMax: 850  },
+      { key: 'actualEngineTorque',  label: 'Actual Engine Torque', unit: '%',     defaultMin: null, defaultMax: null },
+      { key: 'enginePercentTorque', label: 'Engine Torque %',    unit: '%',       defaultMin: null, defaultMax: null },
+      { key: 'absoluteLoad',     label: 'Absolute Load',         unit: '%',       defaultMin: null, defaultMax: 90   },
+    ],
+  },
+  {
+    category: 'Fuel & Emissions',
+    sensors: [
+      { key: 'fuelLevel',               label: 'Fuel Level',              unit: '%',    defaultMin: 15,   defaultMax: null },
+      { key: 'fuelPressure',            label: 'Fuel Pressure',           unit: 'kPa',  defaultMin: 200,  defaultMax: 600  },
+      { key: 'fuelRailAbsolutePressure',label: 'Fuel Rail Pressure',      unit: 'kPa',  defaultMin: null, defaultMax: 5000 },
+      { key: 'engineFuelRate',          label: 'Engine Fuel Rate',        unit: 'L/h',  defaultMin: null, defaultMax: 30   },
+      { key: 'cylinderFuelRate',        label: 'Cylinder Fuel Rate',      unit: 'mg/s', defaultMin: null, defaultMax: null },
+      { key: 'shortFuelTrim',           label: 'Short-Term Fuel Trim',    unit: '%',    defaultMin: -15,  defaultMax: 15   },
+      { key: 'longFuelTrim',            label: 'Long-Term Fuel Trim',     unit: '%',    defaultMin: -10,  defaultMax: 10   },
+      { key: 'ethanolFuelPercent',      label: 'Ethanol Fuel %',          unit: '%',    defaultMin: null, defaultMax: 85   },
+      { key: 'catalystTempBank1',       label: 'Catalyst Temp Bank 1',    unit: '°C',   defaultMin: null, defaultMax: 900  },
+      { key: 'o2Sensor1Voltage',        label: 'O2 Sensor 1 Voltage',     unit: 'V',    defaultMin: 0.1,  defaultMax: 0.9  },
+      { key: 'o2Sensor2Voltage',        label: 'O2 Sensor 2 Voltage',     unit: 'V',    defaultMin: 0.1,  defaultMax: 0.9  },
+      { key: 'commandedEGR',            label: 'Commanded EGR',           unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'egrError',                label: 'EGR Error',               unit: '%',    defaultMin: -10,  defaultMax: 10   },
+      { key: 'commandedEvapPurge',      label: 'Evap Purge',              unit: '%',    defaultMin: null, defaultMax: null },
+    ],
+  },
+  {
+    category: 'Speed & Movement',
+    sensors: [
+      { key: 'speed',                      label: 'Vehicle Speed',              unit: 'km/h', defaultMin: null, defaultMax: 120  },
+      { key: 'throttlePosition',           label: 'Throttle Position',          unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'relativeThrottlePosition',   label: 'Relative Throttle Position', unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'absoluteThrottlePositionB',  label: 'Absolute Throttle B',        unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'commandedThrottleActuator',  label: 'Commanded Throttle',         unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'relativeAcceleratorPosition',label: 'Relative Accelerator Pos',   unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'distanceSinceMIL',           label: 'Distance Since MIL On',      unit: 'km',   defaultMin: null, defaultMax: 0    },
+    ],
+  },
+  {
+    category: 'Air Intake',
+    sensors: [
+      { key: 'intakeAirTemp',      label: 'Intake Air Temperature', unit: '°C',  defaultMin: null, defaultMax: 65  },
+      { key: 'maf',                label: 'Mass Air Flow',          unit: 'g/s', defaultMin: null, defaultMax: null },
+      { key: 'barometricPressure', label: 'Barometric Pressure',    unit: 'kPa', defaultMin: 75,   defaultMax: 108 },
+      { key: 'ambientTemp',        label: 'Ambient Temperature',    unit: '°C',  defaultMin: -40,  defaultMax: 60  },
+    ],
+  },
+  {
+    category: 'Electrical',
+    sensors: [
+      { key: 'batteryVoltage',       label: 'Battery Voltage',    unit: 'V', defaultMin: 11.5, defaultMax: 14.8 },
+      { key: 'controlModuleVoltage', label: 'Module Voltage',     unit: 'V', defaultMin: 11.5, defaultMax: 14.8 },
+    ],
+  },
+  {
+    category: 'Transmission & Drivetrain',
+    sensors: [
+      { key: 'transmissionFluidTemp',  label: 'Transmission Fluid Temp', unit: '°C',  defaultMin: null, defaultMax: 120  },
+      { key: 'transmissionTurbineSpeed',label: 'Turbine Speed',          unit: 'RPM', defaultMin: null, defaultMax: 4000 },
+      { key: 'transmissionTorque',     label: 'Transmission Torque',     unit: '%',   defaultMin: null, defaultMax: null },
+      { key: 'transmissionGear',       label: 'Current Gear',            unit: '',    defaultMin: null, defaultMax: null },
+    ],
+  },
+  {
+    category: 'CNG (Compressed Natural Gas)',
+    sensors: [
+      { key: 'cngCylinderPressure', label: 'CNG Cylinder Pressure', unit: 'bar', defaultMin: 20,  defaultMax: 250 },
+      { key: 'cngFuelLevel',        label: 'CNG Fuel Level',        unit: '%',   defaultMin: 10,  defaultMax: null },
+      { key: 'cngTemperature',      label: 'CNG Temperature',       unit: '°C',  defaultMin: null, defaultMax: 60  },
+    ],
+  },
+  {
+    category: 'Electric Vehicle (EV)',
+    sensors: [
+      { key: 'evBatteryLevel',   label: 'EV Battery Level',    unit: '%',   defaultMin: 20,  defaultMax: null },
+      { key: 'evBatteryTemp',    label: 'EV Battery Temp',     unit: '°C',  defaultMin: null, defaultMax: 45   },
+      { key: 'evBatteryVoltage', label: 'EV Battery Voltage',  unit: 'V',   defaultMin: 280, defaultMax: 420  },
+      { key: 'evBatteryCurrent', label: 'EV Battery Current',  unit: 'A',   defaultMin: null, defaultMax: 200  },
+      { key: 'evRangeEstimate',  label: 'EV Range Estimate',   unit: 'km',  defaultMin: 30,  defaultMax: null },
+      { key: 'evMotorTemp',      label: 'EV Motor Temp',       unit: '°C',  defaultMin: null, defaultMax: 80   },
+      { key: 'evMotorRpm',       label: 'EV Motor RPM',        unit: 'RPM', defaultMin: null, defaultMax: 15000 },
+    ],
+  },
 ];
+
+// Flat list derived from groups — used by buildDefaultRows and saveThresholds
+const THRESHOLD_SENSORS = THRESHOLD_SENSOR_GROUPS.flatMap(g => g.sensors);
 
 interface ThresholdRow {
   sensor_type:   string;
@@ -1228,7 +1313,7 @@ export default function AdminPage() {
 
       {/* ── Tab: Thresholds ───────────────────────────────────────────────────── */}
       {activeTab === 'thresholds' && (
-        <div className="space-y-5 max-w-2xl">
+        <div className="space-y-5 max-w-3xl">
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
 
             {/* Scope selector */}
@@ -1258,57 +1343,72 @@ export default function AdminPage() {
               )}
             </div>
 
-            {/* Sensor rows header */}
-            <div className="grid grid-cols-[1fr_88px_88px_40px] gap-2 px-2 mb-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wide">Sensor</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">Min</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">Max</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wide text-center">On</span>
-            </div>
-
             {threshLoading ? (
               <div className="flex items-center justify-center py-10">
                 <Loader className="w-5 h-5 text-blue-400 animate-spin" />
               </div>
             ) : (
-              <div className="space-y-1.5">
-                {THRESHOLD_SENSORS.map(sensor => {
-                  const row = thresholdRows.get(sensor.key);
-                  if (!row) return null;
+              <div className="space-y-5">
+                {THRESHOLD_SENSOR_GROUPS.map(group => {
+                  const visibleSensors = group.sensors.filter(s => thresholdRows.has(s.key));
+                  if (visibleSensors.length === 0) return null;
                   return (
-                    <div
-                      key={sensor.key}
-                      className={`grid grid-cols-[1fr_88px_88px_40px] gap-2 items-center px-3 py-2.5 rounded-xl border ${
-                        row.dirty ? 'border-blue-700/50 bg-blue-900/10' : 'border-gray-800 bg-gray-800/30'
-                      }`}
-                    >
-                      <div>
-                        <p className="text-sm text-white font-medium">{sensor.label}</p>
-                        <p className="text-xs text-gray-500">{sensor.unit}</p>
+                    <div key={group.category}>
+                      {/* Category header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-blue-400">{group.category}</p>
+                        <div className="flex-1 h-px bg-gray-800" />
+                        {/* Column labels — only shown on first group to save space */}
                       </div>
-                      <input
-                        type="number"
-                        value={row.min_value}
-                        onChange={e => updateThreshRow(sensor.key, 'min_value', e.target.value)}
-                        placeholder="—"
-                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
-                      />
-                      <input
-                        type="number"
-                        value={row.max_value}
-                        onChange={e => updateThreshRow(sensor.key, 'max_value', e.target.value)}
-                        placeholder="—"
-                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
-                      />
-                      <button
-                        onClick={() => updateThreshRow(sensor.key, 'alert_enabled', !row.alert_enabled)}
-                        className="flex justify-center"
-                        title={row.alert_enabled ? 'Alerts enabled' : 'Alerts disabled'}
-                      >
-                        {row.alert_enabled
-                          ? <ToggleRight className="w-6 h-6 text-green-400" />
-                          : <ToggleLeft  className="w-6 h-6 text-gray-600" />}
-                      </button>
+                      {/* Column labels */}
+                      <div className="grid grid-cols-[1fr_88px_88px_40px] gap-2 px-2 mb-1.5">
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide">Sensor</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">Min</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">Max</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">On</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {group.sensors.map(sensor => {
+                          const row = thresholdRows.get(sensor.key);
+                          if (!row) return null;
+                          return (
+                            <div
+                              key={sensor.key}
+                              className={`grid grid-cols-[1fr_88px_88px_40px] gap-2 items-center px-3 py-2.5 rounded-xl border ${
+                                row.dirty ? 'border-blue-700/50 bg-blue-900/10' : 'border-gray-800 bg-gray-800/30'
+                              }`}
+                            >
+                              <div>
+                                <p className="text-sm text-white font-medium">{sensor.label}</p>
+                                {sensor.unit && <p className="text-xs text-gray-500">{sensor.unit}</p>}
+                              </div>
+                              <input
+                                type="number"
+                                value={row.min_value}
+                                onChange={e => updateThreshRow(sensor.key, 'min_value', e.target.value)}
+                                placeholder="—"
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                              />
+                              <input
+                                type="number"
+                                value={row.max_value}
+                                onChange={e => updateThreshRow(sensor.key, 'max_value', e.target.value)}
+                                placeholder="—"
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                              />
+                              <button
+                                onClick={() => updateThreshRow(sensor.key, 'alert_enabled', !row.alert_enabled)}
+                                className="flex justify-center"
+                                title={row.alert_enabled ? 'Alerts enabled' : 'Alerts disabled'}
+                              >
+                                {row.alert_enabled
+                                  ? <ToggleRight className="w-6 h-6 text-green-400" />
+                                  : <ToggleLeft  className="w-6 h-6 text-gray-600" />}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 })}
