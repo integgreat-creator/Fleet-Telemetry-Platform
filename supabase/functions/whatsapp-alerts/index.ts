@@ -20,9 +20,10 @@ const SERVICE_ROLE_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WHATSAPP_ACCESS_TOKEN = Deno.env.get("WHATSAPP_ACCESS_TOKEN") ?? "";
 const PHONE_NUMBER_ID       = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") ?? "";
 const WA_API_URL            = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
+const ALLOWED_ORIGIN        = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
@@ -60,13 +61,36 @@ serve(async (req) => {
     });
   }
 
+  // Create admin client early so we can use it for timezone lookup + DB update.
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  // Look up the fleet's configured timezone via the vehicle_event → fleet join.
+  let fleetTimezone = "Asia/Kolkata";
+  if (event_id) {
+    const { data: evtRow } = await admin
+      .from("vehicle_events")
+      .select("fleet_id")
+      .eq("id", event_id)
+      .maybeSingle();
+    if (evtRow?.fleet_id) {
+      const { data: fleetRow } = await admin
+        .from("fleets")
+        .select("timezone")
+        .eq("id", evtRow.fleet_id)
+        .maybeSingle();
+      if (fleetRow?.timezone) fleetTimezone = fleetRow.timezone;
+    }
+  }
+
   // Normalise number to E.164 (remove spaces, dashes; ensure + prefix)
   const normalised = whatsapp_number.replace(/[\s\-\(\)]/g, "");
   const toNumber   = normalised.startsWith("+") ? normalised : `+${normalised}`;
 
   const emoji   = EVENT_EMOJIS[event_type] ?? "⚠️";
   const now     = new Date().toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
+    timeZone: fleetTimezone,
     hour: "2-digit",
     minute: "2-digit",
     day: "2-digit",
@@ -78,7 +102,7 @@ serve(async (req) => {
     ``,
     `*Vehicle:* ${vehicle_name}${vehicle_vin ? ` (${vehicle_vin})` : ""}`,
     `*Event:* ${description}`,
-    `*Time:* ${now} IST`,
+    `*Time:* ${now} (${fleetTimezone})`,
     ``,
     `Log in to FTPGo dashboard to view details and acknowledge this alert.`,
   ].join("\n");
@@ -121,9 +145,6 @@ serve(async (req) => {
 
   // Mark event as sent in DB
   if (event_id) {
-    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
     await admin
       .from("vehicle_events")
       .update({

@@ -4,7 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vehicle_telemetry/config/app_colors.dart';
 import 'package:vehicle_telemetry/providers/auth_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
+import 'package:vehicle_telemetry/screens/activity_screen.dart';
 import 'package:vehicle_telemetry/screens/login_screen.dart';
+import 'package:vehicle_telemetry/screens/maintenance_screen.dart';
 import 'package:vehicle_telemetry/screens/vehicle_list_screen.dart';
 import 'package:vehicle_telemetry/services/notification_service.dart';
 
@@ -93,6 +95,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 subtitle: 'Notify when sensor values exceed thresholds',
                 value: _alertsEnabled,
                 onChanged: _toggleAlerts,
+              ),
+
+              const SizedBox(height: 20),
+
+              // ── MORE ──────────────────────────────────────────────────────
+              _SectionLabel('MORE'),
+              _IconTile(
+                icon: Icons.bar_chart_rounded,
+                title: 'Activity',
+                subtitle: 'Sensor history for the last 7 days',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ActivityScreen()),
+                ),
+                showChevron: true,
+              ),
+              const SizedBox(height: 8),
+              _IconTile(
+                icon: Icons.build_rounded,
+                title: 'Maintenance',
+                subtitle: 'Scheduled services and upcoming checks',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MaintenanceScreen()),
+                ),
+                showChevron: true,
               ),
 
               const SizedBox(height: 20),
