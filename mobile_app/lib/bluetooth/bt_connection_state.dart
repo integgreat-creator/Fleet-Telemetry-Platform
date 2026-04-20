@@ -3,4 +3,5 @@ enum BtConnectionState {
   connecting,
   connected,
   error,
+  failed,
 }

@@ -8,6 +8,8 @@ class AppColors {
   // ── Backgrounds ────────────────────────────────────────────────────────────
   /// Main scaffold background — very dark navy-black
   static const Color bgPrimary    = Color(0xFF090E1A);
+  /// Alias for bgPrimary — scaffold/base background
+  static const Color bgBase       = Color(0xFF090E1A);
   /// Card / list-tile background
   static const Color bgCard       = Color(0xFF0F1829);
   /// Slightly lighter card variant (nested items, dialogs)

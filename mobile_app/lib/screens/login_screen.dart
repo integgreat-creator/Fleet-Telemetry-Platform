@@ -243,14 +243,18 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (sheetCtx) => _QrScannerSheet(
         onTokenDetected: (raw) {
           Navigator.of(sheetCtx).pop();
-          // ftpgo://auth?token=<one-time-token>  → exchange for email + auto-login
-          // ftpgo://join?token=<invite-token>    → existing QR invite flow
-          // ftpgo://auth?data=<base64>           → legacy format
           if (raw.startsWith('ftpgo://auth?token=')) {
+            // Create-driver QR: one-time token → exchange for email + auto-fill
             final token = raw.substring('ftpgo://auth?token='.length);
             _exchangeOneTimeToken(context, token);
-          } else {
-            context.read<InviteProvider>().setPendingToken(raw);
+          } else if (raw.startsWith('ftpgo://join?token=')) {
+            // Invite QR: fleet invite token → accept invite screen
+            final token = raw.substring('ftpgo://join?token='.length);
+            context.read<InviteProvider>().setPendingToken(token);
+          } else if (raw.startsWith('ftpgo://auth?data=')) {
+            // Legacy format: strip prefix, treat as invite token
+            final token = raw.substring('ftpgo://auth?data='.length);
+            context.read<InviteProvider>().setPendingToken(token);
           }
         },
         onManualEntry: () {
@@ -383,20 +387,13 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
       final raw = barcode.rawValue;
       if (raw == null) continue;
 
-      String? token;
+      final recognized = raw.startsWith('ftpgo://join?token=') ||
+                         raw.startsWith('ftpgo://auth?token=') ||
+                         raw.startsWith('ftpgo://auth?data=');
 
-      // Pattern 1: ftpgo://join?token=<token>
-      if (raw.startsWith('ftpgo://join?token=')) {
-        token = raw.substring('ftpgo://join?token='.length);
-      }
-      // Pattern 2: ftpgo://auth?data=<base64url>
-      else if (raw.startsWith('ftpgo://auth?data=')) {
-        token = raw.substring('ftpgo://auth?data='.length);
-      }
-
-      if (token != null && token.isNotEmpty) {
+      if (recognized) {
         _scanned = true;
-        widget.onTokenDetected(token);
+        widget.onTokenDetected(raw); // full URL — let callback route by scheme
         return;
       }
     }

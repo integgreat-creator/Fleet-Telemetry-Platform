@@ -68,6 +68,7 @@ class ConnectionStatusWidget extends StatelessWidget {
       case BtConnectionState.disconnected:
         return AppColors.statusDisconnected;
       case BtConnectionState.error:
+      case BtConnectionState.failed:
         return AppColors.statusError;
     }
   }
@@ -81,6 +82,7 @@ class ConnectionStatusWidget extends StatelessWidget {
       case BtConnectionState.disconnected:
         return Icons.bluetooth_disabled_rounded;
       case BtConnectionState.error:
+      case BtConnectionState.failed:
         return Icons.error_outline_rounded;
     }
   }
@@ -98,6 +100,8 @@ class ConnectionStatusWidget extends StatelessWidget {
         return 'Disconnected';
       case BtConnectionState.error:
         return 'Error';
+      case BtConnectionState.failed:
+        return 'Failed';
     }
   }
 }

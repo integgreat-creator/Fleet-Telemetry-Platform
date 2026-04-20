@@ -6,6 +6,12 @@ import '../services/bluetooth_service.dart';
 class BluetoothScanScreen extends StatefulWidget {
   const BluetoothScanScreen({super.key});
 
+  static Future<bool?> show(BuildContext context) {
+    return Navigator.of(context).push<bool?>(
+      MaterialPageRoute(builder: (_) => const BluetoothScanScreen()),
+    );
+  }
+
   @override
   State<BluetoothScanScreen> createState() => _BluetoothScanScreenState();
 }

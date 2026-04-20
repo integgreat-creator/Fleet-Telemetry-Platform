@@ -233,9 +233,9 @@ class _HomeScreenState extends State<HomeScreen> {
     debugPrint('HomeScreen: tracking restored for vehicle $vehicleId after kill/reboot');
   }
 
-  void _startMonitoring() {
+  Future<void> _startMonitoring() async {
     final vehicle = _vehicleProvider.selectedVehicle;
-    _sensorProvider.startMonitoring(
+    await _sensorProvider.startMonitoring(
       vehicle?.id,
       vehicle?.name,
       vehicle != null ? _vehicleProvider.selectedVehicleThresholds : const [],
