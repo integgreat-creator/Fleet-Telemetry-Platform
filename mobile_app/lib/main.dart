@@ -215,7 +215,7 @@ class _AppHomeState extends State<_AppHome> {
   Future<void> _initDeepLinks() async {
     _appLinks = AppLinks();
 
-    // Cold-start: app opened directly from the vehiclesense:// link
+    // Cold-start: app opened directly from the ftpgo:// link
     try {
       final initialUri = await _appLinks.getInitialLink();
       if (initialUri != null) _handleDeepLink(initialUri);

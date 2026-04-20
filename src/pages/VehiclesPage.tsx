@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle,
-         Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X } from 'lucide-react';
+         Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X, AlertTriangle } from 'lucide-react';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
@@ -44,6 +44,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const [credDriver,        setCredDriver]        = useState<DriverAccount | null>(null);
   const [regenLoading,      setRegenLoading]      = useState(false);
   const [copiedCredLink,    setCopiedCredLink]    = useState(false);
+  const [deleteError,       setDeleteError]       = useState('');
   const credQrRef = useRef<HTMLCanvasElement>(null);
 
   const loadAll = useCallback(async () => {
@@ -95,8 +96,14 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
   const handleDeleteVehicle = async (id: string) => {
     if (!confirm('Delete this vehicle? This cannot be undone.')) return;
-    const { error } = await supabase.from('vehicles').delete().eq('id', id);
-    if (!error) setVehicles(v => v.filter(x => x.id !== id));
+    try {
+      const { error } = await supabase.from('vehicles').delete().eq('id', id);
+      if (error) { setDeleteError(`Failed to delete vehicle: ${error.message}`); return; }
+      setVehicles(v => v.filter(x => x.id !== id));
+      setDeleteError('');
+    } catch (e: any) {
+      setDeleteError(`Unexpected error: ${e?.message ?? 'please try again'}`);
+    }
   };
 
   const handleDeleteDriver = async (driverId: string) => {
@@ -145,7 +152,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
     const url = canvas.toDataURL('image/png');
     const a   = document.createElement('a');
     a.href     = url;
-    a.download = `vehiclesense-qr-${driverName.replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.download = `ftpgo-qr-${driverName.replace(/\s+/g, '-').toLowerCase()}.png`;
     a.click();
   };
 
@@ -159,6 +166,14 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
   return (
     <div className="space-y-8">
+
+      {/* Delete error banner */}
+      {deleteError && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          {deleteError}
+        </div>
+      )}
 
       {/* ── Header ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -361,7 +376,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
         const token     = credDriver.one_time_login_token;
         const expiry    = credDriver.one_time_login_token_exp;
         const isExpired = !token || (expiry ? new Date(expiry) < new Date() : true);
-        const deepLink  = token ? `vehiclesense://auth?token=${token}` : '';
+        const deepLink  = token ? `ftpgo://auth?token=${token}` : '';
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-4">
@@ -469,13 +484,13 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
           <div className="bg-gray-800 rounded-xl p-8 max-w-sm w-full mx-4">
             <h3 className="text-white font-bold text-lg mb-4 text-center">Resend Invite QR</h3>
             <div className="flex justify-center mb-4">
-              <QRCodeSVG value={`vehiclesense://join?token=${resendToken}`} size={200} />
+              <QRCodeSVG value={`ftpgo://join?token=${resendToken}`} size={200} />
             </div>
             <p className="text-gray-400 text-sm text-center mb-4 break-all">
-              vehiclesense://join?token={resendToken}
+              ftpgo://join?token={resendToken}
             </p>
             <button
-              onClick={() => { navigator.clipboard.writeText(`vehiclesense://join?token=${resendToken}`); }}
+              onClick={() => { navigator.clipboard.writeText(`ftpgo://join?token=${resendToken}`); }}
               className="w-full bg-teal-600 hover:bg-teal-500 text-white py-2 rounded-lg mb-2"
             >
               Copy Link

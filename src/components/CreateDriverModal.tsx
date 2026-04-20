@@ -65,7 +65,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
     const url = canvas.toDataURL('image/png');
     const a   = document.createElement('a');
     a.href     = url;
-    a.download = `vehiclesense-qr-${name.trim().replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.download = `ftpgo-qr-${name.trim().replace(/\s+/g, '-').toLowerCase()}.png`;
     a.click();
   };
 
@@ -257,7 +257,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
                   <div className="bg-white p-3 rounded-xl inline-block">
                     <QRCodeCanvas
                       ref={qrRef}
-                      value={`vehiclesense://auth?token=${createdToken}`}
+                      value={`ftpgo://auth?token=${createdToken}`}
                       size={180}
                       bgColor="#ffffff"
                       fgColor="#000000"
@@ -269,7 +269,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
                 {/* Share & Download row */}
                 <div className="flex gap-2">
                   <button
-                    onClick={() => copy(`vehiclesense://auth?token=${createdToken}`, 'link')}
+                    onClick={() => copy(`ftpgo://auth?token=${createdToken}`, 'link')}
                     className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
                   >
                     {copiedLink

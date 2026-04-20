@@ -231,6 +231,8 @@ class SensorProvider extends ChangeNotifier {
                 'SensorProvider: thresholds reloaded via Realtime — '
                 '${_thresholds.length} rules active',
               );
+            }).catchError((e) {
+              debugPrint('SensorProvider: threshold reload failed — $e (retaining previous thresholds)');
             });
           },
         )

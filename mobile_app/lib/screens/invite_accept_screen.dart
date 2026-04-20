@@ -221,7 +221,7 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
         children: [
           const SizedBox(height: 16),
 
-          // VehicleSense branding header
+          // FTPGo branding header
           Center(
             child: Column(
               children: [
@@ -244,7 +244,7 @@ class _InviteAcceptScreenState extends State<InviteAcceptScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'VehicleSense',
+                  'FTPGo',
                   style: TextStyle(
                     color: Color(0xFF00BFA5),
                     fontSize: 22,

@@ -285,15 +285,19 @@ serve(async (req) => {
     const phone = invite.driver_phone as string;
     const email = invite.driver_email as string | null;
 
-    // Try to find an existing user by phone or email
+    // Try to find an existing auth user by phone or email
     let existingUserId: string | null = null;
 
-    if (email) {
+    if (email || phone) {
       const { data: listData } = await adminClient.auth.admin.listUsers();
       const match = listData?.users?.find((u: { email?: string; phone?: string; id: string }) =>
-        u.email === email || u.phone === phone
+        (email && u.email === email) || u.phone === phone
       );
-      if (match) existingUserId = match.id;
+      // Only reuse if the user actually exists in auth (guards against orphaned driver_accounts)
+      if (match?.id) {
+        const { data: verifiedUser } = await adminClient.auth.admin.getUserById(match.id);
+        existingUserId = verifiedUser?.user?.id ?? null;
+      }
     }
 
     if (!existingUserId) {

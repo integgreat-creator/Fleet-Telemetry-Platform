@@ -52,7 +52,14 @@ Deno.serve(async (req: Request) => {
 
         if (limitErr) throw limitErr;
 
-        const check = limitData as { allowed: boolean; reason?: string; plan?: string };
+        const check = limitData as { allowed?: boolean; reason?: string; plan?: string } | null;
+        if (!check || typeof check.allowed !== 'boolean') {
+          // RPC returned unexpected shape — fail safe by blocking creation
+          return new Response(
+            JSON.stringify({ error: 'Unable to verify vehicle limit; please try again' }),
+            { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
         if (!check.allowed) {
           return new Response(
             JSON.stringify({ error: check.reason ?? 'Vehicle limit reached', plan: check.plan }),

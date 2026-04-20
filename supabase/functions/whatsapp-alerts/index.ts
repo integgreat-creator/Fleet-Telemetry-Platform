@@ -80,7 +80,13 @@ serve(async (req) => {
         .select("timezone")
         .eq("id", evtRow.fleet_id)
         .maybeSingle();
-      if (fleetRow?.timezone) fleetTimezone = fleetRow.timezone;
+      if (fleetRow?.timezone) {
+        fleetTimezone = fleetRow.timezone;
+      } else {
+        console.warn(`whatsapp-alerts: timezone not set for fleet ${evtRow.fleet_id} — falling back to Asia/Kolkata`);
+      }
+    } else {
+      console.warn(`whatsapp-alerts: could not resolve fleet_id for event ${event_id} — falling back to Asia/Kolkata`);
     }
   }
 

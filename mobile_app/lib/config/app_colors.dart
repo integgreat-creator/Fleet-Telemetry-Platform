@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Centralised dark-navy colour palette matching the VehicleSense brand theme.
+/// Centralised dark-navy colour palette matching the FTPGo brand theme.
 /// Every screen and widget imports from here so a single change propagates app-wide.
 class AppColors {
   AppColors._();
