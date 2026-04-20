@@ -7,7 +7,7 @@ export default function AnalyticsPage() {
   const [driverBehavior, setDriverBehavior] = useState<DriverBehavior[]>([]);
   const [prevDriverBehavior, setPrevDriverBehavior] = useState<DriverBehavior[]>([]);
   const [sensorHistory, setSensorHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<string>('all');
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
 

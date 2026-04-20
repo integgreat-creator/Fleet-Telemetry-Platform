@@ -102,7 +102,7 @@ function TripDetailPanel({
 }) {
   const [expenses, setExpenses] = useState<TripExpenses | null>(null);
   const [revenue, setRevenue]   = useState<TripRevenue | null>(null);
-  const [loading, setLoading]   = useState(true);
+  const [loading, setLoading]   = useState(false);
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState('');
 
@@ -299,7 +299,7 @@ function TripDetailPanel({
 export default function TripsPage() {
   const [trips, setTrips]             = useState<TripWithExtras[]>([]);
   const [vehicles, setVehicles]       = useState<Vehicle[]>([]);
-  const [loading, setLoading]         = useState(true);
+  const [loading, setLoading]         = useState(false);
   const [vehicleFilter, setVehicleFilter] = useState('all');
   const [statusFilter, setStatusFilter]   = useState<'all' | 'active' | 'completed'>('all');
   const [activeTab, setActiveTab]     = useState<'trips' | 'profit'>('trips');

@@ -84,7 +84,7 @@ const severityDotClass: Record<Alert['severity'], string> = {
 export default function AnomalyFeedPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [vehicleFilter, setVehicleFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<'all' | Alert['severity']>('all');

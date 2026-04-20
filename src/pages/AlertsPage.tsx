@@ -432,7 +432,7 @@ export default function AlertsPage() {
   const [alerts, setAlerts]           = useState<Alert[]>([]);
   const [events, setEvents]           = useState<VehicleEvent[]>([]);
   const [vehicles, setVehicles]       = useState<Vehicle[]>([]);
-  const [loading, setLoading]         = useState(true);
+  const [loading, setLoading]         = useState(false);
   const [filter, setFilter]           = useState<'all' | 'critical' | 'warning' | 'info'>('all');
   const [showAcknowledged, setShowAcknowledged] = useState(false);
   const [mutationError, setMutationError]       = useState('');

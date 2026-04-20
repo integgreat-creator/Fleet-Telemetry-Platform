@@ -22,7 +22,7 @@ export default function CostAnalyticsPage() {
   const [predictions, setPredictions] = useState<CostPrediction[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [costInsights, setCostInsights] = useState<CostInsight[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {

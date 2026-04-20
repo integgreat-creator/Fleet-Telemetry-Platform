@@ -180,7 +180,7 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
 export default function FleetMapPage() {
   // ── Shared state ────────────────────────────────────────────────────────
   const [vehicles,        setVehicles]        = useState<Vehicle[]>([]);
-  const [loading,         setLoading]         = useState(true);
+  const [loading,         setLoading]         = useState(false);
   const [mode,            setMode]            = useState<'live' | 'history'>('live');
 
   // ── Live-mode state ─────────────────────────────────────────────────────

@@ -44,7 +44,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
   const [alerts, setAlerts]               = useState<Alert[]>([]);
   const [allRecentAlerts, setAllRecent]   = useState<AlertWithVehicle[]>([]);
   const [vehicleEvents, setVehicleEvents] = useState<any[]>([]);
-  const [loading, setLoading]             = useState(true);
+  const [loading, setLoading]             = useState(false);
   const [refreshing, setRefreshing]       = useState(false);
   const [timeFilter, setTimeFilter]       = useState<TimeFilter>('7d');
   const [lastUpdated, setLastUpdated]     = useState<Date>(new Date());
