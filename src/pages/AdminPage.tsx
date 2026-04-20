@@ -845,9 +845,9 @@ export default function AdminPage() {
 
   const handleUpgrade = (plan: string) => {
     if (plan === 'enterprise') {
-      alert('Contact us at sales@vehiclesense.in to upgrade to Enterprise.');
+      alert('Contact us at sales@ftpgo.app to upgrade to Enterprise.');
     } else {
-      alert(`Razorpay payment for ${plan} plan — contact sales@vehiclesense.in or integrate Razorpay Checkout to proceed.`);
+      alert(`Razorpay payment for ${plan} plan — contact sales@ftpgo.app or integrate Razorpay Checkout to proceed.`);
     }
   };
 
