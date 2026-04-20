@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:vehicle_telemetry/config/app_colors.dart';
+import 'package:vehicle_telemetry/config/supabase_config.dart';
 
 class TripDetailScreen extends StatefulWidget {
   final Map<String, dynamic> trip;
@@ -54,7 +55,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   }
 
   String get _edgeBase {
-    final url = Supabase.instance.client.supabaseUrl;
+    final url = SupabaseConfig.supabaseUrl;
     return '$url/functions/v1/trip-expense-api';
   }
 

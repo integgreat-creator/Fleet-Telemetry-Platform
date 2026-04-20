@@ -64,11 +64,11 @@ class SensorProvider extends ChangeNotifier {
   /// are always displayed on the dashboard; Supabase upload, threshold alerts,
   /// driver-behavior detection, and Realtime threshold sync are only active
   /// when a vehicle is provided.
-  void startMonitoring([
+  Future<void> startMonitoring([
     String?         vehicleId,
     String?         vehicleName,
     List<Threshold> thresholds = const [],
-  ]) {
+  ]) async {
     if (_batchSubscription != null) return;
 
     _currentVehicleId   = vehicleId;
@@ -156,7 +156,7 @@ class SensorProvider extends ChangeNotifier {
       _batchSubscription?.cancel();
       _batchSubscription = null;
     }
-    startMonitoring(vehicleId, vehicleName, thresholds);
+    unawaited(startMonitoring(vehicleId, vehicleName, thresholds));
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -248,16 +248,16 @@ class SensorProvider extends ChangeNotifier {
     final threshold = _thresholds.firstWhere(
       (t) => t.sensorType == sensorData.type,
       orElse: () => Threshold(
-        id:         '',
-        vehicleId:  '',
-        sensorType: sensorData.type,
-        enabled:    false,
-        createdAt:  DateTime.now(),
-        updatedAt:  DateTime.now(),
+        id:           '',
+        vehicleId:    '',
+        sensorType:   sensorData.type,
+        alertEnabled: false,
+        createdAt:    DateTime.now(),
+        updatedAt:    DateTime.now(),
       ),
     );
 
-    if (threshold.enabled && threshold.isViolated(sensorData.value)) {
+    if (threshold.alertEnabled && threshold.isViolated(sensorData.value)) {
       final warned = sensorData.copyWith(isWarning: true);
       _latestSensorData[sensorData.type] = warned;
 

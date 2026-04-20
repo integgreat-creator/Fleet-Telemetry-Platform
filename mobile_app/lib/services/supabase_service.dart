@@ -862,4 +862,53 @@ class SupabaseService {
       return false;
     }
   }
+
+  Future<int> getOfflineQueueLength() async {
+    return _queue.pendingCount;
+  }
+
+  Future<void> flushOfflineQueue() async {
+    try {
+      await _queue.flush((rpc, params) async {
+        try {
+          await _client.rpc(rpc, params: params);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      });
+    } catch (e) {
+      debugPrint('flushOfflineQueue error: $e');
+    }
+  }
+
+  Future<Map<Vehicle, List<Threshold>>> getVehiclesWithThresholds() async {
+    final vehicles = await getVehicles();
+    final result = <Vehicle, List<Threshold>>{};
+    for (final vehicle in vehicles) {
+      result[vehicle] = await getThresholds(vehicle.id);
+    }
+    return result;
+  }
+
+  Future<List<Map<String, dynamic>>> getSensorHistory({
+    required String vehicleId,
+    required int days,
+    required int limit,
+  }) async {
+    try {
+      final cutoff = DateTime.now().subtract(Duration(days: days));
+      final response = await _client
+          .from('sensor_data')
+          .select()
+          .eq('vehicle_id', vehicleId)
+          .gte('timestamp', cutoff.toIso8601String())
+          .order('timestamp', ascending: false)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(response as List);
+    } catch (e) {
+      debugPrint('getSensorHistory error: $e');
+      return [];
+    }
+  }
 }
