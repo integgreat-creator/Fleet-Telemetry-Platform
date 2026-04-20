@@ -85,7 +85,13 @@ function AppInner() {
     const timeout = setTimeout(() => setLoading(false), 5000);
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const u = session?.user ?? null;
+      // Proactively refresh the token so all subsequent page queries
+      // run with a guaranteed fresh token and don't hang mid-query.
+      let u = session?.user ?? null;
+      if (u) {
+        const { data: refreshed } = await supabase.auth.refreshSession();
+        u = refreshed.session?.user ?? u;
+      }
       setUser(u);
       if (u) {
         const { data } = await supabase

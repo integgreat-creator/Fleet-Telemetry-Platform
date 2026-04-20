@@ -12,7 +12,7 @@ interface VehicleFuelStats {
 export default function FuelAnalyticsPage() {
   const [insights, setInsights] = useState<CostInsight[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   useEffect(() => {

@@ -35,7 +35,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const [vehicles,          setVehicles]          = useState<Vehicle[]>([]);
   const [drivers,           setDrivers]           = useState<DriverAccount[]>([]);
   const [fleetId,           setFleetId]           = useState<string | null>(null);
-  const [loading,           setLoading]           = useState(true);
+  const [loading,           setLoading]           = useState(false);
   const [refreshing,        setRefreshing]        = useState(false);
   const [showDriverModal,   setShowDriverModal]   = useState(false);
   const [showAddVehicle,    setShowAddVehicle]    = useState(false);   // WEB-1

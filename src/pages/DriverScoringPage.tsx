@@ -11,7 +11,7 @@ interface BehaviorWithVehicle extends DriverBehavior {
 
 export default function DriverScoringPage() {
   const [behaviors, setBehaviors] = useState<BehaviorWithVehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadData();
