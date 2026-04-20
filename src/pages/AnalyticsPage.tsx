@@ -108,7 +108,7 @@ export default function AnalyticsPage() {
   );
 
   const avgEngineLoad = sensorHistory
-    .filter(s => s.sensor_type === 'engineLoad')
+    .filter(s => s.sensor_type === 'engine_load')
     .reduce((sum, s, _, arr) => sum + s.value / arr.length, 0);
 
   // AI Metric Calculations
