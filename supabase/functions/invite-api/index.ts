@@ -28,8 +28,10 @@ const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
@@ -299,7 +301,7 @@ serve(async (req) => {
       const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
         phone,
         email: email ?? undefined,
-        password: `VS_${invite.invite_token.substring(0, 12)}`, // temporary password from token
+        password: generateToken(), // crypto-random temporary password
         email_confirm: true,
         phone_confirm: true,
         user_metadata: { name: invite.vehicle_name, fleet_id: invite.fleet_id },

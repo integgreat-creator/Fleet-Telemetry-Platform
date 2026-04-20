@@ -482,6 +482,11 @@ export default function AlertsPage() {
       ? { ...e, acknowledged: true, acknowledged_at: new Date().toISOString() } : e));
   };
 
+  const handleDeleteAlert = async (alertId: string) => {
+    await supabase.from('alerts').delete().eq('id', alertId);
+    setAlerts(prev => prev.filter(a => a.id !== alertId));
+  };
+
   const filteredAlerts = alerts.filter(a => {
     if (!showAcknowledged && a.acknowledged) return false;
     if (filter === 'all') return true;
@@ -618,7 +623,7 @@ export default function AlertsPage() {
         ) : (
           <div className="space-y-3">
             {filteredAlerts.map(alert => (
-              <AlertCard key={alert.id} alert={alert} onAcknowledge={handleAcknowledge} />
+              <AlertCard key={alert.id} alert={alert} onAcknowledge={handleAcknowledge} onDelete={handleDeleteAlert} />
             ))}
           </div>
         )

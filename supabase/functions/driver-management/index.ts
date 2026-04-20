@@ -28,7 +28,7 @@ const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;
 const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;
-const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://vehiclesense.app";
+const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://ftpgo.app";
 
 // Origin-reflective CORS — reads ALLOWED_ORIGINS env var (comma-separated).
 // Falls back to '*' when unset so local dev still works.
@@ -125,9 +125,9 @@ async function sendWelcomeEmail(opts: {
         "Content-Type":  "application/json",
       },
       body: JSON.stringify({
-        from:    "VehicleSense <noreply@vehiclesense.app>",
+        from:    "FTPGo <noreply@ftpgo.app>",
         to:      [opts.driverEmail],
-        subject: `Welcome to ${opts.fleetName} — Your VehicleSense credentials`,
+        subject: `Welcome to ${opts.fleetName} — Your FTPGo credentials`,
         html,
       }),
     });
