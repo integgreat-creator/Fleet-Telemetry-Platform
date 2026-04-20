@@ -81,6 +81,9 @@ function AppInner() {
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
 
   useEffect(() => {
+    // Safety net: if getSession() hangs (e.g. stale token refresh), unblock after 5 s
+    const timeout = setTimeout(() => setLoading(false), 5000);
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       const u = session?.user ?? null;
       setUser(u);
@@ -92,6 +95,10 @@ function AppInner() {
           .limit(1);
         setIsDriver((data ?? []).length > 0);
       }
+      clearTimeout(timeout);
+      setLoading(false);
+    }).catch(() => {
+      clearTimeout(timeout);
       setLoading(false);
     });
 
