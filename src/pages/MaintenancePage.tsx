@@ -354,6 +354,7 @@ export default function MaintenancePage() {
   const [modalPred,     setModalPred]     = useState<MaintenancePrediction | null>(null);
 
   const loadData = useCallback(async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [predsRes, vehiclesRes, logsRes] = await Promise.all([
         supabase
@@ -398,6 +399,7 @@ export default function MaintenancePage() {
     } catch (err) {
       console.error('Maintenance loadData error:', err);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

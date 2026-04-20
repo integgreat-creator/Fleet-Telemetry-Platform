@@ -311,6 +311,7 @@ export default function TripsPage() {
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   const loadData = useCallback(async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [tripsRes, vehiclesRes] = await Promise.all([
         supabase
@@ -327,6 +328,7 @@ export default function TripsPage() {
     } catch (e) {
       console.error('Error loading trips:', e);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);
