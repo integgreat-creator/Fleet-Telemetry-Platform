@@ -94,6 +94,7 @@ export default function AnomalyFeedPage() {
   }, []);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [alertsRes, vehiclesRes] = await Promise.all([
         supabase
@@ -109,6 +110,7 @@ export default function AnomalyFeedPage() {
     } catch (error) {
       console.error('Error loading anomaly feed:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };

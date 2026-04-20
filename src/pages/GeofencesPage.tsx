@@ -177,6 +177,7 @@ export default function GeofencesPage() {
   // ── Load data ─────────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -207,6 +208,7 @@ export default function GeofencesPage() {
       setVehicles((vehiclesRes.data ?? []) as Vehicle[]);
       setAssignments((assignRes.data ?? []) as Assignment[]);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

@@ -228,6 +228,7 @@ export default function FleetMapPage() {
 
   async function initMap() {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -300,6 +301,7 @@ export default function FleetMapPage() {
       // Subscribe for live updates
       subscribeRealtime();
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }

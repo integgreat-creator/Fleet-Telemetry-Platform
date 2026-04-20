@@ -20,6 +20,7 @@ export default function FuelAnalyticsPage() {
   }, []);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [insightsRes, vehiclesRes] = await Promise.all([
         supabase
@@ -35,6 +36,7 @@ export default function FuelAnalyticsPage() {
     } catch (error) {
       console.error('Error loading fuel analytics:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };

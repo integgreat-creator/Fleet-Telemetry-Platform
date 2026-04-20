@@ -439,6 +439,7 @@ export default function AlertsPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [alertsRes, eventsRes, vehiclesRes] = await Promise.all([
         supabase.from('alerts').select('*, vehicles(name, vin)').order('created_at', { ascending: false }),
@@ -473,6 +474,7 @@ export default function AlertsPage() {
     } catch (e) {
       console.error('Error loading alerts/events:', e);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

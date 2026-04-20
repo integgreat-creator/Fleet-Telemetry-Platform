@@ -16,6 +16,7 @@ export default function AnalyticsPage() {
   }, [selectedVehicle, timeRange]);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const periodMs = timeRange === '24h' ? 86_400_000
         : timeRange === '7d'  ? 7  * 86_400_000
@@ -52,6 +53,7 @@ export default function AnalyticsPage() {
     } catch (error) {
       console.error('Error loading analytics:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };

@@ -48,6 +48,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const credQrRef = useRef<HTMLCanvasElement>(null);
 
   const loadAll = useCallback(async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -82,6 +83,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
     } catch (e) {
       console.error('Error loading vehicles/drivers:', e);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

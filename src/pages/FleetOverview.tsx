@@ -58,6 +58,13 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
 
   const loadData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
+
+    // Safety net: unblock the spinner after 8 s even if queries stall
+    const timeout = setTimeout(() => {
+      setLoading(false);
+      setRefreshing(false);
+    }, 8000);
+
     try {
       const since30d = new Date();
       since30d.setDate(since30d.getDate() - 30);
@@ -92,6 +99,7 @@ export default function FleetOverview({ onNavigate }: FleetOverviewProps) {
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
       setRefreshing(false);
     }
