@@ -30,7 +30,7 @@ interface VehiclesPageProps {
 }
 
 export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPageProps) {
-  const { driverLimit } = useSubscription();
+  const { driverLimit, fleetId: subFleetId } = useSubscription();
 
   const [vehicles,          setVehicles]          = useState<Vehicle[]>([]);
   const [drivers,           setDrivers]           = useState<DriverAccount[]>([]);
@@ -48,7 +48,10 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const credQrRef = useRef<HTMLCanvasElement>(null);
 
   const loadAll = useCallback(async () => {
-    const timeout = setTimeout(() => setLoading(false), 8000);
+    const timeout = setTimeout(() => {
+      setLoading(false);
+      setRefreshing(false);
+    }, 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -196,7 +199,8 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          {fleetId && (
+            {/* Show buttons as soon as either local or subscription fleetId is available */}
+          {(fleetId ?? subFleetId) && (
             <>
               {/* WEB-1: Pre-register a vehicle without waiting for a driver */}
               <button
@@ -219,9 +223,9 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
       </div>
 
       {/* ── Pending Invitations ───────────────────────────────────────── */}
-      {fleetId && (
+      {(fleetId ?? subFleetId) && (
         <PendingInvitationsPanel
-          fleetId={fleetId}
+          fleetId={(fleetId ?? subFleetId)!}
           onResendQR={(token, _vehicleName, _driverPhone) => {
             setResendToken(token);
           }}
@@ -355,18 +359,18 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
       {/* ── Modals ────────────────────────────────────────────────────── */}
       {/* WEB-1: Vehicle pre-registration modal */}
-      {showAddVehicle && fleetId && (
+      {showAddVehicle && (fleetId ?? subFleetId) && (
         <AddVehicleModal
-          fleetId={fleetId}
+          fleetId={(fleetId ?? subFleetId)!}
           onClose={() => setShowAddVehicle(false)}
           onVehicleAdded={() => { loadAll(); setShowAddVehicle(false); }}
           onNavigateToAdmin={() => onNavigate?.('admin')}
         />
       )}
 
-      {showDriverModal && fleetId && (
+      {showDriverModal && (fleetId ?? subFleetId) && (
         <CreateDriverModal
-          fleetId={fleetId}
+          fleetId={(fleetId ?? subFleetId)!}
           onClose={() => setShowDriverModal(false)}
           onDriverCreated={loadAll}
           onNavigateToAdmin={() => onNavigate?.('admin')}
