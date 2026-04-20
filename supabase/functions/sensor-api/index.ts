@@ -93,6 +93,19 @@ Deno.serve(async (req: Request) => {
     if (req.method === 'POST') {
       const reading: SensorReading = await req.json();
 
+      // Validate required fields and types
+      if (
+        !reading.vehicle_id || typeof reading.vehicle_id !== 'string' ||
+        !reading.sensor_type || typeof reading.sensor_type !== 'string' ||
+        typeof reading.value !== 'number' || !isFinite(reading.value) ||
+        !reading.unit || typeof reading.unit !== 'string'
+      ) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid reading: vehicle_id, sensor_type (string), value (finite number), and unit are required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+
       // When authenticated via API key, verify the vehicle belongs to the key's fleet
       if (apiKeyFleetId) {
         const { data: vehicle } = await supabase

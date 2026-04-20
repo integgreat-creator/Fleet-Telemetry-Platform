@@ -11,12 +11,19 @@ class VehicleProvider extends ChangeNotifier {
   Vehicle? _selectedVehicle;
   final Map<String, List<Threshold>> _thresholds = {};
   bool _isLoading = false;
+  String? _errorMessage;
 
   List<Vehicle> get vehicles => _vehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
   List<Threshold> get selectedVehicleThresholds =>
       _thresholds[_selectedVehicle?.id] ?? [];
   bool get isLoading => _isLoading;
+  String? get errorMessage => _errorMessage;
+
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
+  }
 
   Future<void> loadVehicles() async {
     _isLoading = true;
@@ -70,54 +77,67 @@ class VehicleProvider extends ChangeNotifier {
   }
 
   Future<bool> createVehicle(Vehicle vehicle) async {
-    final created = await _supabaseService.createVehicle(vehicle);
-    if (created != null) {
-      _vehicles.add(created);
-
-      if (_selectedVehicle == null) {
-        await selectVehicle(created);
+    _errorMessage = null;
+    try {
+      final created = await _supabaseService.createVehicle(vehicle);
+      if (created != null) {
+        _vehicles.add(created);
+        if (_selectedVehicle == null) await selectVehicle(created);
+        notifyListeners();
+        return true;
       }
-
+      _errorMessage = 'Failed to create vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Create vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<bool> updateVehicle(Vehicle vehicle) async {
-    final updated = await _supabaseService.updateVehicle(vehicle);
-    if (updated != null) {
-      final index = _vehicles.indexWhere((v) => v.id == vehicle.id);
-      if (index != -1) {
-        _vehicles[index] = updated;
+    _errorMessage = null;
+    try {
+      final updated = await _supabaseService.updateVehicle(vehicle);
+      if (updated != null) {
+        final index = _vehicles.indexWhere((v) => v.id == vehicle.id);
+        if (index != -1) _vehicles[index] = updated;
+        if (_selectedVehicle?.id == vehicle.id) _selectedVehicle = updated;
+        notifyListeners();
+        return true;
       }
-
-      if (_selectedVehicle?.id == vehicle.id) {
-        _selectedVehicle = updated;
-      }
-
+      _errorMessage = 'Failed to update vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Update vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<bool> deleteVehicle(String vehicleId) async {
-    final success = await _supabaseService.deleteVehicle(vehicleId);
-    if (success) {
-      _vehicles.removeWhere((v) => v.id == vehicleId);
-
-      if (_selectedVehicle?.id == vehicleId) {
-        _selectedVehicle = _vehicles.isNotEmpty ? _vehicles.first : null;
-        if (_selectedVehicle != null) {
-          await selectVehicle(_selectedVehicle!);
+    _errorMessage = null;
+    try {
+      final success = await _supabaseService.deleteVehicle(vehicleId);
+      if (success) {
+        _vehicles.removeWhere((v) => v.id == vehicleId);
+        if (_selectedVehicle?.id == vehicleId) {
+          _selectedVehicle = _vehicles.isNotEmpty ? _vehicles.first : null;
+          if (_selectedVehicle != null) await selectVehicle(_selectedVehicle!);
         }
+        notifyListeners();
+        return true;
       }
-
+      _errorMessage = 'Failed to delete vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Delete vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<void> loadThresholds(String vehicleId) async {

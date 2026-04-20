@@ -57,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Icon(Icons.directions_car, size: 72, color: Colors.blue),
                   const SizedBox(height: 16),
                   Text(
-                    'VehicleSense',
+                    'FTPGo',
                     style: Theme.of(context)
                         .textTheme
                         .headlineMedium
@@ -243,11 +243,11 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (sheetCtx) => _QrScannerSheet(
         onTokenDetected: (raw) {
           Navigator.of(sheetCtx).pop();
-          // vehiclesense://auth?token=<one-time-token>  → exchange for email + auto-login
-          // vehiclesense://join?token=<invite-token>    → existing QR invite flow
-          // vehiclesense://auth?data=<base64>           → legacy format
-          if (raw.startsWith('vehiclesense://auth?token=')) {
-            final token = raw.substring('vehiclesense://auth?token='.length);
+          // ftpgo://auth?token=<one-time-token>  → exchange for email + auto-login
+          // ftpgo://join?token=<invite-token>    → existing QR invite flow
+          // ftpgo://auth?data=<base64>           → legacy format
+          if (raw.startsWith('ftpgo://auth?token=')) {
+            final token = raw.substring('ftpgo://auth?token='.length);
             _exchangeOneTimeToken(context, token);
           } else {
             context.read<InviteProvider>().setPendingToken(raw);
@@ -385,13 +385,13 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
 
       String? token;
 
-      // Pattern 1: vehiclesense://join?token=<token>
-      if (raw.startsWith('vehiclesense://join?token=')) {
-        token = raw.substring('vehiclesense://join?token='.length);
+      // Pattern 1: ftpgo://join?token=<token>
+      if (raw.startsWith('ftpgo://join?token=')) {
+        token = raw.substring('ftpgo://join?token='.length);
       }
-      // Pattern 2: vehiclesense://auth?data=<base64url>
-      else if (raw.startsWith('vehiclesense://auth?data=')) {
-        token = raw.substring('vehiclesense://auth?data='.length);
+      // Pattern 2: ftpgo://auth?data=<base64url>
+      else if (raw.startsWith('ftpgo://auth?data=')) {
+        token = raw.substring('ftpgo://auth?data='.length);
       }
 
       if (token != null && token.isNotEmpty) {

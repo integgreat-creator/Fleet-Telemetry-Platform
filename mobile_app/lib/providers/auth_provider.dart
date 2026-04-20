@@ -151,7 +151,8 @@ class AuthProvider extends ChangeNotifier {
 
       final email = rows.first['email'] as String?;
       if (email == null || email.isEmpty) {
-        _errorMessage = 'Driver account has no email — use email to sign in';
+        _errorMessage = 'No email linked to this phone number. '
+            'Please contact your fleet manager to update your driver account.';
         _isLoading    = false;
         notifyListeners();
         return false;

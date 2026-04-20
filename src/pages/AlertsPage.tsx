@@ -150,6 +150,7 @@ function ThresholdsTab({ vehicles }: { vehicles: Vehicle[] }) {
   const [loading, setLoading]   = useState(false);
   const [saving, setSaving]     = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
+  const [saveErr, setSaveErr]   = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
   const loadThresholds = useCallback(async (vehicleId: string) => {
@@ -187,6 +188,7 @@ function ThresholdsTab({ vehicles }: { vehicles: Vehicle[] }) {
   const handleSave = async () => {
     if (!selectedVehicleId) return;
     setSaving(true);
+    setSaveErr('');
     try {
       const upserts = rows.map(r => ({
         ...(r.existing_id ? { id: r.existing_id } : {}),
@@ -201,10 +203,14 @@ function ThresholdsTab({ vehicles }: { vehicles: Vehicle[] }) {
         .from('thresholds')
         .upsert(upserts, { onConflict: 'vehicle_id,sensor_type' });
 
-      if (!error) {
+      if (error) {
+        setSaveErr(`Failed to save thresholds: ${error.message}`);
+      } else {
         setRows(prev => prev.map(r => ({ ...r, modified: false })));
         setSavedMsg(`All thresholds saved for ${vehicles.find(v => v.id === selectedVehicleId)?.name ?? 'vehicle'}`);
       }
+    } catch (e: any) {
+      setSaveErr(`Unexpected error: ${e?.message ?? 'please try again'}`);
     } finally {
       setSaving(false);
     }
@@ -287,6 +293,12 @@ function ThresholdsTab({ vehicles }: { vehicles: Vehicle[] }) {
         <div className="flex items-center gap-2 px-4 py-2.5 bg-green-500/10 border border-green-500/30 rounded-lg text-green-400 text-sm">
           <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
           {savedMsg}
+        </div>
+      )}
+      {saveErr && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          {saveErr}
         </div>
       )}
 
@@ -423,6 +435,7 @@ export default function AlertsPage() {
   const [loading, setLoading]         = useState(true);
   const [filter, setFilter]           = useState<'all' | 'critical' | 'warning' | 'info'>('all');
   const [showAcknowledged, setShowAcknowledged] = useState(false);
+  const [mutationError, setMutationError]       = useState('');
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -467,24 +480,42 @@ export default function AlertsPage() {
   useEffect(() => { loadAll(); }, [loadAll]);
 
   const handleAcknowledge = async (alertId: string) => {
-    await supabase.from('alerts').update({
-      acknowledged: true, acknowledged_at: new Date().toISOString(),
-    }).eq('id', alertId);
-    setAlerts(prev => prev.map(a => a.id === alertId
-      ? { ...a, acknowledged: true, acknowledged_at: new Date().toISOString() } : a));
+    try {
+      const { error } = await supabase.from('alerts').update({
+        acknowledged: true, acknowledged_at: new Date().toISOString(),
+      }).eq('id', alertId);
+      if (error) { setMutationError(`Failed to acknowledge alert: ${error.message}`); return; }
+      setAlerts(prev => prev.map(a => a.id === alertId
+        ? { ...a, acknowledged: true, acknowledged_at: new Date().toISOString() } : a));
+      setMutationError('');
+    } catch (e: any) {
+      setMutationError(`Unexpected error: ${e?.message ?? 'please try again'}`);
+    }
   };
 
   const handleAcknowledgeEvent = async (eventId: string) => {
-    await supabase.from('vehicle_events').update({
-      acknowledged: true, acknowledged_at: new Date().toISOString(),
-    }).eq('id', eventId);
-    setEvents(prev => prev.map(e => e.id === eventId
-      ? { ...e, acknowledged: true, acknowledged_at: new Date().toISOString() } : e));
+    try {
+      const { error } = await supabase.from('vehicle_events').update({
+        acknowledged: true, acknowledged_at: new Date().toISOString(),
+      }).eq('id', eventId);
+      if (error) { setMutationError(`Failed to acknowledge event: ${error.message}`); return; }
+      setEvents(prev => prev.map(e => e.id === eventId
+        ? { ...e, acknowledged: true, acknowledged_at: new Date().toISOString() } : e));
+      setMutationError('');
+    } catch (e: any) {
+      setMutationError(`Unexpected error: ${e?.message ?? 'please try again'}`);
+    }
   };
 
   const handleDeleteAlert = async (alertId: string) => {
-    await supabase.from('alerts').delete().eq('id', alertId);
-    setAlerts(prev => prev.filter(a => a.id !== alertId));
+    try {
+      const { error } = await supabase.from('alerts').delete().eq('id', alertId);
+      if (error) { setMutationError(`Failed to delete alert: ${error.message}`); return; }
+      setAlerts(prev => prev.filter(a => a.id !== alertId));
+      setMutationError('');
+    } catch (e: any) {
+      setMutationError(`Unexpected error: ${e?.message ?? 'please try again'}`);
+    }
   };
 
   const filteredAlerts = alerts.filter(a => {
@@ -518,6 +549,14 @@ export default function AlertsPage() {
         <h1 className="text-3xl font-bold text-white mb-2">Alerts & Events</h1>
         <p className="text-gray-400">Sensor threshold alerts, system reliability events, and threshold configuration</p>
       </div>
+
+      {/* Mutation error banner */}
+      {mutationError && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          {mutationError}
+        </div>
+      )}
 
       {/* Summary counters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

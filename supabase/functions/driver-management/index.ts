@@ -67,19 +67,19 @@ async function sendWelcomeEmail(opts: {
     return;
   }
 
-  const qrDeepLink  = `vehiclesense://auth?token=${opts.oneTimeToken}`;
+  const qrDeepLink  = `ftpgo://auth?token=${opts.oneTimeToken}`;
   const qrApiUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrDeepLink)}`;
 
   const html = `
     <div style="font-family:sans-serif;max-width:560px;margin:auto;padding:32px;background:#0f0f1a;color:#fff;border-radius:12px">
       <div style="text-align:center;margin-bottom:24px">
-        <h1 style="color:#00BFA5;margin:0">VehicleSense</h1>
+        <h1 style="color:#00BFA5;margin:0">FTPGo</h1>
         <p style="color:#9ca3af;margin:4px 0 0">Fleet Telemetry Platform</p>
       </div>
 
       <h2 style="color:#fff;margin-bottom:4px">Welcome, ${opts.driverName}!</h2>
       <p style="color:#9ca3af">You have been added to the <strong style="color:#fff">${opts.fleetName}</strong> fleet.
-      Use the credentials below to sign into the VehicleSense driver app.</p>
+      Use the credentials below to sign into the FTPGo driver app.</p>
 
       <div style="background:#1e1e2e;border:1px solid #374151;border-radius:10px;padding:20px;margin:20px 0">
         <table style="width:100%;border-collapse:collapse">
@@ -112,7 +112,7 @@ async function sendWelcomeEmail(opts: {
       </div>
 
       <p style="color:#6b7280;font-size:12px;margin-top:24px;text-align:center">
-        Install the VehicleSense app, then sign in with your credentials or scan the QR code above.
+        Install the FTPGo app, then sign in with your credentials or scan the QR code above.
       </p>
     </div>
   `;
@@ -161,10 +161,10 @@ async function sendSmsCredentials(opts: {
 
   const message =
     `Welcome to ${opts.fleetName} fleet!\n` +
-    `Your VehicleSense credentials:\n` +
+    `Your FTPGo credentials:\n` +
     `Email: ${opts.driverEmail}\n` +
     `Password: ${opts.password}\n` +
-    `Download the VehicleSense app and sign in to get started.`;
+    `Download the FTPGo app and sign in to get started.`;
 
   try {
     // TODO: Replace with your chosen SMS provider.

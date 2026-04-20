@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { UserPlus, Trash2, RefreshCw, Users, Car, PlusCircle, CheckCircle,
-         Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X } from 'lucide-react';
+         Clock, QrCode, Copy, Check, Download, Share2, RefreshCcw, X, AlertTriangle } from 'lucide-react';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { supabase, type Vehicle } from '../lib/supabase';
 import VehicleCard from '../components/VehicleCard';
@@ -44,6 +44,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const [credDriver,        setCredDriver]        = useState<DriverAccount | null>(null);
   const [regenLoading,      setRegenLoading]      = useState(false);
   const [copiedCredLink,    setCopiedCredLink]    = useState(false);
+  const [deleteError,       setDeleteError]       = useState('');
   const credQrRef = useRef<HTMLCanvasElement>(null);
 
   const loadAll = useCallback(async () => {
@@ -95,8 +96,14 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
   const handleDeleteVehicle = async (id: string) => {
     if (!confirm('Delete this vehicle? This cannot be undone.')) return;
-    const { error } = await supabase.from('vehicles').delete().eq('id', id);
-    if (!error) setVehicles(v => v.filter(x => x.id !== id));
+    try {
+      const { error } = await supabase.from('vehicles').delete().eq('id', id);
+      if (error) { setDeleteError(`Failed to delete vehicle: ${error.message}`); return; }
+      setVehicles(v => v.filter(x => x.id !== id));
+      setDeleteError('');
+    } catch (e: any) {
+      setDeleteError(`Unexpected error: ${e?.message ?? 'please try again'}`);
+    }
   };
 
   const handleDeleteDriver = async (driverId: string) => {
@@ -159,6 +166,14 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
 
   return (
     <div className="space-y-8">
+
+      {/* Delete error banner */}
+      {deleteError && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          {deleteError}
+        </div>
+      )}
 
       {/* ── Header ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">

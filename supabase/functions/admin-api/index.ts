@@ -279,16 +279,38 @@ Deno.serve(async (req: Request) => {
     if (action === 'log-action') {
       const resourceType = body.resource_type as string | undefined;
       const actionName   = body.action_name   as string | undefined;
+      const resourceId   = (body.resource_id  as string) ?? null;
 
       if (!resourceType) return err('resource_type is required');
       if (!actionName)   return err('action_name is required');
+
+      // For resource types that map to fleet-owned rows, verify ownership
+      // to prevent a manager from injecting audit entries for other fleets.
+      if (resourceId) {
+        const fleetColumnByType: Record<string, { table: string; column: string }> = {
+          vehicle:    { table: 'vehicles',        column: 'fleet_id' },
+          driver:     { table: 'driver_accounts', column: 'fleet_id' },
+          threshold:  { table: 'thresholds',      column: 'fleet_id' },
+          geofence:   { table: 'geofences',       column: 'fleet_id' },
+        };
+        const mapping = fleetColumnByType[resourceType];
+        if (mapping) {
+          const { data: owned } = await adminClient
+            .from(mapping.table)
+            .select('id')
+            .eq('id', resourceId)
+            .eq(mapping.column, fleet.id)
+            .maybeSingle();
+          if (!owned) return err('resource_id does not belong to your fleet', 403);
+        }
+      }
 
       const { error: insertErr } = await adminClient.from('audit_logs').insert({
         fleet_id:      fleet.id,
         user_id:       user.id,
         action:        actionName,
         resource_type: resourceType,
-        resource_id:   (body.resource_id as string) ?? null,
+        resource_id:   resourceId,
         old_values:    (body.old_values  as Record<string, unknown>) ?? null,
         new_values:    (body.new_values  as Record<string, unknown>) ?? null,
       });
