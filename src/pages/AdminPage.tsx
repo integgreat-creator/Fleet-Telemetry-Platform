@@ -448,7 +448,7 @@ const PLAN_CARDS = [
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const { feature } = useSubscription();
+  const { feature, fleetId: subFleetId } = useSubscription();
   const hasApiAccess = feature('api_access') === 'full';
 
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
@@ -534,10 +534,15 @@ export default function AdminPage() {
   const [threshError,       setThreshError]       = useState<string | null>(null);
 
   // Fleet context
+  // fleetId — set by fetchFleet; subFleetId is the authoritative fallback from
+  // useSubscription which loads app-wide before any page renders.
   const [fleetId,       setFleetId]       = useState<string | null>(null);
   const [fleetName,     setFleetName]     = useState<string>('');
   const [fleetJoinCode, setFleetJoinCode] = useState<string>('');
   const [joinCodeCopied, setJoinCodeCopied] = useState(false);
+
+  // The first non-null source wins: local fetch → subscription context
+  const effectiveFleetId = fleetId ?? subFleetId ?? null;
 
   // ── Delete fleet state ──────────────────────────────────────────────────────
   const [showDeleteModal,    setShowDeleteModal]    = useState(false);
@@ -546,17 +551,35 @@ export default function AdminPage() {
   const [deleteError,        setDeleteError]        = useState<string | null>(null);
 
   // ── Fetch fleet on mount ────────────────────────────────────────────────────
+  // Loads fleetName + joinCode.  If the manager query finds nothing (race or
+  // RLS hiccup), fall back to querying by the subscription context's fleetId.
 
   useEffect(() => {
     const fetchFleet = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      // maybeSingle() returns null instead of throwing PGRST116 when 0 rows
-      const { data } = await supabase
+
+      // Primary: find by manager_id (most reliable for fleet managers)
+      let data: { id: string; name: string | null; join_code: string | null } | null = null;
+      const { data: byManager } = await supabase
         .from('fleets')
         .select('id, name, join_code')
         .eq('manager_id', user.id)
         .maybeSingle();
+
+      data = byManager;
+
+      // Fallback: if manager query returned nothing but subscription already
+      // resolved a fleet ID, load by that ID directly
+      if (!data && subFleetId) {
+        const { data: byId } = await supabase
+          .from('fleets')
+          .select('id, name, join_code')
+          .eq('id', subFleetId)
+          .maybeSingle();
+        data = byId;
+      }
+
       if (data) {
         setFleetId(data.id);
         setFleetName(data.name ?? '');
@@ -564,7 +587,9 @@ export default function AdminPage() {
       }
     };
     fetchFleet();
-  }, []);
+  // Re-run once subFleetId resolves so the fallback path is exercised
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subFleetId]);
 
   const handleCopyJoinCode = () => {
     if (!fleetJoinCode) return;
@@ -574,7 +599,8 @@ export default function AdminPage() {
   };
 
   const handleDeleteFleet = async () => {
-    if (!fleetId) return;
+    const currentFleetId = effectiveFleetId;
+    if (!currentFleetId) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -583,7 +609,7 @@ export default function AdminPage() {
       const { data: driverRows } = await supabase
         .from('driver_accounts')
         .select('user_id')
-        .eq('fleet_id', fleetId);
+        .eq('fleet_id', currentFleetId);
 
       const driverUserIds: string[] = (driverRows ?? [])
         .map((d: { user_id: string }) => d.user_id)
@@ -596,7 +622,7 @@ export default function AdminPage() {
       const { error: deleteErr } = await supabase
         .from('fleets')
         .delete()
-        .eq('id', fleetId);
+        .eq('id', currentFleetId);
 
       if (deleteErr) throw new Error(deleteErr.message);
 
@@ -638,14 +664,14 @@ export default function AdminPage() {
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
 
   const loadSubscription = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setSubLoading(true);
     setSubError(null);
     try {
       const [subRes, vehicleRes, driverRes] = await Promise.all([
-        supabase.from('subscriptions').select('*').eq('fleet_id', fleetId).single(),
-        supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
-        supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
+        supabase.from('subscriptions').select('*').eq('fleet_id', effectiveFleetId).single(),
+        supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', effectiveFleetId),
+        supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', effectiveFleetId),
       ]);
       if (subRes.error && subRes.error.code !== 'PGRST116') throw subRes.error;
       setSubscription(subRes.data ?? null);
@@ -656,17 +682,17 @@ export default function AdminPage() {
     } finally {
       setSubLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadDrivers = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setDriversLoading(true);
     setDriversError(null);
     try {
       const { data, error } = await supabase
         .from('driver_accounts')
         .select('*, vehicles(id, name, vin, make, model)')
-        .eq('fleet_id', fleetId)
+        .eq('fleet_id', effectiveFleetId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setDrivers(data ?? []);
@@ -675,17 +701,17 @@ export default function AdminPage() {
     } finally {
       setDriversLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadAuditLogs = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setAuditLoading(true);
     setAuditError(null);
     try {
       const { data, error } = await supabase
         .from('audit_logs')
         .select('*')
-        .eq('fleet_id', fleetId)
+        .eq('fleet_id', effectiveFleetId)
         .order('created_at', { ascending: false })
         .limit(100);
       if (error) throw error;
@@ -695,17 +721,17 @@ export default function AdminPage() {
     } finally {
       setAuditLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadDeviceHealth = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setDeviceLoading(true);
     setDeviceError(null);
     try {
       const { data: vehicles } = await supabase
         .from('vehicles')
         .select('id')
-        .eq('fleet_id', fleetId);
+        .eq('fleet_id', effectiveFleetId);
       const vehicleIds = (vehicles ?? []).map((v: { id: string }) => v.id);
       if (vehicleIds.length === 0) {
         setDeviceHealth([]);
@@ -723,7 +749,7 @@ export default function AdminPage() {
     } finally {
       setDeviceLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   // Builds a Map seeded with sensor defaults — always call this first so rows
   // are never blank even if the DB query fails.
@@ -761,7 +787,7 @@ export default function AdminPage() {
   // Called when Thresholds tab first opens — loads vehicles + thresholds for
   // the first vehicle. Defaults are shown immediately so the form is never blank.
   const initThresholds = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setThreshLoading(true);
     setThreshError(null);
     setThresholdRows(buildDefaultRows());
@@ -790,11 +816,11 @@ export default function AdminPage() {
     } finally {
       setThreshLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   // Called from the vehicle-selector dropdown onChange.
   const loadThresholds = useCallback(async (vehicleId: string) => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setThreshLoading(true);
     setThreshError(null);
     setThresholdRows(buildDefaultRows()); // show defaults immediately
@@ -802,7 +828,7 @@ export default function AdminPage() {
     try {
       const isFleet = vehicleId === '__fleet__';
       const { data, error } = isFleet
-        ? await supabase.from('thresholds').select('*').eq('fleet_id', fleetId).is('vehicle_id', null)
+        ? await supabase.from('thresholds').select('*').eq('fleet_id', effectiveFleetId).is('vehicle_id', null)
         : await supabase.from('thresholds').select('*').eq('vehicle_id', vehicleId);
       if (error) {
         if (error.message?.includes('fleet_id')) {
@@ -818,10 +844,10 @@ export default function AdminPage() {
     } finally {
       setThreshLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const saveThresholds = async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setThreshSaving(true);
     setThreshSaveOk(false);
     setThreshError(null);
@@ -841,7 +867,7 @@ export default function AdminPage() {
           min_value:     row.min_value !== '' ? parseFloat(row.min_value) : null,
           max_value:     row.max_value !== '' ? parseFloat(row.max_value) : null,
           alert_enabled: row.alert_enabled,
-          ...(isFleet ? { fleet_id: fleetId } : { vehicle_id: threshVehicleId }),
+          ...(isFleet ? { fleet_id: effectiveFleetId } : { vehicle_id: threshVehicleId }),
         };
         const res = await fetch(baseUrl, { method: 'POST', headers, body: JSON.stringify(payload) });
         if (!res.ok) {
@@ -873,14 +899,14 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     if (activeTab === 'subscription')  loadSubscription();
     if (activeTab === 'drivers')       loadDrivers();
     if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
     if (activeTab === 'settings')      loadFuelPrice();
     if (activeTab === 'thresholds')    initThresholds();
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, initThresholds]);
+  }, [activeTab, effectiveFleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, initThresholds]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
@@ -1690,7 +1716,7 @@ export default function AdminPage() {
                   setDeleteError(null);
                   setShowDeleteModal(true);
                 }}
-                disabled={!fleetId}
+                disabled={!effectiveFleetId}
                 className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
@@ -1767,7 +1793,7 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={handleDeleteFleet}
-                disabled={deleting || !fleetId || (fleetName ? deleteConfirmName.trim() !== fleetName.trim() : deleteConfirmName.trim().length === 0)}
+                disabled={deleting || !effectiveFleetId || (fleetName ? deleteConfirmName.trim() !== fleetName.trim() : deleteConfirmName.trim().length === 0)}
                 className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
               >
                 {deleting
