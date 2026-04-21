@@ -21,6 +21,7 @@ import {
   Bell,
   Copy,
   Link2,
+  TriangleAlert,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -539,6 +540,12 @@ export default function AdminPage() {
   const [fleetJoinCode, setFleetJoinCode] = useState<string>('');
   const [joinCodeCopied, setJoinCodeCopied] = useState(false);
 
+  // ── Delete fleet state ──────────────────────────────────────────────────────
+  const [showDeleteModal,    setShowDeleteModal]    = useState(false);
+  const [deleteConfirmName,  setDeleteConfirmName]  = useState('');
+  const [deleting,           setDeleting]           = useState(false);
+  const [deleteError,        setDeleteError]        = useState<string | null>(null);
+
   // ── Fetch fleet on mount ────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -564,6 +571,37 @@ export default function AdminPage() {
     navigator.clipboard.writeText(fleetJoinCode);
     setJoinCodeCopied(true);
     setTimeout(() => setJoinCodeCopied(false), 2000);
+  };
+
+  const handleDeleteFleet = async () => {
+    if (!fleetId || deleteConfirmName.trim() !== fleetName.trim()) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session');
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const res = await fetch(`${supabaseUrl}/functions/v1/fleet-delete`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+        },
+        body: JSON.stringify({ fleet_id: fleetId }),
+      });
+
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error ?? `Delete failed (HTTP ${res.status})`);
+
+      // Sign out and reload — the fleet no longer exists
+      await supabase.auth.signOut();
+      window.location.href = '/';
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : 'Fleet deletion failed');
+      setDeleting(false);
+    }
   };
 
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
@@ -1584,6 +1622,128 @@ export default function AdminPage() {
                 </p>
               </div>
             )}
+          </div>
+
+          {/* ── Danger Zone ─────────────────────────────────────────────────── */}
+          <div className="bg-gray-900 rounded-xl border border-red-800/60 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-red-500/15 rounded-lg">
+                <TriangleAlert className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <p className="text-red-400 font-semibold">Danger Zone</p>
+                <p className="text-gray-400 text-xs">
+                  Irreversible actions that permanently destroy data.
+                </p>
+              </div>
+            </div>
+
+            <div className="border border-red-900/50 rounded-xl p-4 space-y-3 bg-red-950/20">
+              <p className="text-white font-medium text-sm">Delete Fleet &amp; All Data</p>
+              <p className="text-gray-400 text-xs leading-relaxed">
+                Permanently removes your fleet and every piece of data linked to it:
+              </p>
+              <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li>All vehicles and their sensor history</li>
+                <li>All trips, alerts, and cost predictions</li>
+                <li>All driver accounts and their credentials</li>
+                <li>Subscription, invite codes, and audit logs</li>
+                <li>OBD device health records and thresholds</li>
+              </ul>
+              <p className="text-xs text-red-400 font-medium pt-1">
+                This action cannot be undone. Your manager account will be signed out immediately.
+              </p>
+              <button
+                onClick={() => {
+                  setDeleteConfirmName('');
+                  setDeleteError(null);
+                  setShowDeleteModal(true);
+                }}
+                disabled={!fleetId}
+                className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Fleet and All Data…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Fleet Confirmation Modal ────────────────────────────────────── */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-red-800/70 rounded-2xl w-full max-w-md p-6 space-y-5">
+
+            {/* Header */}
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-red-500/15 rounded-xl">
+                <TriangleAlert className="w-6 h-6 text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-white font-bold text-lg">Delete Fleet</h2>
+                <p className="text-gray-400 text-xs">This is permanent and cannot be reversed.</p>
+              </div>
+            </div>
+
+            {/* What will be deleted */}
+            <div className="bg-red-950/30 border border-red-900/50 rounded-xl p-4 space-y-2">
+              <p className="text-red-300 text-xs font-semibold uppercase tracking-wide">
+                The following will be permanently deleted:
+              </p>
+              <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
+                <li>Fleet: <span className="text-white font-medium">{fleetName || 'your fleet'}</span></li>
+                <li>All vehicles, sensor data, trips &amp; alerts</li>
+                <li>All driver accounts and credentials</li>
+                <li>Subscription, billing history &amp; audit logs</li>
+              </ul>
+            </div>
+
+            {/* Confirm by typing fleet name */}
+            <div className="space-y-2">
+              <label className="text-sm text-gray-300">
+                Type{' '}
+                <span className="text-white font-mono font-semibold">
+                  {fleetName || 'your fleet name'}
+                </span>{' '}
+                to confirm:
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmName}
+                onChange={e => { setDeleteConfirmName(e.target.value); setDeleteError(null); }}
+                placeholder={fleetName || 'Fleet name'}
+                className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-red-500 text-sm"
+                autoComplete="off"
+              />
+            </div>
+
+            {deleteError && (
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-red-900/20 border border-red-700/40 rounded-lg text-red-400 text-xs">
+                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                {deleteError}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex gap-3 pt-1">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteFleet}
+                disabled={deleting || deleteConfirmName.trim() !== fleetName.trim() || !fleetName}
+                className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                {deleting
+                  ? <><Loader className="w-4 h-4 animate-spin" /> Deleting…</>
+                  : <><Trash2 className="w-4 h-4" /> Permanently Delete</>}
+              </button>
+            </div>
           </div>
         </div>
       )}
