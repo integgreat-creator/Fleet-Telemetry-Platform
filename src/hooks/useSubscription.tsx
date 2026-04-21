@@ -90,12 +90,16 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         if (!user || cancelled) { setState(s => ({ ...s, loading: false })); return; }
 
         // ── Fleet ────────────────────────────────────────────────────────────
-        const { data: fleet } = await supabase
+        // maybeSingle() returns null on 0 rows instead of throwing PGRST116.
+        // .single() was silently crashing here and leaving fleetId = null for
+        // the entire session, disabling every fleet-dependent feature.
+        const { data: fleet, error: fleetErr } = await supabase
           .from('fleets')
           .select('id')
           .eq('manager_id', user.id)
-          .single();
+          .maybeSingle();
 
+        if (fleetErr) throw fleetErr;
         if (!fleet || cancelled) { setState(s => ({ ...s, loading: false })); return; }
         const fleetId = fleet.id as string;
 

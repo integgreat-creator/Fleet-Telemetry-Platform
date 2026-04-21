@@ -883,12 +883,13 @@ export default function AdminPage() {
     setThreshError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session — please log in again');
       const headers = {
         'Content-Type':  'application/json',
-        'Authorization': `Bearer ${session!.access_token}`,
-        'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
       };
-      const baseUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/threshold-api`;
+      const baseUrl = `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/threshold-api`;
       const isFleet = threshVehicleId === '__fleet__';
 
       for (const row of Array.from(thresholdRows.values())) {
@@ -945,13 +946,15 @@ export default function AdminPage() {
     setDeletingDriverId(driver.id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session — please log in again');
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
+        `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/driver-management`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${session?.access_token}`,
+            'apikey':       import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+            Authorization:  `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({ action: 'delete', driver_id: driver.id }),
         },
