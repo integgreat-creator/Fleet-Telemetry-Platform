@@ -19,7 +19,7 @@ import DebugToolsPage from './pages/DebugToolsPage';
 import FleetMapPage from './pages/FleetMapPage';
 import GeofencesPage from './pages/GeofencesPage';
 import { realtimeService } from './services/realtimeService';
-import { SubscriptionProvider } from './hooks/useSubscription';
+import { SubscriptionProvider, useSubscription } from './hooks/useSubscription';
 import FeatureGate from './components/FeatureGate';
 
 export type Page =
@@ -73,10 +73,73 @@ function DriverBlockedScreen() {
   );
 }
 
+// ─── No-Fleet Screen ──────────────────────────────────────────────────────────
+// Shown when a manager is authenticated but has no fleet (e.g. after deletion).
+
+function NoFleetScreen() {
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignUp = async () => {
+    setSigningOut(true);
+    await supabase.auth.signOut({ scope: 'global' });
+    window.location.href = '/';
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-6">
+      <div className="max-w-md w-full text-center space-y-6">
+
+        {/* Icon */}
+        <div className="w-16 h-16 rounded-2xl bg-amber-600/20 border border-amber-500/30 flex items-center justify-center mx-auto">
+          <svg className="w-8 h-8 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M3 9.75L12 3l9 6.75V21a.75.75 0 01-.75.75H15v-6H9v6H3.75A.75.75 0 013 21V9.75z" />
+          </svg>
+        </div>
+
+        {/* Heading */}
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-2">No Fleet Found</h1>
+          <p className="text-gray-400 text-sm leading-relaxed">
+            Your account is not linked to any fleet. This happens when a fleet has been
+            deleted or was never set up for this account.
+          </p>
+        </div>
+
+        {/* Instruction card */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-left space-y-2">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">What to do</p>
+          <p className="text-sm text-gray-300">
+            Sign up to create a new fleet. You will need to register with a fleet name and
+            your credentials to get started again.
+          </p>
+        </div>
+
+        {/* CTA */}
+        <button
+          onClick={handleSignUp}
+          disabled={signingOut}
+          className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+        >
+          {signingOut
+            ? <><span className="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Signing out…</>
+            : 'Sign Out & Sign Up'}
+        </button>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── App Inner ────────────────────────────────────────────────────────────────
+
 function AppInner() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isDriver, setIsDriver] = useState(false);
+
+  // Subscription context — used to detect "no fleet" for authenticated managers.
+  const { fleetId, loading: subLoading } = useSubscription();
   const [currentPage, setCurrentPage] = useState<Page>('overview');
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
 
@@ -143,7 +206,8 @@ function AppInner() {
     setCurrentPage('vehicles');
   };
 
-  if (loading) {
+  // Show spinner while auth OR subscription data is still loading
+  if (loading || (user && !isDriver && subLoading)) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500" />
@@ -153,6 +217,9 @@ function AppInner() {
 
   if (!user) return <Auth />;
   if (isDriver) return <DriverBlockedScreen />;
+
+  // Authenticated manager with no fleet — show signup prompt instead of broken dashboard
+  if (!fleetId) return <NoFleetScreen />;
 
   // Shorthand so each FeatureGate can redirect to Admin for upgrade
   const toAdmin = () => handleNavigate('admin');
