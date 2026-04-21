@@ -78,17 +78,37 @@ serve(async (req) => {
   if (!user) return err("Failed to create user account", 500);
 
   // 2. Create the fleet linked to this new manager
-  const { error: fleetError } = await adminClient.from("fleets").insert({
-    name:         fleet_name.trim(),
-    organization: fleet_name.trim(),
-    manager_id:   user.id,
-  });
+  const { data: newFleet, error: fleetError } = await adminClient
+    .from("fleets")
+    .insert({
+      name:         fleet_name.trim(),
+      organization: fleet_name.trim(),
+      manager_id:   user.id,
+    })
+    .select("id")
+    .single();
 
-  if (fleetError) {
+  if (fleetError || !newFleet) {
     // Roll back the auth user so the account isn't left in a half-created state
     await adminClient.auth.admin.deleteUser(user.id);
-    return err(`Fleet creation failed: ${fleetError.message}`, 500);
+    return err(`Fleet creation failed: ${fleetError?.message ?? "unknown"}`, 500);
   }
+
+  // 2b. Explicitly create the subscription row as a safety net.
+  //     The fn_create_fleet_subscription trigger should do this automatically,
+  //     but may be missing on some deployments. The ON CONFLICT DO NOTHING
+  //     makes this idempotent if the trigger already fired.
+  await adminClient.from("subscriptions").upsert(
+    {
+      fleet_id:      newFleet.id,
+      plan:          "trial",
+      status:        "trial",
+      max_vehicles:  2,
+      max_drivers:   3,
+      trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    },
+    { onConflict: "fleet_id", ignoreDuplicates: true }
+  );
 
   // 3. Sign in with the regular anon client to obtain a proper session
   const anonClient = createClient(SUPABASE_URL, ANON_KEY);
