@@ -247,8 +247,8 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
             <Car className="w-10 h-10 text-gray-700 mx-auto mb-3" />
             <p className="text-gray-400 font-medium mb-1">No vehicles yet</p>
             <p className="text-gray-600 text-sm max-w-sm mx-auto">
-              Click <span className="text-gray-300 font-medium">Add Vehicle</span> to pre-register a vehicle,
-              or click <span className="text-green-400 font-medium">Create Driver</span> to add a driver —
+              Click <button className="text-gray-300 font-medium underline cursor-pointer" onClick={() => setShowAddVehicle(true)}>Add Vehicle</button> to pre-register a vehicle,
+              or click <button className="text-green-400 font-medium underline cursor-pointer" onClick={() => setShowDriverModal(true)}>Create Driver</button> to add a driver —
               vehicles appear automatically once a driver connects their OBD adapter.
             </p>
           </div>
@@ -291,7 +291,7 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
         {drivers.length === 0 ? (
           <div className="rounded-xl border border-gray-800 bg-gray-900/50 px-6 py-8 text-center">
             <p className="text-gray-500 text-sm">
-              No driver accounts yet. Click <span className="text-green-400">Create Driver</span> to add one.
+              No driver accounts yet. Click <button className="text-green-400 underline cursor-pointer" onClick={() => setShowDriverModal(true)}>Create Driver</button> to add one.
             </p>
           </div>
         ) : (
