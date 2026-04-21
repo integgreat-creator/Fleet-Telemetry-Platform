@@ -96,28 +96,36 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
 
       // ── Limit OK — proceed with creation ──────────────────────────────────
       const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token ?? null;
-      if (!accessToken) throw new Error('Not authenticated — please log in again');
+      if (!session?.access_token) throw new Error('Not authenticated — please log in again');
 
-      const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: {
-          action:   'create',
-          name:     name.trim(),
-          email:    email.trim().toLowerCase(),
-          password,
-          phone:    phone.trim() || undefined,
-          fleet_id: fleetId,
+      // Use fetch directly so we have explicit control over both required
+      // Supabase gateway headers (apikey + Authorization).
+      // supabase.functions.invoke() in v2.57 doesn't reliably forward custom
+      // headers alongside its own auto-injected auth, causing UNAUTHORIZED_NO_AUTH_HEADER.
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/driver-management`,
+        {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action:   'create',
+            name:     name.trim(),
+            email:    email.trim().toLowerCase(),
+            password,
+            phone:    phone.trim() || undefined,
+            fleet_id: fleetId,
+          }),
         },
-      });
+      );
 
-      if (fnErr) {
-        let msg = fnErr.message ?? 'Failed to create driver';
-        try {
-          const errBody = await (fnErr as any).context?.json?.();
-          msg = errBody?.error ?? errBody?.message ?? msg;
-        } catch { /* context not parseable — use fnErr.message */ }
-        console.error('[CreateDriver] edge function error', fnErr, msg);
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data?.error ?? data?.message ?? `Request failed (HTTP ${res.status})`;
+        console.error('[CreateDriver] edge function error', res.status, data);
         throw new Error(msg);
       }
 
