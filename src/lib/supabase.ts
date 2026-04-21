@@ -1,9 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl    = import.meta.env.VITE_SUPABASE_URL    as string;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Pass auth options explicitly as a single config object.
+// This avoids the internal GoTrue "deprecated positional parameters" code path
+// that Vercel's feature_collector.js reports as a console warning.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken:  true,
+    persistSession:    true,
+    detectSessionInUrl: true,
+  },
+});
 
 export interface Fleet {
   id: string;
