@@ -170,15 +170,17 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
     setDeletingDriver(driverId);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token ?? null;
-      if (!accessToken) return;
+      if (!session?.access_token) throw new Error('No active session — please log in again');
       const { error: fnErr } = await supabase.functions.invoke('driver-management', {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { Authorization: `Bearer ${session.access_token}` },
         body: { action: 'delete', driver_id: driverId },
       });
-      if (!fnErr) setDrivers(d => d.filter(x => x.id !== driverId));
-    } catch (e) {
-      console.error('Error deleting driver:', e);
+      if (fnErr) throw new Error(fnErr.message ?? 'Driver deletion failed');
+      setDrivers(d => d.filter(x => x.id !== driverId));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to delete driver';
+      console.error('[VehiclesPage] deleteDriver error:', e);
+      setDeleteError(msg);
     } finally {
       setDeletingDriver(null);
     }
