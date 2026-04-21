@@ -549,6 +549,10 @@ export default function AdminPage() {
   const [deleteConfirmName,  setDeleteConfirmName]  = useState('');
   const [deleting,           setDeleting]           = useState(false);
   const [deleteError,        setDeleteError]        = useState<string | null>(null);
+  // Fleet name resolved at modal-open time (independent of effectiveFleetId)
+  const [modalFleetName,     setModalFleetName]     = useState<string>('');
+  const [modalFleetId,       setModalFleetId]       = useState<string | null>(null);
+  const [modalLoading,       setModalLoading]       = useState(false);
 
   // ── Fetch fleet on mount ────────────────────────────────────────────────────
   // Loads fleetName + joinCode.  If the manager query finds nothing (race or
@@ -598,38 +602,64 @@ export default function AdminPage() {
     setTimeout(() => setJoinCodeCopied(false), 2000);
   };
 
+  // Opens the modal and resolves the fleet record fresh from the DB.
+  // Never depends on pre-loaded state — works even if effectiveFleetId is null.
+  const openDeleteModal = async () => {
+    setDeleteConfirmName('');
+    setDeleteError(null);
+    setModalFleetName('');
+    setModalFleetId(null);
+    setShowDeleteModal(true);
+    setModalLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setDeleteError('Not authenticated.'); return; }
+
+      const { data, error } = await supabase
+        .from('fleets')
+        .select('id, name')
+        .eq('manager_id', user.id)
+        .maybeSingle();
+
+      if (error) { setDeleteError(error.message); return; }
+      if (!data)  { setDeleteError('No fleet found for your account.'); return; }
+
+      setModalFleetId(data.id);
+      setModalFleetName(data.name ?? '');
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
   const handleDeleteFleet = async () => {
-    const currentFleetId = effectiveFleetId;
-    if (!currentFleetId) return;
+    if (!modalFleetId) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      // ── Step 1: Snapshot driver user_ids for auth cleanup (best-effort) ──────
-      // Done before deletion so we still have the rows to read
+      // ── Step 1: Snapshot driver user_ids before deletion ─────────────────────
       const { data: driverRows } = await supabase
         .from('driver_accounts')
         .select('user_id')
-        .eq('fleet_id', currentFleetId);
+        .eq('fleet_id', modalFleetId);
 
       const driverUserIds: string[] = (driverRows ?? [])
         .map((d: { user_id: string }) => d.user_id)
         .filter(Boolean);
 
-      // ── Step 2: Delete the fleet record ──────────────────────────────────────
-      // RLS policy "Fleet managers can delete their own fleets" permits this.
+      // ── Step 2: Delete the fleet ──────────────────────────────────────────────
+      // RLS policy "Fleet managers can delete their own fleets" allows this.
       // ON DELETE CASCADE removes: vehicles, sensor_data, trips, alerts,
       // thresholds, device_health, driver_accounts, subscriptions, invitations.
       const { error: deleteErr } = await supabase
         .from('fleets')
         .delete()
-        .eq('id', currentFleetId);
+        .eq('id', modalFleetId);
 
       if (deleteErr) throw new Error(deleteErr.message);
 
       // ── Step 3: Best-effort driver auth.users cleanup via edge function ───────
-      // The fleet is already gone at this point. The edge function receives
-      // the driver user_ids directly so it can delete them without querying the
-      // (now-deleted) fleet. Silently ignored if the function is not deployed.
+      // Fleet is already gone; pass driver_user_ids directly. Silently ignored
+      // if the function hasn't been deployed yet.
       if (driverUserIds.length > 0) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -648,13 +678,11 @@ export default function AdminPage() {
             );
           }
         } catch {
-          // Driver auth cleanup is best-effort — don't block the user
+          // Best-effort — don't block the user if this fails
         }
       }
 
-      // ── Step 4: Sign out and go to the sign-in page ───────────────────────────
-      // Pass scope explicitly — avoids the legacy signOut() code path that
-      // Vercel's feature_collector.js flags as "deprecated parameters".
+      // ── Step 4: Sign out and redirect ────────────────────────────────────────
       await supabase.auth.signOut({ scope: 'global' });
       window.location.href = '/';
     } catch (e: unknown) {
@@ -1713,13 +1741,8 @@ export default function AdminPage() {
                 This action cannot be undone. Your manager account will be signed out immediately.
               </p>
               <button
-                onClick={() => {
-                  setDeleteConfirmName('');
-                  setDeleteError(null);
-                  setShowDeleteModal(true);
-                }}
-                disabled={!effectiveFleetId}
-                className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+                onClick={openDeleteModal}
+                className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
                 Delete Fleet and All Data…
@@ -1745,64 +1768,88 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* What will be deleted */}
-            <div className="bg-red-950/30 border border-red-900/50 rounded-xl p-4 space-y-2">
-              <p className="text-red-300 text-xs font-semibold uppercase tracking-wide">
-                The following will be permanently deleted:
-              </p>
-              <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
-                <li>Fleet: <span className="text-white font-medium">{fleetName || 'your fleet'}</span></li>
-                <li>All vehicles, sensor data, trips &amp; alerts</li>
-                <li>All driver accounts and credentials</li>
-                <li>Subscription, billing history &amp; audit logs</li>
-              </ul>
-            </div>
-
-            {/* Confirm by typing fleet name */}
-            <div className="space-y-2">
-              <label className="text-sm text-gray-300">
-                Type{' '}
-                <span className="text-white font-mono font-semibold">
-                  {fleetName || 'your fleet name'}
-                </span>{' '}
-                to confirm:
-              </label>
-              <input
-                type="text"
-                value={deleteConfirmName}
-                onChange={e => { setDeleteConfirmName(e.target.value); setDeleteError(null); }}
-                placeholder={fleetName || 'Fleet name'}
-                className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-red-500 text-sm"
-                autoComplete="off"
-              />
-            </div>
-
-            {deleteError && (
-              <div className="flex items-start gap-2 px-3 py-2.5 bg-red-900/20 border border-red-700/40 rounded-lg text-red-400 text-xs">
-                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                {deleteError}
+            {/* Loading state while fleet is fetched */}
+            {modalLoading ? (
+              <div className="flex items-center justify-center gap-3 py-6 text-gray-400 text-sm">
+                <Loader className="w-5 h-5 animate-spin" />
+                Looking up your fleet…
               </div>
-            )}
+            ) : (
+              <>
+                {/* What will be deleted */}
+                <div className="bg-red-950/30 border border-red-900/50 rounded-xl p-4 space-y-2">
+                  <p className="text-red-300 text-xs font-semibold uppercase tracking-wide">
+                    The following will be permanently deleted:
+                  </p>
+                  <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
+                    <li>
+                      Fleet:{' '}
+                      <span className="text-white font-medium">
+                        {modalFleetName || '—'}
+                      </span>
+                    </li>
+                    <li>All vehicles, sensor data, trips &amp; alerts</li>
+                    <li>All driver accounts and credentials</li>
+                    <li>Subscription, billing history &amp; audit logs</li>
+                  </ul>
+                </div>
 
-            {/* Action buttons */}
-            <div className="flex gap-3 pt-1">
-              <button
-                onClick={() => setShowDeleteModal(false)}
-                disabled={deleting}
-                className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteFleet}
-                disabled={deleting || !effectiveFleetId || (fleetName ? deleteConfirmName.trim() !== fleetName.trim() : deleteConfirmName.trim().length === 0)}
-                className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
-              >
-                {deleting
-                  ? <><Loader className="w-4 h-4 animate-spin" /> Deleting…</>
-                  : <><Trash2 className="w-4 h-4" /> Permanently Delete</>}
-              </button>
-            </div>
+                {/* Confirm by typing fleet name — only shown when name resolved */}
+                {modalFleetName && (
+                  <div className="space-y-2">
+                    <label className="text-sm text-gray-300">
+                      Type{' '}
+                      <span className="text-white font-mono font-semibold">
+                        {modalFleetName}
+                      </span>{' '}
+                      to confirm:
+                    </label>
+                    <input
+                      type="text"
+                      value={deleteConfirmName}
+                      onChange={e => { setDeleteConfirmName(e.target.value); setDeleteError(null); }}
+                      placeholder={modalFleetName}
+                      className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-red-500 text-sm"
+                      autoComplete="off"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                {deleteError && (
+                  <div className="flex items-start gap-2 px-3 py-2.5 bg-red-900/20 border border-red-700/40 rounded-lg text-red-400 text-xs">
+                    <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    {deleteError}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex gap-3 pt-1">
+                  <button
+                    onClick={() => setShowDeleteModal(false)}
+                    disabled={deleting}
+                    className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteFleet}
+                    disabled={
+                      deleting ||
+                      !modalFleetId ||
+                      (modalFleetName
+                        ? deleteConfirmName.trim() !== modalFleetName.trim()
+                        : true)
+                    }
+                    className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    {deleting
+                      ? <><Loader className="w-4 h-4 animate-spin" /> Deleting…</>
+                      : <><Trash2 className="w-4 h-4" /> Permanently Delete</>}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
