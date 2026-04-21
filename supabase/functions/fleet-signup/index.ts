@@ -59,65 +59,98 @@ serve(async (req) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // ── Anon client — used for sign-in steps ────────────────────────────────────
+  const anonClient = createClient(SUPABASE_URL, ANON_KEY);
+
+  // ── Helper: create fleet + subscription for a known user ID, then return ────
+  async function createFleetForUser(
+    userId: string,
+    session: { access_token: string; refresh_token: string; [key: string]: unknown }
+  ): Promise<Response> {
+    const { data: newFleet, error: fleetError } = await adminClient
+      .from("fleets")
+      .insert({
+        name:         fleet_name.trim(),
+        organization: fleet_name.trim(),
+        manager_id:   userId,
+      })
+      .select("id")
+      .single();
+
+    if (fleetError || !newFleet) {
+      return err(`Fleet creation failed: ${fleetError?.message ?? "unknown"}`, 500);
+    }
+
+    await adminClient.from("subscriptions").upsert(
+      {
+        fleet_id:      newFleet.id,
+        plan:          "trial",
+        status:        "trial",
+        max_vehicles:  2,
+        max_drivers:   3,
+        trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      { onConflict: "fleet_id", ignoreDuplicates: true }
+    );
+
+    return json({ session });
+  }
+
   // 1. Create the auth user, marking the email as confirmed so they can
   //    sign in immediately without needing an email confirmation link.
   const { data: { user }, error: createError } =
     await adminClient.auth.admin.createUser({
-      email:          email.trim().toLowerCase(),
+      email:         normalizedEmail,
       password,
-      email_confirm:  true,
+      email_confirm: true,
     });
 
   if (createError) {
     if (createError.message.toLowerCase().includes("already")) {
-      return err("An account with this email already exists. Please log in.", 409);
+      // The auth account exists — likely because the user previously deleted their
+      // fleet but the auth.users row was kept.  Verify credentials by signing in:
+      //   - If sign-in succeeds AND the user has no fleet  → create a new fleet
+      //   - If sign-in succeeds AND the user has a fleet   → genuine conflict
+      //   - If sign-in fails (wrong password)              → reject cleanly
+      const { data: existingSignIn, error: signInErr } =
+        await anonClient.auth.signInWithPassword({ email: normalizedEmail, password });
+
+      if (signInErr || !existingSignIn?.user || !existingSignIn.session) {
+        // Wrong password or other auth error — do not reveal details
+        return err("An account with this email already exists. Please log in.", 409);
+      }
+
+      // Check whether this account still has a fleet
+      const { data: existingFleet } = await adminClient
+        .from("fleets")
+        .select("id")
+        .eq("manager_id", existingSignIn.user.id)
+        .maybeSingle();
+
+      if (existingFleet) {
+        // Account has an active fleet — tell them to log in normally
+        return err("An account with this email already exists. Please log in.", 409);
+      }
+
+      // No fleet — create one and return the already-obtained session
+      return createFleetForUser(existingSignIn.user.id, existingSignIn.session);
     }
     return err(createError.message, 400);
   }
 
   if (!user) return err("Failed to create user account", 500);
 
-  // 2. Create the fleet linked to this new manager
-  const { data: newFleet, error: fleetError } = await adminClient
-    .from("fleets")
-    .insert({
-      name:         fleet_name.trim(),
-      organization: fleet_name.trim(),
-      manager_id:   user.id,
-    })
-    .select("id")
-    .single();
-
-  if (fleetError || !newFleet) {
-    // Roll back the auth user so the account isn't left in a half-created state
-    await adminClient.auth.admin.deleteUser(user.id);
-    return err(`Fleet creation failed: ${fleetError?.message ?? "unknown"}`, 500);
-  }
-
-  // 2b. Explicitly create the subscription row as a safety net.
-  //     The fn_create_fleet_subscription trigger should do this automatically,
-  //     but may be missing on some deployments. The ON CONFLICT DO NOTHING
-  //     makes this idempotent if the trigger already fired.
-  await adminClient.from("subscriptions").upsert(
-    {
-      fleet_id:      newFleet.id,
-      plan:          "trial",
-      status:        "trial",
-      max_vehicles:  2,
-      max_drivers:   3,
-      trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    },
-    { onConflict: "fleet_id", ignoreDuplicates: true }
-  );
-
-  // 3. Sign in with the regular anon client to obtain a proper session
-  const anonClient = createClient(SUPABASE_URL, ANON_KEY);
+  // 2 + 2b handled by the shared helper; sign in first to get a session
   const { data: signInData, error: signInError } =
-    await anonClient.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+    await anonClient.auth.signInWithPassword({ email: normalizedEmail, password });
 
   if (signInError || !signInData.session) {
+    // Account was created but sign-in failed — roll back to avoid orphaned user
+    await adminClient.auth.admin.deleteUser(user.id);
     return err("Account created but sign-in failed. Please log in manually.", 500);
   }
 
-  return json({ session: signInData.session });
+  return createFleetForUser(user.id, signInData.session);
 });
