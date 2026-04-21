@@ -653,7 +653,9 @@ export default function AdminPage() {
       }
 
       // ── Step 4: Sign out and go to the sign-in page ───────────────────────────
-      await supabase.auth.signOut();
+      // Pass scope explicitly — avoids the legacy signOut() code path that
+      // Vercel's feature_collector.js flags as "deprecated parameters".
+      await supabase.auth.signOut({ scope: 'global' });
       window.location.href = '/';
     } catch (e: unknown) {
       setDeleteError(e instanceof Error ? e.message : 'Fleet deletion failed');
