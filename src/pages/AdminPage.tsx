@@ -21,7 +21,6 @@ import {
   Bell,
   Copy,
   Link2,
-  TriangleAlert,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -1628,7 +1627,7 @@ export default function AdminPage() {
           <div className="bg-gray-900 rounded-xl border border-red-800/60 p-6 space-y-4">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-red-500/15 rounded-lg">
-                <TriangleAlert className="w-5 h-5 text-red-400" />
+                <AlertTriangle className="w-5 h-5 text-red-400" />
               </div>
               <div>
                 <p className="text-red-400 font-semibold">Danger Zone</p>
@@ -1678,7 +1677,7 @@ export default function AdminPage() {
             {/* Header */}
             <div className="flex items-center gap-3">
               <div className="p-2.5 bg-red-500/15 rounded-xl">
-                <TriangleAlert className="w-6 h-6 text-red-400" />
+                <AlertTriangle className="w-6 h-6 text-red-400" />
               </div>
               <div>
                 <h2 className="text-white font-bold text-lg">Delete Fleet</h2>
