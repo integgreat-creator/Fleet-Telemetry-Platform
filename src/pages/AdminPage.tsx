@@ -551,11 +551,12 @@ export default function AdminPage() {
     const fetchFleet = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // maybeSingle() returns null instead of throwing PGRST116 when 0 rows
       const { data } = await supabase
         .from('fleets')
         .select('id, name, join_code')
         .eq('manager_id', user.id)
-        .single();
+        .maybeSingle();
       if (data) {
         setFleetId(data.id);
         setFleetName(data.name ?? '');
@@ -573,28 +574,59 @@ export default function AdminPage() {
   };
 
   const handleDeleteFleet = async () => {
-    if (!fleetId || deleteConfirmName.trim() !== fleetName.trim()) return;
+    if (!fleetId) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('No active session');
+      // ── Step 1: Snapshot driver user_ids for auth cleanup (best-effort) ──────
+      // Done before deletion so we still have the rows to read
+      const { data: driverRows } = await supabase
+        .from('driver_accounts')
+        .select('user_id')
+        .eq('fleet_id', fleetId);
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const res = await fetch(`${supabaseUrl}/functions/v1/fleet-delete`, {
-        method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-          'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-        },
-        body: JSON.stringify({ fleet_id: fleetId }),
-      });
+      const driverUserIds: string[] = (driverRows ?? [])
+        .map((d: { user_id: string }) => d.user_id)
+        .filter(Boolean);
 
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.error ?? `Delete failed (HTTP ${res.status})`);
+      // ── Step 2: Delete the fleet record ──────────────────────────────────────
+      // RLS policy "Fleet managers can delete their own fleets" permits this.
+      // ON DELETE CASCADE removes: vehicles, sensor_data, trips, alerts,
+      // thresholds, device_health, driver_accounts, subscriptions, invitations.
+      const { error: deleteErr } = await supabase
+        .from('fleets')
+        .delete()
+        .eq('id', fleetId);
 
-      // Sign out and reload — the fleet no longer exists
+      if (deleteErr) throw new Error(deleteErr.message);
+
+      // ── Step 3: Best-effort driver auth.users cleanup via edge function ───────
+      // The fleet is already gone at this point. The edge function receives
+      // the driver user_ids directly so it can delete them without querying the
+      // (now-deleted) fleet. Silently ignored if the function is not deployed.
+      if (driverUserIds.length > 0) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            await fetch(
+              `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/fleet-delete`,
+              {
+                method:  'POST',
+                headers: {
+                  'Content-Type':  'application/json',
+                  'Authorization': `Bearer ${session.access_token}`,
+                  'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+                },
+                body: JSON.stringify({ cleanup_only: true, driver_user_ids: driverUserIds }),
+              },
+            );
+          }
+        } catch {
+          // Driver auth cleanup is best-effort — don't block the user
+        }
+      }
+
+      // ── Step 4: Sign out and go to the sign-in page ───────────────────────────
       await supabase.auth.signOut();
       window.location.href = '/';
     } catch (e: unknown) {
@@ -1735,7 +1767,7 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={handleDeleteFleet}
-                disabled={deleting || deleteConfirmName.trim() !== fleetName.trim() || !fleetName}
+                disabled={deleting || !fleetId || (fleetName ? deleteConfirmName.trim() !== fleetName.trim() : deleteConfirmName.trim().length === 0)}
                 className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
               >
                 {deleting
