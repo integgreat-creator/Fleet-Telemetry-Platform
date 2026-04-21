@@ -1,22 +1,20 @@
 /**
  * fleet-delete edge function
  *
- * Permanently deletes a fleet and ALL associated data:
- *   1. Verifies the caller is the fleet manager (manager_id = userId)
- *   2. Collects all driver user_ids so we can purge their auth accounts
- *   3. Deletes the fleet record — ON DELETE CASCADE handles:
- *        vehicles → sensor_data, alerts, trips, thresholds, device_health
- *        driver_accounts → (cascade from fleet_id)
- *        subscriptions
- *        invitations
- *   4. Deletes every driver's auth.users entry via the service-role admin API
- *      (DB cascade cannot reach auth schema)
+ * Supports two modes:
  *
- * NOTE: The manager's own auth user is NOT deleted here.
- * The client is responsible for calling supabase.auth.signOut() after success.
+ * MODE A — Full delete (legacy, cleanup_only absent or false):
+ *   Verifies caller owns the fleet, deletes the fleet record (DB cascade
+ *   removes all child data), then purges driver auth.users via service role.
+ *   POST { fleet_id }
  *
- * POST { fleet_id }
- * Authorization: Bearer <user-jwt>
+ * MODE B — Auth cleanup only (cleanup_only: true):
+ *   Called by the web client AFTER it has already deleted the fleet via the
+ *   Supabase JS client. Receives driver_user_ids directly and purges those
+ *   auth.users entries. No fleet verification needed (fleet is already gone).
+ *   POST { cleanup_only: true, driver_user_ids: string[] }
+ *
+ * Both modes require: Authorization: Bearer <user-jwt>
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -55,7 +53,6 @@ serve(async (req) => {
 
   const userJwt = authHeader.slice(7);
 
-  // Use the user-scoped client to verify their identity (RLS is applied here)
   const userClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${userJwt}` } },
     auth:   { autoRefreshToken: false, persistSession: false },
@@ -65,16 +62,50 @@ serve(async (req) => {
   if (userErr || !user) return err("Invalid or expired session", 401);
 
   // ── Parse body ───────────────────────────────────────────────────────────────
-  let fleet_id: string;
+  let body: Record<string, unknown>;
   try {
-    ({ fleet_id } = await req.json());
+    body = await req.json();
   } catch {
     return err("Invalid JSON body");
   }
 
+  const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // MODE B — Auth cleanup only
+  // The fleet has already been deleted client-side; just purge driver auth users.
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (body.cleanup_only === true) {
+    const driverUserIds = Array.isArray(body.driver_user_ids)
+      ? (body.driver_user_ids as unknown[]).filter((id): id is string => typeof id === "string")
+      : [];
+
+    if (driverUserIds.length === 0) {
+      return json({ success: true, drivers_purged: 0, driver_purge_errors: 0 });
+    }
+
+    const results = await Promise.allSettled(
+      driverUserIds.map(uid => adminClient.auth.admin.deleteUser(uid))
+    );
+
+    const errors = results.filter(r => r.status === "rejected").length;
+
+    return json({
+      success:             true,
+      drivers_purged:      driverUserIds.length - errors,
+      driver_purge_errors: errors,
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // MODE A — Full delete
+  // ══════════════════════════════════════════════════════════════════════════════
+  const fleet_id = body.fleet_id as string | undefined;
   if (!fleet_id) return err("fleet_id is required");
 
-  // ── Verify caller is the fleet manager ──────────────────────────────────────
+  // Verify caller is the fleet manager
   const { data: fleet, error: fleetErr } = await userClient
     .from("fleets")
     .select("id, name, manager_id")
@@ -84,12 +115,7 @@ serve(async (req) => {
   if (fleetErr || !fleet) return err("Fleet not found", 404);
   if (fleet.manager_id !== user.id) return err("You are not authorised to delete this fleet", 403);
 
-  // ── Service-role client for privileged operations ────────────────────────────
-  const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-
-  // ── Collect driver user_ids before deleting ──────────────────────────────────
+  // Collect driver user_ids before deletion
   const { data: driverRows } = await adminClient
     .from("driver_accounts")
     .select("user_id")
@@ -99,30 +125,25 @@ serve(async (req) => {
     .map((d: { user_id: string }) => d.user_id)
     .filter(Boolean);
 
-  // ── Delete the fleet (cascades to all child rows) ────────────────────────────
+  // Delete the fleet — ON DELETE CASCADE removes all child rows
   const { error: deleteErr } = await adminClient
     .from("fleets")
     .delete()
     .eq("id", fleet_id);
 
-  if (deleteErr) {
-    return err(`Failed to delete fleet: ${deleteErr.message}`, 500);
-  }
+  if (deleteErr) return err(`Failed to delete fleet: ${deleteErr.message}`, 500);
 
-  // ── Delete driver auth users (best-effort; failures are logged, not fatal) ───
-  const driverDeleteResults = await Promise.allSettled(
+  // Purge driver auth users (best-effort)
+  const results = await Promise.allSettled(
     driverUserIds.map(uid => adminClient.auth.admin.deleteUser(uid))
   );
 
-  const driverDeleteErrors = driverDeleteResults
-    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
-    .map(r => String(r.reason));
+  const errors = results.filter(r => r.status === "rejected").length;
 
-  // ── Done ─────────────────────────────────────────────────────────────────────
   return json({
-    success: true,
-    fleet_name:           fleet.name,
-    drivers_purged:       driverUserIds.length - driverDeleteErrors.length,
-    driver_purge_errors:  driverDeleteErrors.length,
+    success:             true,
+    fleet_name:          fleet.name,
+    drivers_purged:      driverUserIds.length - errors,
+    driver_purge_errors: errors,
   });
 });
