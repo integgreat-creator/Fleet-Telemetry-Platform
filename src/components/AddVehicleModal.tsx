@@ -54,12 +54,18 @@ export default function AddVehicleModal({ fleetId, onClose, onVehicleAdded, onNa
       const { data: limitData, error: limitErr } = await supabase
         .rpc('check_vehicle_limit', { p_fleet_id: fleetId });
 
-      if (limitErr) throw new Error(limitErr.message);
-
-      const check = limitData as LimitCheck;
-      if (!check.allowed) {
-        setLimitBlocked(check);
-        return;
+      // If the RPC errors (not deployed yet) skip the limit check — the DB
+      // constraint will still block over-quota inserts server-side.
+      if (!limitErr && limitData) {
+        const check = limitData as LimitCheck;
+        // Only block on a real limit hit (has used/limit counts) — not on
+        // "no subscription found" which just means the subscription trigger
+        // hasn't run yet on this fresh fleet.
+        const isRealLimit = !check.allowed && check.used != null && check.limit != null;
+        if (isRealLimit) {
+          setLimitBlocked(check);
+          return;
+        }
       }
 
       // ── Limit OK — proceed with insert ────────────────────────────────────

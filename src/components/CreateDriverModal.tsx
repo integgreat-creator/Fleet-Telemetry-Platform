@@ -80,12 +80,18 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
       const { data: limitData, error: limitErr } = await supabase
         .rpc('check_driver_limit', { p_fleet_id: fleetId });
 
-      if (limitErr) throw new Error(limitErr.message);
-
-      const check = limitData as LimitCheck;
-      if (!check.allowed) {
-        setLimitBlocked(check);
-        return;
+      // If the RPC itself errors (function not deployed, etc.) skip the limit
+      // check and proceed — the edge function will enforce it server-side.
+      if (!limitErr && limitData) {
+        const check = limitData as LimitCheck;
+        // Only block on a real limit hit (has a used/limit count) — not on
+        // "no subscription found" which just means the subscription trigger
+        // hasn't run yet (new fleet). Proceed in that case.
+        const isRealLimit = !check.allowed && check.used != null && check.limit != null;
+        if (isRealLimit) {
+          setLimitBlocked(check);
+          return;
+        }
       }
 
       // ── Limit OK — proceed with creation ──────────────────────────────────

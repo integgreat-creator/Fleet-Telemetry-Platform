@@ -38,16 +38,28 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
   const [loading,           setLoading]           = useState(false);
   const [refreshing,        setRefreshing]        = useState(false);
   const [showDriverModal,   setShowDriverModal]   = useState(false);
-  const [showAddVehicle,    setShowAddVehicle]    = useState(false);   // WEB-1
+  const [showAddVehicle,    setShowAddVehicle]    = useState(false);
   const [deletingDriver,    setDeletingDriver]    = useState<string | null>(null);
   const [resendToken,       setResendToken]       = useState<string | null>(null);
   const [credDriver,        setCredDriver]        = useState<DriverAccount | null>(null);
   const [regenLoading,      setRegenLoading]      = useState(false);
   const [copiedCredLink,    setCopiedCredLink]    = useState(false);
   const [deleteError,       setDeleteError]       = useState('');
+  const [fleetError,        setFleetError]        = useState<string | null>(null);
   const credQrRef = useRef<HTMLCanvasElement>(null);
 
-  const loadAll = useCallback(async () => {
+  // Unified fleet ID — local query result OR subscription hook fallback.
+  // Using this everywhere ensures buttons / modals work as soon as EITHER resolves.
+  const effectiveFleetId = fleetId ?? subFleetId;
+
+  // Use a ref so loadAll always reads the latest fleet IDs without needing
+  // to re-create on every change (prevents infinite useEffect loops).
+  const fleetIdRef  = useRef<string | null>(null);
+  const subFleetRef = useRef<string | null>(null);
+  fleetIdRef.current  = fleetId;
+  subFleetRef.current = subFleetId;
+
+  const loadAll = useCallback(async (forcedFleetId?: string) => {
     const timeout = setTimeout(() => {
       setLoading(false);
       setRefreshing(false);
@@ -56,47 +68,89 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Get fleet
-      const { data: fleet, error: fleetErr } = await supabase
-        .from('fleets')
-        .select('id')
-        .eq('manager_id', user.id)
-        .single();
+      // ── Resolve fleet ID ────────────────────────────────────────────────────
+      // Use maybeSingle() so PGRST116 (0 rows) doesn't throw — it returns null.
+      // If forcedFleetId is passed (e.g. from subFleetId fallback), skip DB query.
+      let currentFleetId = forcedFleetId
+        ?? fleetIdRef.current
+        ?? subFleetRef.current
+        ?? null;
 
-      if (fleetErr) throw fleetErr;
-      setFleetId(fleet.id);
+      if (!currentFleetId) {
+        const { data: fleet, error: fleetErr } = await supabase
+          .from('fleets')
+          .select('id')
+          .eq('manager_id', user.id)
+          .maybeSingle();
 
-      // Get vehicles
+        if (fleetErr) {
+          console.error('[VehiclesPage] Fleet query error:', fleetErr.message);
+          setFleetError(`Database error: ${fleetErr.message}`);
+          return;
+        }
+        if (!fleet) {
+          console.warn('[VehiclesPage] No fleet found for user:', user.id,
+            '— fleet record may not exist or manager_id mismatch.');
+          setFleetError('no_fleet');
+          return;
+        }
+        currentFleetId = fleet.id;
+      }
+
+      setFleetError(null);
+      setFleetId(currentFleetId);
+
+      // ── Vehicles ────────────────────────────────────────────────────────────
       const { data: vehiclesData, error: vehiclesErr } = await supabase
         .from('vehicles')
         .select('*')
-        .eq('fleet_id', fleet.id)
+        .eq('fleet_id', currentFleetId)
         .order('created_at', { ascending: false });
 
-      if (vehiclesErr) throw vehiclesErr;
-      if (vehiclesData) setVehicles(vehiclesData);
+      if (vehiclesErr) {
+        console.error('[VehiclesPage] Vehicles query error:', vehiclesErr.message);
+      } else if (vehiclesData) {
+        setVehicles(vehiclesData);
+      }
 
-      // List drivers directly via DB — no edge function, no JWT issues
-      const { data: driversData } = await supabase
+      // ── Drivers ─────────────────────────────────────────────────────────────
+      const { data: driversData, error: driversErr } = await supabase
         .from('driver_accounts')
         .select('*, vehicles(id, name, vin, make, model)')
-        .eq('fleet_id', fleet.id)
+        .eq('fleet_id', currentFleetId)
         .order('created_at', { ascending: false });
-      if (driversData) setDrivers(driversData);
+
+      if (driversErr) {
+        console.error('[VehiclesPage] Drivers query error:', driversErr.message);
+      } else if (driversData) {
+        setDrivers(driversData);
+      }
     } catch (e) {
-      console.error('Error loading vehicles/drivers:', e);
+      console.error('[VehiclesPage] Unexpected error:', e);
     } finally {
       clearTimeout(timeout);
       setLoading(false);
+      setRefreshing(false);   // ← was missing — fixed refresh-button hang
     }
-  }, []);
+  }, []); // stable ref — uses refs for fleet IDs to avoid infinite loops
 
+  // On mount: run immediately. Also re-run once when subFleetId first becomes
+  // available so data loads without waiting for the fleet DB round-trip.
+  const subFleetLoadedRef = useRef(false);
   useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    if (subFleetId && !subFleetLoadedRef.current) {
+      subFleetLoadedRef.current = true;
+      // Only trigger if local fleetId hasn't already been set by the first load
+      if (!fleetIdRef.current) loadAll(subFleetId);
+    }
+  }, [subFleetId, loadAll]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadAll();
-    setRefreshing(false);
+    // Pass effectiveFleetId so refresh doesn't re-run the fleet query
+    // when we already have the ID — makes it faster and avoids edge-case hangs.
+    await loadAll(effectiveFleetId ?? undefined);
   };
 
   const handleDeleteVehicle = async (id: string) => {
@@ -169,6 +223,37 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
     );
   }
 
+  // ── Fleet not found — shown when neither the local query nor the subscription
+  // hook could locate a fleet record for the current user.
+  if (fleetError === 'no_fleet' && !effectiveFleetId) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-1">Vehicles & Drivers</h1>
+        </div>
+        <div className="rounded-xl border border-yellow-700/40 bg-yellow-900/10 px-6 py-10 text-center space-y-4">
+          <AlertTriangle className="w-10 h-10 text-yellow-400 mx-auto" />
+          <div>
+            <p className="text-white font-semibold text-lg mb-1">Fleet record not found</p>
+            <p className="text-gray-400 text-sm max-w-md mx-auto leading-relaxed">
+              Your account is not linked to any fleet. This can happen if you signed in with
+              different credentials than you used to create your fleet.
+              Please sign out and sign up again with your fleet name to create a new fleet,
+              or contact support if this is unexpected.
+            </p>
+          </div>
+          <button
+            onClick={() => loadAll()}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-gray-200 text-sm font-medium transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
 
@@ -177,6 +262,14 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
         <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           {deleteError}
+        </div>
+      )}
+
+      {/* Fleet error (non-fatal) */}
+      {fleetError && fleetError !== 'no_fleet' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          {fleetError}
         </div>
       )}
 
@@ -199,33 +292,30 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-            {/* Show buttons as soon as either local or subscription fleetId is available */}
-          {(fleetId ?? subFleetId) && (
-            <>
-              {/* WEB-1: Pre-register a vehicle without waiting for a driver */}
-              <button
-                onClick={() => setShowAddVehicle(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-gray-200 text-sm font-medium transition-colors"
-              >
-                <PlusCircle className="w-4 h-4" />
-                Add Vehicle
-              </button>
-              <button
-                onClick={() => setShowDriverModal(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white text-sm font-medium transition-colors"
-              >
-                <UserPlus className="w-4 h-4" />
-                Create Driver
-              </button>
-            </>
-          )}
+          {/* Buttons always rendered — disabled while fleet ID is not yet available */}
+          <button
+            onClick={() => setShowAddVehicle(true)}
+            disabled={!effectiveFleetId}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-gray-200 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <PlusCircle className="w-4 h-4" />
+            Add Vehicle
+          </button>
+          <button
+            onClick={() => setShowDriverModal(true)}
+            disabled={!effectiveFleetId}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <UserPlus className="w-4 h-4" />
+            Create Driver
+          </button>
         </div>
       </div>
 
       {/* ── Pending Invitations ───────────────────────────────────────── */}
-      {(fleetId ?? subFleetId) && (
+      {effectiveFleetId && (
         <PendingInvitationsPanel
-          fleetId={(fleetId ?? subFleetId)!}
+          fleetId={effectiveFleetId}
           onResendQR={(token, _vehicleName, _driverPhone) => {
             setResendToken(token);
           }}
@@ -358,21 +448,23 @@ export default function VehiclesPage({ onSelectVehicle, onNavigate }: VehiclesPa
       </div>
 
       {/* ── Modals ────────────────────────────────────────────────────── */}
-      {/* WEB-1: Vehicle pre-registration modal */}
-      {showAddVehicle && (fleetId ?? subFleetId) && (
+      {/* Modals render whenever their show flag is true AND we have a fleet ID.
+          The header buttons are disabled until effectiveFleetId is available,
+          so by the time the user can click them the ID is always ready.       */}
+      {showAddVehicle && effectiveFleetId && (
         <AddVehicleModal
-          fleetId={(fleetId ?? subFleetId)!}
+          fleetId={effectiveFleetId}
           onClose={() => setShowAddVehicle(false)}
-          onVehicleAdded={() => { loadAll(); setShowAddVehicle(false); }}
+          onVehicleAdded={() => { loadAll(effectiveFleetId); setShowAddVehicle(false); }}
           onNavigateToAdmin={() => onNavigate?.('admin')}
         />
       )}
 
-      {showDriverModal && (fleetId ?? subFleetId) && (
+      {showDriverModal && effectiveFleetId && (
         <CreateDriverModal
-          fleetId={(fleetId ?? subFleetId)!}
+          fleetId={effectiveFleetId}
           onClose={() => setShowDriverModal(false)}
-          onDriverCreated={loadAll}
+          onDriverCreated={() => loadAll(effectiveFleetId)}
           onNavigateToAdmin={() => onNavigate?.('admin')}
         />
       )}
