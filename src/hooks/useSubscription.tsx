@@ -89,7 +89,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
       (event) => {
-        if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+        if (event === 'SIGNED_IN') {
+          // Set loading:true immediately so App.tsx shows the spinner
+          // instead of NoFleetScreen during the gap between SIGNED_IN
+          // firing and the re-fetch effect actually completing.
+          setState(s => ({ ...s, loading: true }));
+          setTick(t => t + 1);
+        } else if (event === 'SIGNED_OUT') {
           setTick(t => t + 1);
         }
       },
