@@ -126,22 +126,24 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         const fleetId = fleet.id as string;
 
         // ── Parallel fetch ────────────────────────────────────────────────────
-        const [subRes, vehicleRes, driverRes] = await Promise.all([
+        // plan_definitions is a tiny static table (~5 rows). Fetching all rows
+        // here lets us include it in the same round-trip instead of waiting for
+        // the subscription row first, then firing a second sequential query.
+        const [subRes, vehicleRes, driverRes, planDefsRes] = await Promise.all([
           supabase.from('subscriptions').select('*').eq('fleet_id', fleetId).single(),
           supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
           supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
+          supabase.from('plan_definitions').select('*'),
         ]);
 
         if (cancelled) return;
         const sub = subRes.data;
         if (!sub) { setState(s => ({ ...s, loading: false, fleetId })); return; }
 
-        // ── Plan definition ───────────────────────────────────────────────────
-        const { data: planDef } = await supabase
-          .from('plan_definitions')
-          .select('*')
-          .eq('plan_name', sub.plan)
-          .single();
+        // ── Plan definition (matched client-side from the prefetched list) ────
+        const planDef = (planDefsRes.data ?? []).find(
+          (p: Record<string, unknown>) => p.plan_name === sub.plan
+        ) ?? null;
 
         if (cancelled) return;
 
