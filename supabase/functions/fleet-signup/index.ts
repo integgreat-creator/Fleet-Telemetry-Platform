@@ -3,12 +3,16 @@
  *
  * Handles fleet manager registration atomically using the service role key:
  *   1. Creates the auth user (marked as email-confirmed immediately)
- *   2. Creates the fleet record linked to that user
- *   3. Signs in the user and returns the session to the client
+ *   2. Creates the fleet record + trial subscription linked to that user
+ *   3. Returns { ok: true } — the client signs in with signInWithPassword()
  *
- * This avoids the RLS timing problem where a direct client-side signUp()
- * returns a user but no session, causing the subsequent fleet INSERT to run
- * as an unauthenticated request and fail.
+ * The client handles sign-in rather than receiving a server-side session
+ * because setSession() is unreliable across browsers and doesn't consistently
+ * fire onAuthStateChange, preventing the dashboard from loading.
+ *
+ * "Already exists" path: if the auth account exists but has no fleet (e.g.
+ * after a fleet deletion), credentials are verified via signInWithPassword and
+ * a new fleet is created for the existing account.
  *
  * POST { email, password, fleet_name }
  */
@@ -64,11 +68,9 @@ serve(async (req) => {
   // ── Anon client — used for sign-in steps ────────────────────────────────────
   const anonClient = createClient(SUPABASE_URL, ANON_KEY);
 
-  // ── Helper: create fleet + subscription for a known user ID, then return ────
-  async function createFleetForUser(
-    userId: string,
-    session: { access_token: string; refresh_token: string; [key: string]: unknown }
-  ): Promise<Response> {
+  // ── Helper: create fleet + subscription for a known user ID ─────────────────
+  // Returns { ok: true } on success — the client signs in independently.
+  async function createFleetForUser(userId: string): Promise<Response> {
     const { data: newFleet, error: fleetError } = await adminClient
       .from("fleets")
       .insert({
@@ -95,7 +97,11 @@ serve(async (req) => {
       { onConflict: "fleet_id", ignoreDuplicates: true }
     );
 
-    return json({ session });
+    // Return ok — the client will call signInWithPassword to establish the session.
+    // Returning a server-side session and using setSession() on the client is
+    // unreliable (onAuthStateChange doesn't always fire); a client-side signIn
+    // is the single reliable path that loads the dashboard.
+    return json({ ok: true });
   }
 
   // 1. Create the auth user, marking the email as confirmed so they can
@@ -134,23 +140,18 @@ serve(async (req) => {
         return err("An account with this email already exists. Please log in.", 409);
       }
 
-      // No fleet — create one and return the already-obtained session
-      return createFleetForUser(existingSignIn.user.id, existingSignIn.session);
+      // No fleet — create one. Client will sign in with signInWithPassword.
+      return createFleetForUser(existingSignIn.user.id);
     }
     return err(createError.message, 400);
   }
 
   if (!user) return err("Failed to create user account", 500);
 
-  // 2 + 2b handled by the shared helper; sign in first to get a session
-  const { data: signInData, error: signInError } =
-    await anonClient.auth.signInWithPassword({ email: normalizedEmail, password });
-
-  if (signInError || !signInData.session) {
-    // Account was created but sign-in failed — roll back to avoid orphaned user
+  // Create fleet. If that fails, roll back the auth user.
+  const fleetResponse = await createFleetForUser(user.id);
+  if (!fleetResponse.ok) {
     await adminClient.auth.admin.deleteUser(user.id);
-    return err("Account created but sign-in failed. Please log in manually.", 500);
   }
-
-  return createFleetForUser(user.id, signInData.session);
+  return fleetResponse;
 });
