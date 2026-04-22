@@ -81,6 +81,22 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => setTick(t => t + 1), []);
 
+  // Re-load whenever the user signs in or out.
+  // SubscriptionProvider sits above AppInner so it doesn't automatically
+  // re-run when AppInner's auth state changes — we must listen ourselves.
+  // INITIAL_SESSION is intentionally excluded: tick=0 already covers the
+  // initial load, and including it would cause a redundant second fetch.
+  useEffect(() => {
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
+      (event) => {
+        if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+          setTick(t => t + 1);
+        }
+      },
+    );
+    return () => authSub.unsubscribe();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
