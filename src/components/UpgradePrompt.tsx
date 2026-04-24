@@ -15,22 +15,27 @@ interface Props {
   onNavigateToAdmin?: () => void;
 }
 
-// Icon and colour per required plan
-const PLAN_STYLE: Record<PlanName, { icon: typeof Sparkles; accent: string; badge: string }> = {
-  trial:      { icon: Sparkles,   accent: 'text-gray-400',   badge: 'bg-gray-700  text-gray-300'   },
-  starter:    { icon: Sparkles,   accent: 'text-blue-400',   badge: 'bg-blue-900/60  text-blue-300'   },
-  growth:     { icon: TrendingUp, accent: 'text-teal-400',   badge: 'bg-teal-900/60  text-teal-300'   },
-  pro:        { icon: Zap,        accent: 'text-purple-400', badge: 'bg-purple-900/60 text-purple-300' },
-  enterprise: { icon: Sparkles,   accent: 'text-yellow-400', badge: 'bg-yellow-900/60 text-yellow-300' },
+type PlanStyle = { icon: typeof Sparkles; accent: string; badge: string };
+
+// Icon and colour per required plan. Only active plans are styled here — legacy
+// starter/growth/pro are intentionally omitted and fall back to `essential`.
+const PLAN_STYLE: Partial<Record<PlanName, PlanStyle>> = {
+  trial:        { icon: Sparkles,   accent: 'text-gray-400',   badge: 'bg-gray-700 text-gray-300'   },
+  essential:    { icon: Sparkles,   accent: 'text-blue-400',   badge: 'bg-blue-900/60 text-blue-300'   },
+  professional: { icon: TrendingUp, accent: 'text-teal-400',   badge: 'bg-teal-900/60 text-teal-300'   },
+  business:     { icon: Zap,        accent: 'text-purple-400', badge: 'bg-purple-900/60 text-purple-300' },
+  enterprise:   { icon: Sparkles,   accent: 'text-yellow-400', badge: 'bg-yellow-900/60 text-yellow-300' },
 };
+
+const DEFAULT_STYLE: PlanStyle = PLAN_STYLE.essential!;
 
 export default function UpgradePrompt({ feature, title, description, onNavigateToAdmin }: Props) {
   const { plan, planDisplayName } = useSubscription();
 
-  const requiredPlan  = FEATURE_MIN_PLAN[feature] ?? 'starter';
+  const requiredPlan  = FEATURE_MIN_PLAN[feature] ?? 'essential';
   const featureLabel  = FEATURE_DISPLAY[feature]  ?? feature;
-  const requiredLabel = PLAN_DISPLAY_NAME[requiredPlan];
-  const style         = PLAN_STYLE[requiredPlan] ?? PLAN_STYLE.starter;
+  const requiredLabel = PLAN_DISPLAY_NAME[requiredPlan] ?? requiredPlan;
+  const style         = PLAN_STYLE[requiredPlan] ?? DEFAULT_STYLE;
   const PlanIcon      = style.icon;
 
   const promptTitle = title ?? `${featureLabel} is not available on your plan`;
@@ -95,7 +100,7 @@ function FeatureBenefitCard({ feature, requiredPlan }: { feature: string; requir
   const benefits = FEATURE_BENEFITS[feature];
   if (!benefits) return null;
 
-  const style = PLAN_STYLE[requiredPlan] ?? PLAN_STYLE.starter;
+  const style = PLAN_STYLE[requiredPlan] ?? DEFAULT_STYLE;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 w-full max-w-sm text-left">

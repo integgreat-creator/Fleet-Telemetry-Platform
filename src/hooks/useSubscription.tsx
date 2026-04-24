@@ -7,9 +7,19 @@ import { supabase } from '../lib/supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PlanName    = 'trial' | 'starter' | 'growth' | 'pro' | 'enterprise';
-export type PlanStatus  = 'trial' | 'active'  | 'expired' | 'suspended' | 'inactive';
+// Active plans (selectable by customers + shown in UI)
+// Legacy names kept in the union so existing DB rows still type-check, but
+// they are never rendered anywhere — PLAN_DISPLAY_NAME + FEATURE_MIN_PLAN
+// + PLAN_CARDS all reference only the active plans.
+export type PlanName =
+  | 'trial'
+  | 'essential' | 'professional' | 'business' | 'enterprise'   // active
+  | 'starter'   | 'growth'       | 'pro';                       // legacy (hidden)
+
+export type PlanStatus   = 'trial' | 'active' | 'expired' | 'suspended' | 'inactive';
 export type FeatureLevel = 'full'  | 'limited' | 'none';
+export type BillingModel = 'flat'  | 'per_vehicle' | 'custom';
+export type BillingCycle = 'monthly' | 'annual';
 
 export interface SubscriptionState {
   // Identity
@@ -18,6 +28,15 @@ export interface SubscriptionState {
   status:          PlanStatus | null;
   priceInr:        number;
   fleetId:         string | null;
+
+  // Billing model (per-vehicle pricing support)
+  billingModel:     BillingModel;
+  pricePerVehicle:  number | null;   // null for flat/custom plans
+  vehicleCount:     number | null;   // paid-for quota (per_vehicle model)
+  gstin:            string | null;
+  annualUnlockedAt: Date | null;     // set at 3-month active mark
+  billingCycle:     BillingCycle;
+  minVehicles:      number;          // from plan_definitions
 
   // Limits
   vehicleLimit:  number;   // -1 = unlimited
@@ -51,6 +70,13 @@ const DEFAULT_STATE: SubscriptionState = {
   status:          null,
   priceInr:        0,
   fleetId:         null,
+  billingModel:     'flat',
+  pricePerVehicle:  null,
+  vehicleCount:     null,
+  gstin:            null,
+  annualUnlockedAt: null,
+  billingCycle:     'monthly',
+  minVehicles:      1,
   vehicleLimit:    2,
   driverLimit:     3,
   vehiclesUsed:    0,
@@ -177,8 +203,27 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           trialDaysLeft = Math.max(0, Math.ceil((trialEndsAt.getTime() - now.getTime()) / 86_400_000));
         }
 
-        // ── Limits ────────────────────────────────────────────────────────────
-        const vehicleLimit = (sub.max_vehicles as number) ?? (planDef?.vehicle_limit as number) ?? 2;
+        // ── Billing model (per_vehicle vs flat vs custom) ─────────────────────
+        const billingModel     = (sub.billing_model as BillingModel | null) ?? 'flat';
+        const pricePerVehicle  = (sub.price_per_vehicle_inr as number | null) ?? null;
+        const vehicleCount     = (sub.vehicle_count         as number | null) ?? null;
+        const gstin            = (sub.gstin                 as string | null) ?? null;
+        const annualUnlockedAt = sub.annual_unlocked_at
+          ? new Date(sub.annual_unlocked_at as string)
+          : null;
+        const billingCycle     = (sub.billing_cycle as BillingCycle | null) ?? 'monthly';
+        const minVehicles      = (planDef?.min_vehicles as number | null) ?? 1;
+
+        // ── Limits (billing-model aware) ──────────────────────────────────────
+        let vehicleLimit: number;
+        if (billingModel === 'per_vehicle') {
+          // Per-vehicle: limit = paid-for quota (vehicle_count)
+          vehicleLimit = vehicleCount ?? 0;
+        } else {
+          // Flat / custom: legacy path — use max_vehicles override or plan_def default
+          vehicleLimit = (sub.max_vehicles as number) ?? (planDef?.vehicle_limit as number) ?? 2;
+        }
+
         const driverLimit  = (sub.max_drivers  as number) ?? (planDef?.driver_limit  as number) ?? 3;
         const vehiclesUsed = vehicleRes.count ?? 0;
         const driversUsed  = driverRes.count  ?? 0;
@@ -194,6 +239,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           status:          sub.status          as PlanStatus,
           priceInr:        (planDef?.price_inr as number) ?? 0,
           fleetId,
+          billingModel,
+          pricePerVehicle,
+          vehicleCount,
+          gstin,
+          annualUnlockedAt,
+          billingCycle,
+          minVehicles,
           vehicleLimit,
           driverLimit,
           vehiclesUsed,
@@ -255,18 +307,21 @@ export function useSubscription(): SubscriptionState {
 
 // ─── Feature → minimum required plan (for upgrade prompt copy) ───────────────
 
+// Feature → minimum plan required to unlock it.
+// Maps only to active plans — legacy starter/growth/pro are never referenced.
 export const FEATURE_MIN_PLAN: Record<string, PlanName> = {
-  fuel_monitoring:       'starter',
-  idle_detection:        'starter',
-  driver_behavior:       'growth',
-  maintenance_alerts:    'growth',
-  cost_analytics:        'growth',
-  multi_user:            'growth',
-  ai_prediction:         'pro',
-  fuel_theft_detection:  'pro',
-  api_access:            'pro',
-  custom_reports:        'pro',
-  priority_support:      'pro',
+  fuel_monitoring:       'essential',
+  idle_detection:        'essential',
+  overspeed_alerts:      'essential',
+  driver_behavior:       'professional',
+  maintenance_alerts:    'professional',
+  cost_analytics:        'professional',
+  multi_user:            'professional',
+  ai_prediction:         'business',
+  fuel_theft_detection:  'business',
+  api_access:            'business',
+  custom_reports:        'business',
+  priority_support:      'business',
 };
 
 export const FEATURE_DISPLAY: Record<string, string> = {
@@ -288,10 +343,13 @@ export const FEATURE_DISPLAY: Record<string, string> = {
   priority_support:      'Priority Support',
 };
 
-export const PLAN_DISPLAY_NAME: Record<PlanName, string> = {
-  trial:      'Trial',
-  starter:    'Starter',
-  growth:     'Growth',
-  pro:        'Pro',
-  enterprise: 'Enterprise',
+// Only active plans have display names. Legacy plans (starter/growth/pro)
+// intentionally omitted — if a legacy row somehow appears, UI should fall back
+// to subscription.plan_display_name from the DB row itself.
+export const PLAN_DISPLAY_NAME: Partial<Record<PlanName, string>> = {
+  trial:        'Trial',
+  essential:    'Essential',
+  professional: 'Professional',
+  business:     'Business',
+  enterprise:   'Enterprise',
 };

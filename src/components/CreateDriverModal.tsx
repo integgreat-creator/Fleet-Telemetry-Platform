@@ -20,11 +20,15 @@ interface LimitCheck {
 }
 
 const PLAN_DISPLAY: Record<string, string> = {
-  trial:      'Trial',
-  starter:    'Starter',
-  growth:     'Growth',
-  pro:        'Pro',
-  enterprise: 'Enterprise',
+  trial:        'Trial',
+  essential:    'Essential',
+  professional: 'Professional',
+  business:     'Business',
+  enterprise:   'Enterprise',
+  // Legacy plan names retained as fallbacks for existing rows
+  starter:      'Starter',
+  growth:       'Growth',
+  pro:          'Pro',
 };
 
 function generatePassword(): string {

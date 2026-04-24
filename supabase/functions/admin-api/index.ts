@@ -229,7 +229,13 @@ Deno.serve(async (req: Request) => {
       const maxVehicles = body.max_vehicles != null ? Number(body.max_vehicles) : undefined;
       const maxDrivers  = body.max_drivers  != null ? Number(body.max_drivers)  : undefined;
 
-      const validPlans = ['free', 'starter', 'pro', 'enterprise'];
+      // Active plans (per-vehicle billing) + trial + legacy names. Legacy kept
+      // so admin can still reassign historical rows if needed.
+      const validPlans = [
+        'trial',
+        'essential', 'professional', 'business', 'enterprise',
+        'free', 'starter', 'growth', 'pro',  // legacy
+      ];
       if (plan && !validPlans.includes(plan)) {
         return err(`Invalid plan. Must be one of: ${validPlans.join(', ')}`);
       }

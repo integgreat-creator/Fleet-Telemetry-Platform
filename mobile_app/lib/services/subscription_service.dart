@@ -36,6 +36,16 @@ class SubscriptionState {
   final String? plan;
   final String  planDisplayName;
   final String? status;
+
+  // Billing model (per-vehicle pricing support)
+  final String  billingModel;     // 'flat' | 'per_vehicle' | 'custom'
+  final int?    pricePerVehicle;  // null for flat/custom
+  final int?    vehicleCount;     // paid-for quota (per_vehicle)
+  final String? gstin;
+  final DateTime? annualUnlockedAt;
+  final String  billingCycle;     // 'monthly' | 'annual'
+  final int     minVehicles;
+
   final int     vehicleLimit;   // -1 = unlimited
   final int     driverLimit;
   final int     vehiclesUsed;
@@ -52,6 +62,13 @@ class SubscriptionState {
     this.plan,
     this.planDisplayName  = '',
     this.status,
+    this.billingModel     = 'flat',
+    this.pricePerVehicle,
+    this.vehicleCount,
+    this.gstin,
+    this.annualUnlockedAt,
+    this.billingCycle     = 'monthly',
+    this.minVehicles      = 1,
     this.vehicleLimit     = 2,
     this.driverLimit      = 3,
     this.vehiclesUsed     = 0,
@@ -144,11 +161,31 @@ class SubscriptionService {
         trialDaysLeft = 0;
       }
 
-      // ── Limits ──────────────────────────────────────────────────────────────
-      final vehicleLimit =
-          (subData['max_vehicles'] as int?) ?? (planDef?['vehicle_limit'] as int?) ?? 2;
-      final driverLimit  =
-          (subData['max_drivers']  as int?) ?? (planDef?['driver_limit']  as int?) ?? 3;
+      // ── Billing model (per_vehicle vs flat vs custom) ───────────────────────
+      final billingModel    = (subData['billing_model']        as String?) ?? 'flat';
+      final pricePerVehicle = (subData['price_per_vehicle_inr'] as int?);
+      final vehicleCount    = (subData['vehicle_count']         as int?);
+      final gstin           = (subData['gstin']                 as String?);
+      final annualUnlockedAt = subData['annual_unlocked_at'] != null
+          ? DateTime.tryParse(subData['annual_unlocked_at'] as String)
+          : null;
+      final billingCycle    = (subData['billing_cycle']         as String?) ?? 'monthly';
+      final minVehicles     = (planDef?['min_vehicles']         as int?) ?? 1;
+
+      // ── Limits (billing-model aware) ────────────────────────────────────────
+      int vehicleLimit;
+      if (billingModel == 'per_vehicle') {
+        // Per-vehicle: quota = what customer paid for
+        vehicleLimit = vehicleCount ?? 0;
+      } else {
+        // Flat / custom: legacy path — max_vehicles override or plan default
+        vehicleLimit = (subData['max_vehicles'] as int?)
+            ?? (planDef?['vehicle_limit'] as int?)
+            ?? 2;
+      }
+
+      final driverLimit =
+          (subData['max_drivers'] as int?) ?? (planDef?['driver_limit'] as int?) ?? 3;
 
       final canAddVehicle = !isExpired &&
           subData['status'] != 'suspended' &&
@@ -159,6 +196,13 @@ class SubscriptionService {
         planDisplayName: (planDef?['display_name'] as String?) ??
                          subData['plan']                        as String? ?? '',
         status:          subData['status']                      as String?,
+        billingModel:     billingModel,
+        pricePerVehicle:  pricePerVehicle,
+        vehicleCount:     vehicleCount,
+        gstin:            gstin,
+        annualUnlockedAt: annualUnlockedAt,
+        billingCycle:     billingCycle,
+        minVehicles:      minVehicles,
         vehicleLimit:    vehicleLimit,
         driverLimit:     driverLimit,
         vehiclesUsed:    vehiclesUsed,

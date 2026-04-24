@@ -31,7 +31,12 @@ import ApiAccessTab from '../components/ApiAccessTab';
 interface Subscription {
   id: string;
   fleet_id: string;
-  plan: 'trial' | 'starter' | 'growth' | 'pro' | 'enterprise';
+  // Active plans: essential/professional/business/enterprise (per-vehicle billing).
+  // Legacy plan names kept in the union so existing DB rows still type-check.
+  plan:
+    | 'trial'
+    | 'essential' | 'professional' | 'business' | 'enterprise'
+    | 'starter'   | 'growth'       | 'pro';
   status: 'active' | 'inactive' | 'suspended' | 'trial' | 'expired';
   max_vehicles: number;
   max_drivers: number;
@@ -240,11 +245,15 @@ function summariseChanges(obj?: Record<string, unknown> | null): string {
 
 function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
   const styles: Record<Subscription['plan'], string> = {
-    trial:      'bg-gray-700 text-gray-300',
-    starter:    'bg-blue-900 text-blue-300',
-    growth:     'bg-teal-900 text-teal-300',
-    pro:        'bg-purple-900 text-purple-300',
-    enterprise: 'bg-yellow-900 text-yellow-300',
+    trial:        'bg-gray-700 text-gray-300',
+    essential:    'bg-blue-900 text-blue-300',
+    professional: 'bg-teal-900 text-teal-300',
+    business:     'bg-purple-900 text-purple-300',
+    enterprise:   'bg-yellow-900 text-yellow-300',
+    // Legacy rows get a neutral style so they remain readable until migrated.
+    starter:      'bg-gray-800 text-gray-300',
+    growth:       'bg-gray-800 text-gray-300',
+    pro:          'bg-gray-800 text-gray-300',
   };
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${styles[plan]}`}>
@@ -392,54 +401,54 @@ const PLAN_CARDS = [
     plan: 'trial' as const,
     label: 'Trial',
     price: '₹0',
-    period: '',
+    period: '30 days',
     vehicles: '2 vehicles',
     drivers: '3 drivers',
-    features: ['Live tracking', 'Basic alerts', 'Trip history', '7-day history'],
+    features: ['Live tracking', 'Basic alerts', 'Trip history', '7-day data'],
     cta: null,
     highlight: false,
   },
   {
-    plan: 'starter' as const,
-    label: 'Starter',
-    price: '₹999',
-    period: '/mo',
-    vehicles: '10 vehicles',
-    drivers: '15 drivers',
-    features: ['Everything in Trial', 'Fuel monitoring', 'Idle detection', '90-day history'],
-    cta: 'Upgrade to Starter',
+    plan: 'essential' as const,
+    label: 'Essential',
+    price: '₹299',
+    period: '/vehicle/mo',
+    vehicles: 'From 1 vehicle',
+    drivers: 'Unlimited drivers',
+    features: ['Live tracking', 'Fuel monitoring', 'Idle detection', 'Overspeed alerts'],
+    cta: 'Select Essential',
     highlight: false,
   },
   {
-    plan: 'growth' as const,
-    label: 'Growth',
-    price: '₹1,999',
-    period: '/mo',
-    vehicles: '25 vehicles',
-    drivers: '50 drivers',
-    features: ['Everything in Starter', 'Driver behaviour', 'Cost analytics', 'Maintenance alerts', 'Multi-user access'],
-    cta: 'Upgrade to Growth',
+    plan: 'professional' as const,
+    label: 'Professional',
+    price: '₹499',
+    period: '/vehicle/mo',
+    vehicles: 'From 3 vehicles',
+    drivers: 'Unlimited drivers',
+    features: ['Everything in Essential', 'Driver behaviour', 'Maintenance alerts', 'Cost analytics', 'Multi-user'],
+    cta: 'Select Professional',
     highlight: true,
   },
   {
-    plan: 'pro' as const,
-    label: 'Pro',
-    price: '₹3,999',
-    period: '/mo',
-    vehicles: '100 vehicles',
+    plan: 'business' as const,
+    label: 'Business',
+    price: '₹799',
+    period: '/vehicle/mo',
+    vehicles: 'From 10 vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Growth', 'AI anomaly detection', 'Fuel theft alerts', 'API access', 'Custom reports'],
-    cta: 'Upgrade to Pro',
+    features: ['Everything in Professional', 'AI predictions', 'Fuel theft detection', 'API access', 'Custom reports', 'Priority support'],
+    cta: 'Select Business',
     highlight: false,
   },
   {
     plan: 'enterprise' as const,
     label: 'Enterprise',
     price: 'Custom',
-    period: '',
+    period: 'From 50 vehicles',
     vehicles: 'Unlimited vehicles',
     drivers: 'Unlimited drivers',
-    features: ['Everything in Pro', 'Dedicated support', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
+    features: ['Everything in Business', 'Dedicated CSM', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
     cta: 'Contact Sales',
     highlight: false,
   },
@@ -1171,9 +1180,9 @@ export default function AdminPage() {
                             className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
                               card.plan === 'enterprise'
                                 ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
-                                : card.plan === 'growth'
+                                : card.plan === 'professional'
                                 ? 'bg-teal-600 hover:bg-teal-500 text-white'
-                                : card.plan === 'pro'
+                                : card.plan === 'business'
                                 ? 'bg-purple-600 hover:bg-purple-500 text-white'
                                 : 'bg-blue-600 hover:bg-blue-500 text-white'
                             }`}
