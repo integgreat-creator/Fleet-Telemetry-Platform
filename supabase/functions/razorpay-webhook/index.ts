@@ -53,28 +53,84 @@ Deno.serve(async (req: Request) => {
         const sub = payload.subscription?.entity ?? {};
         const fleetId = sub.notes?.fleet_id;
         if (!fleetId) break;
-        const plan = sub.plan_id?.includes('pro') ? 'pro'
-                   : sub.plan_id?.includes('starter') ? 'starter'
-                   : sub.plan_id?.includes('enterprise') ? 'enterprise'
-                   : 'starter';
-        const maxVehicles = plan === 'starter' ? 10 : plan === 'pro' ? 50 : plan === 'enterprise' ? 9999 : 3;
-        const maxDrivers  = plan === 'starter' ? 20 : plan === 'pro' ? 200 : plan === 'enterprise' ? 9999 : 5;
-        await supabase.from('subscriptions').upsert({
-          fleet_id: fleetId,
+
+        // Plan name comes through Razorpay subscription notes — we do NOT parse
+        // it out of plan_id because IDs are opaque and differ between test/live.
+        // The checkout flow sets these notes when creating the subscription.
+        const notes = sub.notes ?? {};
+        const planFromNotes: string | undefined = notes.plan;
+        const validPlans = new Set([
+          'essential', 'professional', 'business', 'enterprise',
+        ]);
+        const plan = planFromNotes && validPlans.has(planFromNotes)
+          ? planFromNotes
+          : 'essential';
+
+        // Per-vehicle billing fields (also passed through notes)
+        const billingModel    = (notes.billing_model as string) ?? 'per_vehicle';
+        const billingCycle    = (notes.billing_cycle as string) ?? 'monthly';
+        const vehicleCount    = notes.vehicle_count
+          ? Number(notes.vehicle_count)
+          : null;
+        const pricePerVehicle = notes.price_per_vehicle_inr
+          ? Number(notes.price_per_vehicle_inr)
+          : null;
+
+        // driver_limit comes from plan_definitions so the two stay in sync.
+        const { data: planDef } = await supabase
+          .from('plan_definitions')
+          .select('driver_limit')
+          .eq('plan_name', plan)
+          .maybeSingle();
+        const maxDrivers = (planDef?.driver_limit as number | undefined) ?? null;
+
+        const upsertRow: Record<string, unknown> = {
+          fleet_id:                 fleetId,
           plan,
-          status: 'active',
-          max_vehicles: maxVehicles,
-          max_drivers: maxDrivers,
+          status:                   'active',
+          billing_model:            billingModel,
+          billing_cycle:            billingCycle,
           razorpay_subscription_id: sub.id,
-          current_period_start: sub.current_start ? new Date(sub.current_start * 1000).toISOString() : null,
-          current_period_end: sub.current_end ? new Date(sub.current_end * 1000).toISOString() : null,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'fleet_id' });
+          current_period_start:     sub.current_start ? new Date(sub.current_start * 1000).toISOString() : null,
+          current_period_end:       sub.current_end   ? new Date(sub.current_end   * 1000).toISOString() : null,
+          updated_at:               new Date().toISOString(),
+        };
+        if (vehicleCount    !== null) upsertRow.vehicle_count         = vehicleCount;
+        if (pricePerVehicle !== null) upsertRow.price_per_vehicle_inr = pricePerVehicle;
+        if (maxDrivers      !== null) upsertRow.max_drivers           = maxDrivers;
+
+        // Unlock annual billing once customer completes 3 months on monthly.
+        // Only SET the timestamp on charge events — never clear it.
+        if (eventType === 'subscription.charged') {
+          const { data: existing } = await supabase
+            .from('subscriptions')
+            .select('created_at, annual_unlocked_at')
+            .eq('fleet_id', fleetId)
+            .maybeSingle();
+          if (existing?.created_at && !existing.annual_unlocked_at) {
+            const createdAt = new Date(existing.created_at as string);
+            const threeMonthsAgo = new Date();
+            threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+            if (createdAt <= threeMonthsAgo) {
+              upsertRow.annual_unlocked_at = new Date().toISOString();
+            }
+          }
+        }
+
+        await supabase.from('subscriptions').upsert(upsertRow, { onConflict: 'fleet_id' });
+
         await supabase.from('audit_logs').insert({
-          fleet_id: fleetId,
-          action: `subscription.${eventType.split('.')[1]}`,
+          fleet_id:      fleetId,
+          action:        `subscription.${eventType.split('.')[1]}`,
           resource_type: 'subscription',
-          new_values: { plan, status: 'active', razorpay_subscription_id: sub.id },
+          new_values:    {
+            plan,
+            status:        'active',
+            billing_model: billingModel,
+            billing_cycle: billingCycle,
+            vehicle_count: vehicleCount,
+            razorpay_subscription_id: sub.id,
+          },
         });
         break;
       }

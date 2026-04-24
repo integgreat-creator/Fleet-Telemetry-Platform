@@ -191,8 +191,20 @@ export default function GeofencesPage() {
         .from('subscriptions').select('plan')
         .eq('fleet_id', fleet.id)
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
-      const plan = sub?.plan ?? 'free';
-      setPlanLimit(plan === 'pro' ? 999999 : plan === 'starter' ? 10 : 2);
+      // Geofence-zone limits by plan. Per-vehicle plans (essential/
+      // professional/business) get tiered caps; enterprise is unlimited.
+      // Trial and legacy rows fall through to the minimum.
+      const plan = sub?.plan ?? 'trial';
+      const geofenceLimit =
+        plan === 'enterprise'          ? 999_999
+      : plan === 'business'            ? 100
+      : plan === 'professional'        ? 30
+      : plan === 'essential'           ? 10
+      : plan === 'pro'                 ? 999_999  // legacy
+      : plan === 'growth'              ? 30       // legacy
+      : plan === 'starter'             ? 10       // legacy
+      :                                  2;       // trial / unknown
+      setPlanLimit(geofenceLimit);
 
       const [zonesRes, vehiclesRes, assignRes] = await Promise.all([
         supabase.from('geofences').select('*').eq('fleet_id', fleet.id).order('created_at', { ascending: false }),
