@@ -8,6 +8,14 @@
     <meta property="og:image" content="https://bolt.new/static/og_default.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://bolt.new/static/og_default.png" />
+    <!--
+      Razorpay embedded Checkout. Loaded eagerly so the "Continue to payment"
+      click in PlanCheckoutModal can call window.Razorpay() without a
+      script-load round-trip. ~25 KB gzipped; only paid-plan customers will
+      ever click through, but the latency win at the moment of intent is
+      worth more than the static cost.
+    -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   </head>
   <body>
     <div id="root"></div>
