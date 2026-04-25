@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import 'leaflet/dist/leaflet.css';
 import {
   MapContainer, TileLayer, Circle, Polygon, useMapEvents, Marker,
 } from 'react-leaflet';
@@ -138,7 +139,7 @@ export default function GeofencesPage() {
   const [zones,        setZones]        = useState<Geofence[]>([]);
   const [vehicles,     setVehicles]     = useState<Vehicle[]>([]);
   const [assignments,  setAssignments]  = useState<Assignment[]>([]);
-  const [loading,      setLoading]      = useState(true);
+  const [loading,      setLoading]      = useState(false);
   const [fleetId,      setFleetId]      = useState('');
   const [planLimit,    setPlanLimit]    = useState(10);
 
@@ -167,8 +168,8 @@ export default function GeofencesPage() {
 
   // Per-vehicle assignment toggles while editing a zone
   const [assignedVehicles,  setAssignedVehicles]  = useState<Set<string>>(new Set());
-  const [alertOnEntry,      setAlertOnEntry]       = useState(true);
-  const [alertOnExit,       setAlertOnExit]        = useState(true);
+  const [alertOnEntry,      setAlertOnEntry]       = useState(false);
+  const [alertOnExit,       setAlertOnExit]        = useState(false);
   const [alertOnDwell,      setAlertOnDwell]       = useState(false);
   const [dwellMinutes,      setDwellMinutes]       = useState('30');
   const [cooldownMinutes,   setCooldownMinutes]    = useState('15');
@@ -177,6 +178,7 @@ export default function GeofencesPage() {
   // ── Load data ─────────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -219,6 +221,7 @@ export default function GeofencesPage() {
       setVehicles((vehiclesRes.data ?? []) as Vehicle[]);
       setAssignments((assignRes.data ?? []) as Assignment[]);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

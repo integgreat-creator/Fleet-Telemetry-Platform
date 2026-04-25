@@ -1,12 +1,13 @@
-import { AlertTriangle, AlertCircle, Info, Check, Lightbulb } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Info, Check, Lightbulb, Trash2 } from 'lucide-react';
 import type { Alert } from '../lib/supabase';
 
 interface AlertCardProps {
   alert: Alert;
   onAcknowledge: (alertId: string) => void;
+  onDelete?: (alertId: string) => void;
 }
 
-export default function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
+export default function AlertCard({ alert, onAcknowledge, onDelete }: AlertCardProps) {
   const getSeverityIcon = () => {
     switch (alert.severity) {
       case 'critical':
@@ -115,21 +116,32 @@ export default function AlertCard({ alert, onAcknowledge }: AlertCardProps) {
             <p className="text-xs text-gray-500">{formatDate(alert.created_at)}</p>
           </div>
         </div>
-        {!alert.acknowledged && (
-          <button
-            onClick={() => onAcknowledge(alert.id)}
-            className="flex items-center space-x-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-white transition-colors h-fit"
-          >
-            <Check className="w-4 h-4" />
-            <span>Acknowledge</span>
-          </button>
-        )}
-        {alert.acknowledged && (
-          <div className="flex items-center space-x-2 px-3 py-1.5 bg-green-600/20 rounded-lg text-sm text-green-500 h-fit">
-            <Check className="w-4 h-4" />
-            <span>Acknowledged</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2 h-fit">
+          {!alert.acknowledged && (
+            <button
+              onClick={() => onAcknowledge(alert.id)}
+              className="flex items-center space-x-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-white transition-colors"
+            >
+              <Check className="w-4 h-4" />
+              <span>Acknowledge</span>
+            </button>
+          )}
+          {alert.acknowledged && (
+            <div className="flex items-center space-x-2 px-3 py-1.5 bg-green-600/20 rounded-lg text-sm text-green-500">
+              <Check className="w-4 h-4" />
+              <span>Acknowledged</span>
+            </div>
+          )}
+          {onDelete && (
+            <button
+              onClick={() => onDelete(alert.id)}
+              title="Delete alert"
+              className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

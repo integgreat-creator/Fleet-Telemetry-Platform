@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Centralised dark-navy colour palette matching the VehicleSense brand theme.
+/// Centralised dark-navy colour palette matching the FTPGo brand theme.
 /// Every screen and widget imports from here so a single change propagates app-wide.
 class AppColors {
   AppColors._();
@@ -8,6 +8,8 @@ class AppColors {
   // ── Backgrounds ────────────────────────────────────────────────────────────
   /// Main scaffold background — very dark navy-black
   static const Color bgPrimary    = Color(0xFF090E1A);
+  /// Alias for bgPrimary — scaffold/base background
+  static const Color bgBase       = Color(0xFF090E1A);
   /// Card / list-tile background
   static const Color bgCard       = Color(0xFF0F1829);
   /// Slightly lighter card variant (nested items, dialogs)

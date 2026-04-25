@@ -3,12 +3,16 @@
  *
  * Handles fleet manager registration atomically using the service role key:
  *   1. Creates the auth user (marked as email-confirmed immediately)
- *   2. Creates the fleet record linked to that user
- *   3. Signs in the user and returns the session to the client
+ *   2. Creates the fleet record + trial subscription linked to that user
+ *   3. Returns { ok: true } — the client signs in with signInWithPassword()
  *
- * This avoids the RLS timing problem where a direct client-side signUp()
- * returns a user but no session, causing the subsequent fleet INSERT to run
- * as an unauthenticated request and fail.
+ * The client handles sign-in rather than receiving a server-side session
+ * because setSession() is unreliable across browsers and doesn't consistently
+ * fire onAuthStateChange, preventing the dashboard from loading.
+ *
+ * "Already exists" path: if the auth account exists but has no fleet (e.g.
+ * after a fleet deletion), credentials are verified via signInWithPassword and
+ * a new fleet is created for the existing account.
  *
  * POST { email, password, fleet_name }
  */
@@ -20,8 +24,10 @@ const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
@@ -57,45 +63,95 @@ serve(async (req) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // ── Anon client — used for sign-in steps ────────────────────────────────────
+  const anonClient = createClient(SUPABASE_URL, ANON_KEY);
+
+  // ── Helper: create fleet + subscription for a known user ID ─────────────────
+  // Returns { ok: true } on success — the client signs in independently.
+  async function createFleetForUser(userId: string): Promise<Response> {
+    const { data: newFleet, error: fleetError } = await adminClient
+      .from("fleets")
+      .insert({
+        name:         fleet_name.trim(),
+        organization: fleet_name.trim(),
+        manager_id:   userId,
+      })
+      .select("id")
+      .single();
+
+    if (fleetError || !newFleet) {
+      return err(`Fleet creation failed: ${fleetError?.message ?? "unknown"}`, 500);
+    }
+
+    await adminClient.from("subscriptions").upsert(
+      {
+        fleet_id:      newFleet.id,
+        plan:          "trial",
+        status:        "trial",
+        max_vehicles:  2,
+        max_drivers:   3,
+        trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      { onConflict: "fleet_id", ignoreDuplicates: true }
+    );
+
+    // Return ok — the client will call signInWithPassword to establish the session.
+    // Returning a server-side session and using setSession() on the client is
+    // unreliable (onAuthStateChange doesn't always fire); a client-side signIn
+    // is the single reliable path that loads the dashboard.
+    return json({ ok: true });
+  }
+
   // 1. Create the auth user, marking the email as confirmed so they can
   //    sign in immediately without needing an email confirmation link.
   const { data: { user }, error: createError } =
     await adminClient.auth.admin.createUser({
-      email:          email.trim().toLowerCase(),
+      email:         normalizedEmail,
       password,
-      email_confirm:  true,
+      email_confirm: true,
     });
 
   if (createError) {
     if (createError.message.toLowerCase().includes("already")) {
-      return err("An account with this email already exists. Please log in.", 409);
+      // The auth account exists — likely because the user previously deleted their
+      // fleet but the auth.users row was kept.  Verify credentials by signing in:
+      //   - If sign-in succeeds AND the user has no fleet  → create a new fleet
+      //   - If sign-in succeeds AND the user has a fleet   → genuine conflict
+      //   - If sign-in fails (wrong password)              → reject cleanly
+      const { data: existingSignIn, error: signInErr } =
+        await anonClient.auth.signInWithPassword({ email: normalizedEmail, password });
+
+      if (signInErr || !existingSignIn?.user || !existingSignIn.session) {
+        // Wrong password or other auth error — do not reveal details
+        return err("An account with this email already exists. Please log in.", 409);
+      }
+
+      // Check whether this account still has a fleet
+      const { data: existingFleet } = await adminClient
+        .from("fleets")
+        .select("id")
+        .eq("manager_id", existingSignIn.user.id)
+        .maybeSingle();
+
+      if (existingFleet) {
+        // Account has an active fleet — tell them to log in normally
+        return err("An account with this email already exists. Please log in.", 409);
+      }
+
+      // No fleet — create one. Client will sign in with signInWithPassword.
+      return createFleetForUser(existingSignIn.user.id);
     }
     return err(createError.message, 400);
   }
 
   if (!user) return err("Failed to create user account", 500);
 
-  // 2. Create the fleet linked to this new manager
-  const { error: fleetError } = await adminClient.from("fleets").insert({
-    name:         fleet_name.trim(),
-    organization: fleet_name.trim(),
-    manager_id:   user.id,
-  });
-
-  if (fleetError) {
-    // Roll back the auth user so the account isn't left in a half-created state
+  // Create fleet. If that fails, roll back the auth user.
+  const fleetResponse = await createFleetForUser(user.id);
+  if (!fleetResponse.ok) {
     await adminClient.auth.admin.deleteUser(user.id);
-    return err(`Fleet creation failed: ${fleetError.message}`, 500);
   }
-
-  // 3. Sign in with the regular anon client to obtain a proper session
-  const anonClient = createClient(SUPABASE_URL, ANON_KEY);
-  const { data: signInData, error: signInError } =
-    await anonClient.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
-
-  if (signInError || !signInData.session) {
-    return err("Account created but sign-in failed. Please log in manually.", 500);
-  }
-
-  return json({ session: signInData.session });
+  return fleetResponse;
 });

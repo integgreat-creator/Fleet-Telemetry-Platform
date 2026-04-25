@@ -23,6 +23,9 @@ class AuthProvider extends ChangeNotifier {
   String? get driverVehicleId   => _driverVehicleId;
   String? get driverFleetId     => _driverFleetId;
   bool    get isDriver          => _hasDriverAccount;
+  // True when the user is signed in but hasn't joined a fleet yet.
+  // main.dart uses this to route to JoinFleetScreen.
+  bool    get noFleetLinked     => _user != null && !_hasDriverAccount;
 
   AuthProvider() {
     _user = _client.auth.currentUser;
@@ -148,7 +151,8 @@ class AuthProvider extends ChangeNotifier {
 
       final email = rows.first['email'] as String?;
       if (email == null || email.isEmpty) {
-        _errorMessage = 'Driver account has no email — use email to sign in';
+        _errorMessage = 'No email linked to this phone number. '
+            'Please contact your fleet manager to update your driver account.';
         _isLoading    = false;
         notifyListeners();
         return false;
@@ -183,6 +187,13 @@ class AuthProvider extends ChangeNotifier {
 
   void clearError() {
     _errorMessage = null;
+    notifyListeners();
+  }
+
+  /// Called by JoinFleetScreen after a successful self-join to re-check
+  /// driver_accounts and flip isDriver / noFleetLinked.
+  Future<void> reloadDriverAccount() async {
+    await _loadDriverAccount();
     notifyListeners();
   }
 }

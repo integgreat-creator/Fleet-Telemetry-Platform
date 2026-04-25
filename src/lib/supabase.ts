@@ -1,9 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl    = import.meta.env.VITE_SUPABASE_URL    as string;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Pass auth options explicitly as a single config object.
+// This avoids the internal GoTrue "deprecated positional parameters" code path
+// that Vercel's feature_collector.js reports as a console warning.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken:  true,
+    persistSession:    true,
+    detectSessionInUrl: true,
+  },
+});
 
 export interface Fleet {
   id: string;
@@ -27,6 +36,7 @@ export interface Vehicle {
   last_connected?: string;
   fuel_price_per_litre: number;
   avg_km_per_litre: number;
+  maintenance_cost_per_km?: number;
   driver_phone?: string;
   driver_email?: string;
   fuel_type: string;
@@ -102,6 +112,14 @@ export interface Trip {
   fuel_consumed_litres: number;
   idle_time_minutes: number;
   status: 'active' | 'completed';
+  // Revenue / profit tracking (added by trip-profit-tracking migration)
+  total_revenue?: number;
+  total_expense?: number;
+  profit?: number;
+  // Telematics reliability (added by telematics_reliability migration)
+  gap_count?: number;
+  gap_duration_minutes?: number;
+  data_confidence_score?: number;
 }
 
 export interface FuelEvent {
@@ -143,11 +161,12 @@ export interface CostPrediction {
 export interface MaintenancePrediction {
   id: string;
   vehicle_id: string;
-  component: string;
   prediction_type: string;
-  confidence_score: number;
-  predicted_date: string;
-  miles_remaining?: number;
-  status: 'critical' | 'scheduled' | 'monitoring';
+  description: string;
+  due_at_km: number;
+  due_date?: string;
+  urgency: 'low' | 'medium' | 'high' | 'critical';
+  confidence: number;
+  status: 'upcoming' | 'due' | 'overdue' | 'completed';
   created_at: string;
 }

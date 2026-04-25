@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { supabase, type Vehicle, type Trip } from '../lib/supabase';
@@ -180,7 +181,7 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
 export default function FleetMapPage() {
   // ── Shared state ────────────────────────────────────────────────────────
   const [vehicles,        setVehicles]        = useState<Vehicle[]>([]);
-  const [loading,         setLoading]         = useState(true);
+  const [loading,         setLoading]         = useState(false);
   const [mode,            setMode]            = useState<'live' | 'history'>('live');
 
   // ── Live-mode state ─────────────────────────────────────────────────────
@@ -228,6 +229,7 @@ export default function FleetMapPage() {
 
   async function initMap() {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -300,6 +302,7 @@ export default function FleetMapPage() {
       // Subscribe for live updates
       subscribeRealtime();
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }

@@ -21,14 +21,27 @@
  *   → invalidates the token after first use
  */
 
-import { serve }       from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve }        from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;   // optional — email is best-effort
-const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;   // ❺ optional — SMS is best-effort
+const RESEND_API_KEY   = Deno.env.get("RESEND_API_KEY") ?? null;
+const SMS_API_KEY      = Deno.env.get("SMS_API_KEY")    ?? null;
 const SITE_URL         = Deno.env.get("SITE_URL") ?? "https://ftpgo.app";
+
+// Origin-reflective CORS — reads ALLOWED_ORIGINS env var (comma-separated).
+// Falls back to '*' when unset so local dev still works.
+const _ALLOWED = (Deno.env.get('ALLOWED_ORIGINS') ?? '*').split(',').map(s => s.trim());
+function makeCors(req: Request): Record<string, string> {
+  const origin = req.headers.get('Origin') ?? '';
+  const allow  = _ALLOWED.includes('*') || _ALLOWED.includes(origin) ? (origin || '*') : '';
+  return {
+    'Access-Control-Allow-Origin':  allow,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +74,7 @@ async function sendWelcomeEmail(opts: {
     <div style="font-family:sans-serif;max-width:560px;margin:auto;padding:32px;background:#0f0f1a;color:#fff;border-radius:12px">
       <div style="text-align:center;margin-bottom:24px">
         <h1 style="color:#00BFA5;margin:0">FTPGo</h1>
-        <p style="color:#9ca3af;margin:4px 0 0">Fleet Management Platform</p>
+        <p style="color:#9ca3af;margin:4px 0 0">Fleet Telemetry Platform</p>
       </div>
 
       <h2 style="color:#fff;margin-bottom:4px">Welcome, ${opts.driverName}!</h2>
@@ -127,11 +140,9 @@ async function sendWelcomeEmail(opts: {
   }
 }
 
-/** ❺ Sends driver credentials via SMS.
+/** Sends driver credentials via SMS.
  *  Completely non-fatal — skipped if SMS_API_KEY is not configured.
- *  When you choose an SMS provider (MSG91, Fast2SMS, Twilio, etc.),
- *  replace the TODO block below with the provider's API call.
- *  Required Supabase secret: SMS_API_KEY */
+ *  Replace the TODO block below with your SMS provider's API call. */
 async function sendSmsCredentials(opts: {
   driverName:   string;
   driverPhone:  string;
@@ -178,21 +189,16 @@ async function sendSmsCredentials(opts: {
   }
 }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-};
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
-function err(msg: string, status = 400) { return json({ error: msg }, status); }
-
 serve(async (req) => {
+  const corsHeaders = makeCors(req);
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  const err = (msg: string, status = 400) => json({ error: msg }, status);
+
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   // All routes require authentication
@@ -279,8 +285,8 @@ serve(async (req) => {
     if (!newUser) return err("Failed to create driver account", 500);
 
     // Generate a one-time login token for the welcome email QR code
-    const oneTimeToken    = generateOneTimeToken();
-    const tokenExpiry     = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const oneTimeToken = generateOneTimeToken();
+    const tokenExpiry  = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
     // Create driver_accounts row — try with token fields first; fall back without
     // them if the migration hasn't been run yet (graceful degradation).
@@ -342,8 +348,6 @@ serve(async (req) => {
     }
 
     // Send welcome email (best-effort — non-fatal if RESEND_API_KEY not configured)
-    // If token columns are missing the QR code in the email won't work, but
-    // the credential table (email + password) will still be delivered.
     await sendWelcomeEmail({
       driverName:   name.trim(),
       driverEmail:  email.trim().toLowerCase(),
@@ -353,7 +357,7 @@ serve(async (req) => {
       oneTimeToken: tokenColumnsAvailable ? oneTimeToken : "",
     });
 
-    // ❺ Send SMS credentials (best-effort — non-fatal if SMS_API_KEY not configured)
+    // Send SMS credentials (best-effort — non-fatal if SMS_API_KEY not configured)
     if (phone?.trim()) {
       await sendSmsCredentials({
         driverName:  name.trim(),
@@ -365,12 +369,12 @@ serve(async (req) => {
     }
 
     return json({
-      driver_id:       driverAccount.id,
-      user_id:         newUser.id,
-      email:           email.trim().toLowerCase(),
-      name:            name.trim(),
-      vehicle_id:      vehicle_id ?? null,
-      one_time_token:  tokenColumnsAvailable ? oneTimeToken : null,
+      driver_id:      driverAccount.id,
+      user_id:        newUser.id,
+      email:          email.trim().toLowerCase(),
+      name:           name.trim(),
+      vehicle_id:     vehicle_id ?? null,
+      one_time_token: tokenColumnsAvailable ? oneTimeToken : null,
     });
   }
 
@@ -390,7 +394,6 @@ serve(async (req) => {
 
     if (tokenErr || !driver) return err("Invalid or already used token", 404);
 
-    // Check expiry
     if (new Date(driver.one_time_login_token_exp) < new Date()) {
       return err("Token has expired — ask your fleet manager to resend credentials", 410);
     }
@@ -405,30 +408,6 @@ serve(async (req) => {
       .eq("id", driver.id);
 
     return json({ email: driver.email });
-  }
-
-  // ── regenerate_token ────────────────────────────────────────────────────────
-  // Fleet manager requests a fresh one-time login token for a driver who hasn't
-  // logged in yet (token used or expired).
-  if (body.action === "regenerate_token") {
-    const { driver_id } = body;
-    if (!driver_id) return err("driver_id is required");
-
-    const newToken  = generateOneTimeToken();
-    const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    const { error: updateErr } = await adminClient
-      .from("driver_accounts")
-      .update({
-        one_time_login_token:     newToken,
-        one_time_login_token_exp: newExpiry.toISOString(),
-      })
-      .eq("id",       driver_id)
-      .eq("fleet_id", fleet.id);   // ensures manager only touches their own drivers
-
-    if (updateErr) return err(updateErr.message, 500);
-
-    return json({ one_time_token: newToken });
   }
 
   // ── delete ──────────────────────────────────────────────────────────────────
@@ -446,10 +425,8 @@ serve(async (req) => {
 
     if (fetchErr || !driver) return err("Driver not found", 404);
 
-    // Delete driver_accounts row
+    // Delete driver_accounts row then auth user
     await adminClient.from("driver_accounts").delete().eq("id", driver_id);
-
-    // Delete auth user
     await adminClient.auth.admin.deleteUser(driver.user_id);
 
     return json({ success: true });

@@ -69,7 +69,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
     const url = canvas.toDataURL('image/png');
     const a   = document.createElement('a');
     a.href     = url;
-    a.download = `vehiclesense-qr-${name.trim().replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.download = `ftpgo-qr-${name.trim().replace(/\s+/g, '-').toLowerCase()}.png`;
     a.click();
   };
 
@@ -84,38 +84,52 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
       const { data: limitData, error: limitErr } = await supabase
         .rpc('check_driver_limit', { p_fleet_id: fleetId });
 
-      if (limitErr) throw new Error(limitErr.message);
-
-      const check = limitData as LimitCheck;
-      if (!check.allowed) {
-        setLimitBlocked(check);
-        return;
+      // If the RPC itself errors (function not deployed, etc.) skip the limit
+      // check and proceed — the edge function will enforce it server-side.
+      if (!limitErr && limitData) {
+        const check = limitData as LimitCheck;
+        // Only block on a real limit hit (has a used/limit count) — not on
+        // "no subscription found" which just means the subscription trigger
+        // hasn't run yet (new fleet). Proceed in that case.
+        const isRealLimit = !check.allowed && check.used != null && check.limit != null;
+        if (isRealLimit) {
+          setLimitBlocked(check);
+          return;
+        }
       }
 
       // ── Limit OK — proceed with creation ──────────────────────────────────
       const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token ?? null;
-      if (!accessToken) throw new Error('Not authenticated — please log in again');
+      if (!session?.access_token) throw new Error('Not authenticated — please log in again');
 
-      const { data, error: fnErr } = await supabase.functions.invoke('driver-management', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: {
-          action:   'create',
-          name:     name.trim(),
-          email:    email.trim().toLowerCase(),
-          password,
-          phone:    phone.trim() || undefined,
-          fleet_id: fleetId,
+      // Use fetch directly so we have explicit control over both required
+      // Supabase gateway headers (apikey + Authorization).
+      // supabase.functions.invoke() in v2.57 doesn't reliably forward custom
+      // headers alongside its own auto-injected auth, causing UNAUTHORIZED_NO_AUTH_HEADER.
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/driver-management`,
+        {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action:   'create',
+            name:     name.trim(),
+            email:    email.trim().toLowerCase(),
+            password,
+            phone:    phone.trim() || undefined,
+            fleet_id: fleetId,
+          }),
         },
-      });
+      );
 
-      if (fnErr) {
-        let msg = fnErr.message ?? 'Failed to create driver';
-        try {
-          const errBody = await (fnErr as any).context?.json?.();
-          msg = errBody?.error ?? errBody?.message ?? msg;
-        } catch { /* context not parseable — use fnErr.message */ }
-        console.error('[CreateDriver] edge function error', fnErr, msg);
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data?.error ?? data?.message ?? `Request failed (HTTP ${res.status})`;
+        console.error('[CreateDriver] edge function error', res.status, data);
         throw new Error(msg);
       }
 
@@ -261,7 +275,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
                   <div className="bg-white p-3 rounded-xl inline-block">
                     <QRCodeCanvas
                       ref={qrRef}
-                      value={`vehiclesense://auth?token=${createdToken}`}
+                      value={`ftpgo://auth?token=${createdToken}`}
                       size={180}
                       bgColor="#ffffff"
                       fgColor="#000000"
@@ -273,7 +287,7 @@ export default function CreateDriverModal({ fleetId, onClose, onDriverCreated, o
                 {/* Share & Download row */}
                 <div className="flex gap-2">
                   <button
-                    onClick={() => copy(`vehiclesense://auth?token=${createdToken}`, 'link')}
+                    onClick={() => copy(`ftpgo://auth?token=${createdToken}`, 'link')}
                     className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
                   >
                     {copiedLink

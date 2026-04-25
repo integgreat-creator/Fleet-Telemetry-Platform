@@ -22,7 +22,7 @@ export default function CostAnalyticsPage() {
   const [predictions, setPredictions] = useState<CostPrediction[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [costInsights, setCostInsights] = useState<CostInsight[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -30,6 +30,7 @@ export default function CostAnalyticsPage() {
   }, []);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => { setLoading(false); setRefreshing(false); }, 8000);
     try {
       const [predictionsRes, vehiclesRes, insightsRes] = await Promise.all([
         supabase
@@ -51,6 +52,7 @@ export default function CostAnalyticsPage() {
     } catch (error) {
       console.error('Error loading cost analytics:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
       setRefreshing(false);
     }

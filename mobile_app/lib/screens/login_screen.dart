@@ -57,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Icon(Icons.directions_car, size: 72, color: Colors.blue),
                   const SizedBox(height: 16),
                   Text(
-                    'VehicleSense',
+                    'FTPGo',
                     style: Theme.of(context)
                         .textTheme
                         .headlineMedium
@@ -243,14 +243,18 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (sheetCtx) => _QrScannerSheet(
         onTokenDetected: (raw) {
           Navigator.of(sheetCtx).pop();
-          // vehiclesense://auth?token=<one-time-token>  → exchange for email + auto-login
-          // vehiclesense://join?token=<invite-token>    → existing QR invite flow
-          // vehiclesense://auth?data=<base64>           → legacy format
-          if (raw.startsWith('vehiclesense://auth?token=')) {
-            final token = raw.substring('vehiclesense://auth?token='.length);
+          if (raw.startsWith('ftpgo://auth?token=')) {
+            // Create-driver QR: one-time token → exchange for email + auto-fill
+            final token = raw.substring('ftpgo://auth?token='.length);
             _exchangeOneTimeToken(context, token);
-          } else {
-            context.read<InviteProvider>().setPendingToken(raw);
+          } else if (raw.startsWith('ftpgo://join?token=')) {
+            // Invite QR: fleet invite token → accept invite screen
+            final token = raw.substring('ftpgo://join?token='.length);
+            context.read<InviteProvider>().setPendingToken(token);
+          } else if (raw.startsWith('ftpgo://auth?data=')) {
+            // Legacy format: strip prefix, treat as invite token
+            final token = raw.substring('ftpgo://auth?data='.length);
+            context.read<InviteProvider>().setPendingToken(token);
           }
         },
         onManualEntry: () {
@@ -383,20 +387,13 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
       final raw = barcode.rawValue;
       if (raw == null) continue;
 
-      String? token;
+      final recognized = raw.startsWith('ftpgo://join?token=') ||
+                         raw.startsWith('ftpgo://auth?token=') ||
+                         raw.startsWith('ftpgo://auth?data=');
 
-      // Pattern 1: vehiclesense://join?token=<token>
-      if (raw.startsWith('vehiclesense://join?token=')) {
-        token = raw.substring('vehiclesense://join?token='.length);
-      }
-      // Pattern 2: vehiclesense://auth?data=<base64url>
-      else if (raw.startsWith('vehiclesense://auth?data=')) {
-        token = raw.substring('vehiclesense://auth?data='.length);
-      }
-
-      if (token != null && token.isNotEmpty) {
+      if (recognized) {
         _scanned = true;
-        widget.onTokenDetected(token);
+        widget.onTokenDetected(raw); // full URL — let callback route by scheme
         return;
       }
     }

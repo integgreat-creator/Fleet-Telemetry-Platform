@@ -64,12 +64,17 @@ export default function Auth() {
           throw new Error(body?.error || `Sign up failed (HTTP ${res.status})`);
         }
 
-        if (!body?.session) {
-          throw new Error('Sign up succeeded but no session was returned. Please try logging in.');
+        // Edge function created the account + fleet.
+        // Sign in client-side — this is the only path that reliably fires
+        // onAuthStateChange and loads the dashboard. setSession() is unreliable
+        // across browsers and doesn't consistently trigger the auth state listener.
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email:    email.trim().toLowerCase(),
+          password,
+        });
+        if (signInError) {
+          throw new Error('Account created but sign-in failed. Please use the Login tab.');
         }
-
-        const { error: sessionError } = await supabase.auth.setSession(body.session);
-        if (sessionError) throw sessionError;
       }
     } catch (err: any) {
       setError(err.message || 'An error occurred');

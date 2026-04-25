@@ -107,6 +107,28 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(() => setTick(t => t + 1), []);
 
+  // Re-load whenever the user signs in or out.
+  // SubscriptionProvider sits above AppInner so it doesn't automatically
+  // re-run when AppInner's auth state changes — we must listen ourselves.
+  // INITIAL_SESSION is intentionally excluded: tick=0 already covers the
+  // initial load, and including it would cause a redundant second fetch.
+  useEffect(() => {
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(
+      (event) => {
+        if (event === 'SIGNED_IN') {
+          // Set loading:true immediately so App.tsx shows the spinner
+          // instead of NoFleetScreen during the gap between SIGNED_IN
+          // firing and the re-fetch effect actually completing.
+          setState(s => ({ ...s, loading: true }));
+          setTick(t => t + 1);
+        } else if (event === 'SIGNED_OUT') {
+          setTick(t => t + 1);
+        }
+      },
+    );
+    return () => authSub.unsubscribe();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -116,32 +138,38 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         if (!user || cancelled) { setState(s => ({ ...s, loading: false })); return; }
 
         // ── Fleet ────────────────────────────────────────────────────────────
-        const { data: fleet } = await supabase
+        // maybeSingle() returns null on 0 rows instead of throwing PGRST116.
+        // .single() was silently crashing here and leaving fleetId = null for
+        // the entire session, disabling every fleet-dependent feature.
+        const { data: fleet, error: fleetErr } = await supabase
           .from('fleets')
           .select('id')
           .eq('manager_id', user.id)
-          .single();
+          .maybeSingle();
 
+        if (fleetErr) throw fleetErr;
         if (!fleet || cancelled) { setState(s => ({ ...s, loading: false })); return; }
         const fleetId = fleet.id as string;
 
         // ── Parallel fetch ────────────────────────────────────────────────────
-        const [subRes, vehicleRes, driverRes] = await Promise.all([
+        // plan_definitions is a tiny static table (~5 rows). Fetching all rows
+        // here lets us include it in the same round-trip instead of waiting for
+        // the subscription row first, then firing a second sequential query.
+        const [subRes, vehicleRes, driverRes, planDefsRes] = await Promise.all([
           supabase.from('subscriptions').select('*').eq('fleet_id', fleetId).single(),
           supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
           supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
+          supabase.from('plan_definitions').select('*'),
         ]);
 
         if (cancelled) return;
         const sub = subRes.data;
         if (!sub) { setState(s => ({ ...s, loading: false, fleetId })); return; }
 
-        // ── Plan definition ───────────────────────────────────────────────────
-        const { data: planDef } = await supabase
-          .from('plan_definitions')
-          .select('*')
-          .eq('plan_name', sub.plan)
-          .single();
+        // ── Plan definition (matched client-side from the prefetched list) ────
+        const planDef = (planDefsRes.data ?? []).find(
+          (p: Record<string, unknown>) => p.plan_name === sub.plan
+        ) ?? null;
 
         if (cancelled) return;
 

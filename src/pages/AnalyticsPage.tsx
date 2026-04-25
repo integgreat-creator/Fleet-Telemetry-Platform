@@ -5,8 +5,9 @@ import { supabase, type Vehicle, type DriverBehavior } from '../lib/supabase';
 export default function AnalyticsPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [driverBehavior, setDriverBehavior] = useState<DriverBehavior[]>([]);
+  const [prevDriverBehavior, setPrevDriverBehavior] = useState<DriverBehavior[]>([]);
   const [sensorHistory, setSensorHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<string>('all');
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
 
@@ -15,19 +16,28 @@ export default function AnalyticsPage() {
   }, [selectedVehicle, timeRange]);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
-      const startDate = new Date();
-      if (timeRange === '24h') startDate.setHours(startDate.getHours() - 24);
-      if (timeRange === '7d') startDate.setDate(startDate.getDate() - 7);
-      if (timeRange === '30d') startDate.setDate(startDate.getDate() - 30);
+      const periodMs = timeRange === '24h' ? 86_400_000
+        : timeRange === '7d'  ? 7  * 86_400_000
+        :                        30 * 86_400_000;
 
-      const [vehiclesRes, behaviorRes, sensorRes] = await Promise.all([
+      const now          = Date.now();
+      const startDate    = new Date(now - periodMs);
+      const prevStart    = new Date(now - 2 * periodMs);
+
+      const [vehiclesRes, behaviorRes, prevBehaviorRes, sensorRes] = await Promise.all([
         supabase.from('vehicles').select('*'),
         supabase
           .from('driver_behavior')
           .select('*')
           .gte('created_at', startDate.toISOString())
           .order('created_at', { ascending: false }),
+        supabase
+          .from('driver_behavior')
+          .select('driver_score')
+          .gte('created_at', prevStart.toISOString())
+          .lt('created_at', startDate.toISOString()),
         supabase
           .from('sensor_data')
           .select('*')
@@ -36,12 +46,14 @@ export default function AnalyticsPage() {
           .limit(2000),
       ]);
 
-      if (vehiclesRes.data) setVehicles(vehiclesRes.data);
-      if (behaviorRes.data) setDriverBehavior(behaviorRes.data);
-      if (sensorRes.data) setSensorHistory(sensorRes.data);
+      if (vehiclesRes.data)    setVehicles(vehiclesRes.data);
+      if (behaviorRes.data)    setDriverBehavior(behaviorRes.data);
+      if (prevBehaviorRes.data) setPrevDriverBehavior(prevBehaviorRes.data as DriverBehavior[]);
+      if (sensorRes.data)      setSensorHistory(sensorRes.data);
     } catch (error) {
       console.error('Error loading analytics:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };
@@ -76,13 +88,27 @@ export default function AnalyticsPage() {
     ? driverBehavior.reduce((sum, b) => sum + b.driver_score, 0) / driverBehavior.length
     : 0;
 
+  const prevAvgDriverScore = prevDriverBehavior.length > 0
+    ? prevDriverBehavior.reduce((sum, b) => sum + b.driver_score, 0) / prevDriverBehavior.length
+    : null;
+
+  const scoreComparison = (() => {
+    if (prevAvgDriverScore === null || driverBehavior.length === 0) return null;
+    const delta = avgDriverScore - prevAvgDriverScore;
+    if (Math.abs(delta) < 0.5) return { label: '↔ same as last period', positive: true };
+    const pct = Math.abs((delta / prevAvgDriverScore) * 100).toFixed(1);
+    return delta > 0
+      ? { label: `↑ ${pct}% vs last period`, positive: true }
+      : { label: `↓ ${pct}% vs last period`, positive: false };
+  })();
+
   const totalHarshEvents = driverBehavior.reduce(
     (sum, b) => sum + b.harsh_braking_count + b.harsh_acceleration_count,
     0
   );
 
   const avgEngineLoad = sensorHistory
-    .filter(s => s.sensor_type === 'engineLoad')
+    .filter(s => s.sensor_type === 'engine_load')
     .reduce((sum, s, _, arr) => sum + s.value / arr.length, 0);
 
   // AI Metric Calculations
@@ -180,10 +206,14 @@ export default function AnalyticsPage() {
           </div>
           <p className="text-sm text-gray-400 mb-1">Safety Score</p>
           <h3 className="text-3xl font-bold text-white mb-1">{avgDriverScore.toFixed(0)}</h3>
-          <div className="flex items-center text-xs text-green-500">
-            <TrendingUp className="w-3 h-3 mr-1" />
-            <span>2% vs last week</span>
-          </div>
+          {scoreComparison ? (
+            <div className={`flex items-center text-xs ${scoreComparison.positive ? 'text-green-500' : 'text-red-500'}`}>
+              <TrendingUp className="w-3 h-3 mr-1" />
+              <span>{scoreComparison.label}</span>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">No prior period data</p>
+          )}
         </div>
 
         <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 relative overflow-hidden">

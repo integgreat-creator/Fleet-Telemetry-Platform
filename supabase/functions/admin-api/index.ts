@@ -16,9 +16,10 @@ const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const ANON_KEY          = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const ADMIN_SECRET      = Deno.env.get('ADMIN_SECRET') ?? '';
+const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers':
     'authorization, x-client-info, apikey, content-type, x-admin-override, x-admin-secret',
@@ -386,16 +387,38 @@ Deno.serve(async (req: Request) => {
     if (action === 'log-action') {
       const resourceType = body.resource_type as string | undefined;
       const actionName   = body.action_name   as string | undefined;
+      const resourceId   = (body.resource_id  as string) ?? null;
 
       if (!resourceType) return err('resource_type is required');
       if (!actionName)   return err('action_name is required');
+
+      // For resource types that map to fleet-owned rows, verify ownership
+      // to prevent a manager from injecting audit entries for other fleets.
+      if (resourceId) {
+        const fleetColumnByType: Record<string, { table: string; column: string }> = {
+          vehicle:    { table: 'vehicles',        column: 'fleet_id' },
+          driver:     { table: 'driver_accounts', column: 'fleet_id' },
+          threshold:  { table: 'thresholds',      column: 'fleet_id' },
+          geofence:   { table: 'geofences',       column: 'fleet_id' },
+        };
+        const mapping = fleetColumnByType[resourceType];
+        if (mapping) {
+          const { data: owned } = await adminClient
+            .from(mapping.table)
+            .select('id')
+            .eq('id', resourceId)
+            .eq(mapping.column, fleet.id)
+            .maybeSingle();
+          if (!owned) return err('resource_id does not belong to your fleet', 403);
+        }
+      }
 
       const { error: insertErr } = await adminClient.from('audit_logs').insert({
         fleet_id:      fleet.id,
         user_id:       user.id,
         action:        actionName,
         resource_type: resourceType,
-        resource_id:   (body.resource_id as string) ?? null,
+        resource_id:   resourceId,
         old_values:    (body.old_values  as Record<string, unknown>) ?? null,
         new_values:    (body.new_values  as Record<string, unknown>) ?? null,
       });

@@ -15,6 +15,12 @@ import {
   Fuel,
   Save,
   Loader,
+  ToggleLeft,
+  ToggleRight,
+  Globe,
+  Bell,
+  Copy,
+  Link2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
@@ -90,7 +96,117 @@ interface DeviceHealth {
   vehicles?: { id: string; name: string; vin: string } | null;
 }
 
-type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings';
+type Tab = 'subscription' | 'drivers' | 'audit' | 'device-health' | 'api-access' | 'settings' | 'thresholds';
+
+// ─── Threshold sensor config ──────────────────────────────────────────────────
+
+type SensorDef = { key: string; label: string; unit: string; defaultMin: number | null; defaultMax: number | null };
+
+const THRESHOLD_SENSOR_GROUPS: Array<{ category: string; sensors: SensorDef[] }> = [
+  {
+    category: 'Engine & Core',
+    sensors: [
+      { key: 'rpm',              label: 'Engine RPM',            unit: 'RPM',     defaultMin: null, defaultMax: 4500 },
+      { key: 'coolantTemp',      label: 'Coolant Temperature',   unit: '°C',      defaultMin: null, defaultMax: 105  },
+      { key: 'coolantTemp2',     label: 'Coolant Temp 2',        unit: '°C',      defaultMin: null, defaultMax: 105  },
+      { key: 'engineLoad',       label: 'Engine Load',           unit: '%',       defaultMin: null, defaultMax: 85   },
+      { key: 'engineOilTemp',    label: 'Engine Oil Temp',       unit: '°C',      defaultMin: null, defaultMax: 130  },
+      { key: 'timingAdvance',    label: 'Timing Advance',        unit: '° BTDC',  defaultMin: -20,  defaultMax: 45   },
+      { key: 'manifoldPressure', label: 'Manifold Pressure',     unit: 'kPa',     defaultMin: 20,   defaultMax: 105  },
+      { key: 'exhaustGasTempBank1', label: 'Exhaust Gas Temp',   unit: '°C',      defaultMin: null, defaultMax: 850  },
+      { key: 'actualEngineTorque',  label: 'Actual Engine Torque', unit: '%',     defaultMin: null, defaultMax: null },
+      { key: 'enginePercentTorque', label: 'Engine Torque %',    unit: '%',       defaultMin: null, defaultMax: null },
+      { key: 'absoluteLoad',     label: 'Absolute Load',         unit: '%',       defaultMin: null, defaultMax: 90   },
+    ],
+  },
+  {
+    category: 'Fuel & Emissions',
+    sensors: [
+      { key: 'fuelLevel',               label: 'Fuel Level',              unit: '%',    defaultMin: 15,   defaultMax: null },
+      { key: 'fuelPressure',            label: 'Fuel Pressure',           unit: 'kPa',  defaultMin: 200,  defaultMax: 600  },
+      { key: 'fuelRailAbsolutePressure',label: 'Fuel Rail Pressure',      unit: 'kPa',  defaultMin: null, defaultMax: 5000 },
+      { key: 'engineFuelRate',          label: 'Engine Fuel Rate',        unit: 'L/h',  defaultMin: null, defaultMax: 30   },
+      { key: 'cylinderFuelRate',        label: 'Cylinder Fuel Rate',      unit: 'mg/s', defaultMin: null, defaultMax: null },
+      { key: 'shortFuelTrim',           label: 'Short-Term Fuel Trim',    unit: '%',    defaultMin: -15,  defaultMax: 15   },
+      { key: 'longFuelTrim',            label: 'Long-Term Fuel Trim',     unit: '%',    defaultMin: -10,  defaultMax: 10   },
+      { key: 'ethanolFuelPercent',      label: 'Ethanol Fuel %',          unit: '%',    defaultMin: null, defaultMax: 85   },
+      { key: 'catalystTempBank1',       label: 'Catalyst Temp Bank 1',    unit: '°C',   defaultMin: null, defaultMax: 900  },
+      { key: 'o2Sensor1Voltage',        label: 'O2 Sensor 1 Voltage',     unit: 'V',    defaultMin: 0.1,  defaultMax: 0.9  },
+      { key: 'o2Sensor2Voltage',        label: 'O2 Sensor 2 Voltage',     unit: 'V',    defaultMin: 0.1,  defaultMax: 0.9  },
+      { key: 'commandedEGR',            label: 'Commanded EGR',           unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'egrError',                label: 'EGR Error',               unit: '%',    defaultMin: -10,  defaultMax: 10   },
+      { key: 'commandedEvapPurge',      label: 'Evap Purge',              unit: '%',    defaultMin: null, defaultMax: null },
+    ],
+  },
+  {
+    category: 'Speed & Movement',
+    sensors: [
+      { key: 'speed',                      label: 'Vehicle Speed',              unit: 'km/h', defaultMin: null, defaultMax: 120  },
+      { key: 'throttlePosition',           label: 'Throttle Position',          unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'relativeThrottlePosition',   label: 'Relative Throttle Position', unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'absoluteThrottlePositionB',  label: 'Absolute Throttle B',        unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'commandedThrottleActuator',  label: 'Commanded Throttle',         unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'relativeAcceleratorPosition',label: 'Relative Accelerator Pos',   unit: '%',    defaultMin: null, defaultMax: null },
+      { key: 'distanceSinceMIL',           label: 'Distance Since MIL On',      unit: 'km',   defaultMin: null, defaultMax: 0    },
+    ],
+  },
+  {
+    category: 'Air Intake',
+    sensors: [
+      { key: 'intakeAirTemp',      label: 'Intake Air Temperature', unit: '°C',  defaultMin: null, defaultMax: 65  },
+      { key: 'maf',                label: 'Mass Air Flow',          unit: 'g/s', defaultMin: null, defaultMax: null },
+      { key: 'barometricPressure', label: 'Barometric Pressure',    unit: 'kPa', defaultMin: 75,   defaultMax: 108 },
+      { key: 'ambientTemp',        label: 'Ambient Temperature',    unit: '°C',  defaultMin: -40,  defaultMax: 60  },
+    ],
+  },
+  {
+    category: 'Electrical',
+    sensors: [
+      { key: 'batteryVoltage',       label: 'Battery Voltage',    unit: 'V', defaultMin: 11.5, defaultMax: 14.8 },
+      { key: 'controlModuleVoltage', label: 'Module Voltage',     unit: 'V', defaultMin: 11.5, defaultMax: 14.8 },
+    ],
+  },
+  {
+    category: 'Transmission & Drivetrain',
+    sensors: [
+      { key: 'transmissionFluidTemp',  label: 'Transmission Fluid Temp', unit: '°C',  defaultMin: null, defaultMax: 120  },
+      { key: 'transmissionTurbineSpeed',label: 'Turbine Speed',          unit: 'RPM', defaultMin: null, defaultMax: 4000 },
+      { key: 'transmissionTorque',     label: 'Transmission Torque',     unit: '%',   defaultMin: null, defaultMax: null },
+      { key: 'transmissionGear',       label: 'Current Gear',            unit: '',    defaultMin: null, defaultMax: null },
+    ],
+  },
+  {
+    category: 'CNG (Compressed Natural Gas)',
+    sensors: [
+      { key: 'cngCylinderPressure', label: 'CNG Cylinder Pressure', unit: 'bar', defaultMin: 20,  defaultMax: 250 },
+      { key: 'cngFuelLevel',        label: 'CNG Fuel Level',        unit: '%',   defaultMin: 10,  defaultMax: null },
+      { key: 'cngTemperature',      label: 'CNG Temperature',       unit: '°C',  defaultMin: null, defaultMax: 60  },
+    ],
+  },
+  {
+    category: 'Electric Vehicle (EV)',
+    sensors: [
+      { key: 'evBatteryLevel',   label: 'EV Battery Level',    unit: '%',   defaultMin: 20,  defaultMax: null },
+      { key: 'evBatteryTemp',    label: 'EV Battery Temp',     unit: '°C',  defaultMin: null, defaultMax: 45   },
+      { key: 'evBatteryVoltage', label: 'EV Battery Voltage',  unit: 'V',   defaultMin: 280, defaultMax: 420  },
+      { key: 'evBatteryCurrent', label: 'EV Battery Current',  unit: 'A',   defaultMin: null, defaultMax: 200  },
+      { key: 'evRangeEstimate',  label: 'EV Range Estimate',   unit: 'km',  defaultMin: 30,  defaultMax: null },
+      { key: 'evMotorTemp',      label: 'EV Motor Temp',       unit: '°C',  defaultMin: null, defaultMax: 80   },
+      { key: 'evMotorRpm',       label: 'EV Motor RPM',        unit: 'RPM', defaultMin: null, defaultMax: 15000 },
+    ],
+  },
+];
+
+// Flat list derived from groups — used by buildDefaultRows and saveThresholds
+const THRESHOLD_SENSORS = THRESHOLD_SENSOR_GROUPS.flatMap(g => g.sensors);
+
+interface ThresholdRow {
+  sensor_type:   string;
+  min_value:     string;
+  max_value:     string;
+  alert_enabled: boolean;
+  dirty:         boolean;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -353,7 +469,16 @@ function buildCardFromCatalog(p: PlanCatalogEntry): PlanCard {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const { feature, vehiclesUsed, annualUnlockedAt } = useSubscription();
+  // useSubscription is the app-wide source of truth for billing + fleet ids.
+  // We pull `fleetId` (renamed `subFleetId` here) as a fallback in case the
+  // local manager-by-id fetch misses (race / RLS hiccup), plus `vehiclesUsed`
+  // and `annualUnlockedAt` for the Phase 1.2 checkout flow.
+  const {
+    feature,
+    fleetId:          subFleetId,
+    vehiclesUsed,
+    annualUnlockedAt,
+  } = useSubscription();
   const hasApiAccess = feature('api_access') === 'full';
 
   // Live plan catalog from `plan_definitions` — single source of truth for
@@ -442,32 +567,178 @@ export default function AdminPage() {
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
 
+  // Threshold state
+  const [threshVehicles,    setThreshVehicles]    = useState<{ id: string; name: string }[]>([]);
+  const [threshVehicleId,   setThreshVehicleId]   = useState<string>('__fleet__');
+  const [thresholdRows,     setThresholdRows]     = useState<Map<string, ThresholdRow>>(new Map());
+  const [threshLoading,     setThreshLoading]     = useState(false);
+  const [threshSaving,      setThreshSaving]      = useState(false);
+  const [threshSaveOk,      setThreshSaveOk]      = useState(false);
+  const [threshError,       setThreshError]       = useState<string | null>(null);
+
   // Fleet context
-  const [fleetId,    setFleetId]    = useState<string | null>(null);
-  const [fleetName,  setFleetName]  = useState<string | null>(null);
-  // Captured at mount so the Enterprise WhatsApp prefill (1.2.5) doesn't have
-  // to do its own auth round-trip on click.
-  const [userEmail,  setUserEmail]  = useState<string | null>(null);
+  // fleetId — set by fetchFleet; subFleetId is the authoritative fallback from
+  // useSubscription which loads app-wide before any page renders.
+  const [fleetId,        setFleetId]        = useState<string | null>(null);
+  const [fleetName,      setFleetName]      = useState<string>('');
+  const [fleetJoinCode,  setFleetJoinCode]  = useState<string>('');
+  const [joinCodeCopied, setJoinCodeCopied] = useState(false);
+  // Captured at mount so the Enterprise WhatsApp prefill (Phase 1.2.5) doesn't
+  // have to do its own auth round-trip on click.
+  const [userEmail,      setUserEmail]      = useState<string | null>(null);
+
+  // The first non-null source wins: local fetch → subscription context
+  const effectiveFleetId = fleetId ?? subFleetId ?? null;
+
+  // ── Delete fleet state ──────────────────────────────────────────────────────
+  const [showDeleteModal,    setShowDeleteModal]    = useState(false);
+  const [deleteConfirmName,  setDeleteConfirmName]  = useState('');
+  const [deleting,           setDeleting]           = useState(false);
+  const [deleteError,        setDeleteError]        = useState<string | null>(null);
+  // Fleet name resolved at modal-open time (independent of effectiveFleetId)
+  const [modalFleetName,     setModalFleetName]     = useState<string>('');
+  const [modalFleetId,       setModalFleetId]       = useState<string | null>(null);
+  const [modalLoading,       setModalLoading]       = useState(false);
 
   // ── Fetch fleet on mount ────────────────────────────────────────────────────
+  // Loads fleetName + joinCode.  If the manager query finds nothing (race or
+  // RLS hiccup), fall back to querying by the subscription context's fleetId.
 
   useEffect(() => {
     const fetchFleet = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // Cache email up front so handleEnterpriseContact doesn't need its own
+      // auth round-trip when the user clicks "Contact Sales".
       setUserEmail(user.email ?? null);
-      const { data } = await supabase
+
+      // Primary: find by manager_id (most reliable for fleet managers)
+      let data: { id: string; name: string | null; join_code: string | null } | null = null;
+      const { data: byManager } = await supabase
         .from('fleets')
-        .select('id, name')
+        .select('id, name, join_code')
         .eq('manager_id', user.id)
-        .single();
+        .maybeSingle();
+
+      data = byManager;
+
+      // Fallback: if manager query returned nothing but subscription already
+      // resolved a fleet ID, load by that ID directly
+      if (!data && subFleetId) {
+        const { data: byId } = await supabase
+          .from('fleets')
+          .select('id, name, join_code')
+          .eq('id', subFleetId)
+          .maybeSingle();
+        data = byId;
+      }
+
       if (data) {
         setFleetId(data.id);
-        setFleetName((data.name as string | undefined) ?? null);
+        setFleetName(data.name ?? '');
+        setFleetJoinCode(data.join_code ?? '');
       }
     };
     fetchFleet();
-  }, []);
+  // Re-run once subFleetId resolves so the fallback path is exercised
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subFleetId]);
+
+  const handleCopyJoinCode = () => {
+    if (!fleetJoinCode) return;
+    navigator.clipboard.writeText(fleetJoinCode);
+    setJoinCodeCopied(true);
+    setTimeout(() => setJoinCodeCopied(false), 2000);
+  };
+
+  // Opens the modal and resolves the fleet record fresh from the DB.
+  // Never depends on pre-loaded state — works even if effectiveFleetId is null.
+  const openDeleteModal = async () => {
+    setDeleteConfirmName('');
+    setDeleteError(null);
+    setModalFleetName('');
+    setModalFleetId(null);
+    setShowDeleteModal(true);
+    setModalLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setDeleteError('Not authenticated.'); return; }
+
+      const { data, error } = await supabase
+        .from('fleets')
+        .select('id, name')
+        .eq('manager_id', user.id)
+        .maybeSingle();
+
+      if (error) { setDeleteError(error.message); return; }
+      if (!data)  { setDeleteError('No fleet found for your account.'); return; }
+
+      setModalFleetId(data.id);
+      setModalFleetName(data.name ?? '');
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  const handleDeleteFleet = async () => {
+    if (!modalFleetId) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      // ── Step 1: Snapshot driver user_ids before deletion ─────────────────────
+      const { data: driverRows } = await supabase
+        .from('driver_accounts')
+        .select('user_id')
+        .eq('fleet_id', modalFleetId);
+
+      const driverUserIds: string[] = (driverRows ?? [])
+        .map((d: { user_id: string }) => d.user_id)
+        .filter(Boolean);
+
+      // ── Step 2: Delete the fleet ──────────────────────────────────────────────
+      // RLS policy "Fleet managers can delete their own fleets" allows this.
+      // ON DELETE CASCADE removes: vehicles, sensor_data, trips, alerts,
+      // thresholds, device_health, driver_accounts, subscriptions, invitations.
+      const { error: deleteErr } = await supabase
+        .from('fleets')
+        .delete()
+        .eq('id', modalFleetId);
+
+      if (deleteErr) throw new Error(deleteErr.message);
+
+      // ── Step 3: Best-effort driver auth.users cleanup via edge function ───────
+      // Fleet is already gone; pass driver_user_ids directly. Silently ignored
+      // if the function hasn't been deployed yet.
+      if (driverUserIds.length > 0) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            await fetch(
+              `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/fleet-delete`,
+              {
+                method:  'POST',
+                headers: {
+                  'Content-Type':  'application/json',
+                  'Authorization': `Bearer ${session.access_token}`,
+                  'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+                },
+                body: JSON.stringify({ cleanup_only: true, driver_user_ids: driverUserIds }),
+              },
+            );
+          }
+        } catch {
+          // Best-effort — don't block the user if this fails
+        }
+      }
+
+      // ── Step 4: Sign out and redirect ────────────────────────────────────────
+      await supabase.auth.signOut({ scope: 'global' });
+      window.location.href = '/';
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : 'Fleet deletion failed');
+      setDeleting(false);
+    }
+  };
 
   // ── Billing details (1.3.1) — fetched once per fleet, refreshed on save ───
   // Drives both the GSTIN pre-fill in PlanCheckoutModal and the customer
@@ -530,14 +801,14 @@ export default function AdminPage() {
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
 
   const loadSubscription = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setSubLoading(true);
     setSubError(null);
     try {
       const [subRes, vehicleRes, driverRes] = await Promise.all([
-        supabase.from('subscriptions').select('*').eq('fleet_id', fleetId).single(),
-        supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
-        supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', fleetId),
+        supabase.from('subscriptions').select('*').eq('fleet_id', effectiveFleetId).single(),
+        supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('fleet_id', effectiveFleetId),
+        supabase.from('driver_accounts').select('id', { count: 'exact', head: true }).eq('fleet_id', effectiveFleetId),
       ]);
       if (subRes.error && subRes.error.code !== 'PGRST116') throw subRes.error;
       setSubscription(subRes.data ?? null);
@@ -548,17 +819,17 @@ export default function AdminPage() {
     } finally {
       setSubLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadDrivers = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setDriversLoading(true);
     setDriversError(null);
     try {
       const { data, error } = await supabase
         .from('driver_accounts')
         .select('*, vehicles(id, name, vin, make, model)')
-        .eq('fleet_id', fleetId)
+        .eq('fleet_id', effectiveFleetId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setDrivers(data ?? []);
@@ -567,17 +838,17 @@ export default function AdminPage() {
     } finally {
       setDriversLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadAuditLogs = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setAuditLoading(true);
     setAuditError(null);
     try {
       const { data, error } = await supabase
         .from('audit_logs')
         .select('*')
-        .eq('fleet_id', fleetId)
+        .eq('fleet_id', effectiveFleetId)
         .order('created_at', { ascending: false })
         .limit(100);
       if (error) throw error;
@@ -587,17 +858,17 @@ export default function AdminPage() {
     } finally {
       setAuditLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
 
   const loadDeviceHealth = useCallback(async () => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     setDeviceLoading(true);
     setDeviceError(null);
     try {
       const { data: vehicles } = await supabase
         .from('vehicles')
         .select('id')
-        .eq('fleet_id', fleetId);
+        .eq('fleet_id', effectiveFleetId);
       const vehicleIds = (vehicles ?? []).map((v: { id: string }) => v.id);
       if (vehicleIds.length === 0) {
         setDeviceHealth([]);
@@ -615,16 +886,165 @@ export default function AdminPage() {
     } finally {
       setDeviceLoading(false);
     }
-  }, [fleetId]);
+  }, [effectiveFleetId]);
+
+  // Builds a Map seeded with sensor defaults — always call this first so rows
+  // are never blank even if the DB query fails.
+  const buildDefaultRows = (): Map<string, ThresholdRow> => {
+    const m = new Map<string, ThresholdRow>();
+    THRESHOLD_SENSORS.forEach(s => {
+      m.set(s.key, {
+        sensor_type:   s.key,
+        min_value:     s.defaultMin != null ? String(s.defaultMin) : '',
+        max_value:     s.defaultMax != null ? String(s.defaultMax) : '',
+        alert_enabled: true,
+        dirty:         false,
+      });
+    });
+    return m;
+  };
+
+  // Merges saved DB rows into a default-seeded map and returns it.
+  const mergeDbRows = (defaults: Map<string, ThresholdRow>, dbRows: any[]): Map<string, ThresholdRow> => {
+    const m = new Map(defaults);
+    for (const row of dbRows) {
+      if (m.has(row.sensor_type)) {
+        m.set(row.sensor_type, {
+          sensor_type:   row.sensor_type,
+          min_value:     row.min_value != null ? String(row.min_value) : '',
+          max_value:     row.max_value != null ? String(row.max_value) : '',
+          alert_enabled: row.alert_enabled ?? true,
+          dirty:         false,
+        });
+      }
+    }
+    return m;
+  };
+
+  // Called when Thresholds tab first opens — loads vehicles + thresholds for
+  // the first vehicle. Defaults are shown immediately so the form is never blank.
+  const initThresholds = useCallback(async () => {
+    if (!effectiveFleetId) return;
+    setThreshLoading(true);
+    setThreshError(null);
+    setThresholdRows(buildDefaultRows());
+
+    try {
+      const { data: vehicleData } = await supabase
+        .from('vehicles').select('id, name').order('name');
+      const vehicles = vehicleData ?? [];
+      setThreshVehicles(vehicles);
+
+      const pickId = vehicles.length > 0 ? vehicles[0].id : '__fleet__';
+      setThreshVehicleId(pickId);
+
+      if (pickId === '__fleet__') {
+        // Fleet-level requires the migration — skip the load and keep defaults
+        setThreshError('Select a specific vehicle to configure thresholds, or run migration 20260521000000_thresholds_fleet_scope.sql to enable fleet-wide defaults.');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('thresholds').select('*').eq('vehicle_id', pickId);
+      if (error) throw error;
+      setThresholdRows(mergeDbRows(buildDefaultRows(), data ?? []));
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Failed to load thresholds');
+    } finally {
+      setThreshLoading(false);
+    }
+  }, [effectiveFleetId]);
+
+  // Called from the vehicle-selector dropdown onChange.
+  const loadThresholds = useCallback(async (vehicleId: string) => {
+    if (!effectiveFleetId) return;
+    setThreshLoading(true);
+    setThreshError(null);
+    setThresholdRows(buildDefaultRows()); // show defaults immediately
+
+    try {
+      const isFleet = vehicleId === '__fleet__';
+      const { data, error } = isFleet
+        ? await supabase.from('thresholds').select('*').eq('fleet_id', effectiveFleetId).is('vehicle_id', null)
+        : await supabase.from('thresholds').select('*').eq('vehicle_id', vehicleId);
+      if (error) {
+        if (error.message?.includes('fleet_id')) {
+          setThreshError('Run migration 20260521000000_thresholds_fleet_scope.sql in Supabase Studio to enable fleet-wide thresholds.');
+        } else {
+          setThreshError(error.message);
+        }
+        return;
+      }
+      setThresholdRows(mergeDbRows(buildDefaultRows(), data ?? []));
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Failed to load thresholds');
+    } finally {
+      setThreshLoading(false);
+    }
+  }, [effectiveFleetId]);
+
+  const saveThresholds = async () => {
+    if (!effectiveFleetId) return;
+    setThreshSaving(true);
+    setThreshSaveOk(false);
+    setThreshError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session — please log in again');
+      const headers = {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+      };
+      const baseUrl = `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/threshold-api`;
+      const isFleet = threshVehicleId === '__fleet__';
+
+      for (const row of Array.from(thresholdRows.values())) {
+        const payload: Record<string, unknown> = {
+          sensor_type:   row.sensor_type,
+          min_value:     row.min_value !== '' ? parseFloat(row.min_value) : null,
+          max_value:     row.max_value !== '' ? parseFloat(row.max_value) : null,
+          alert_enabled: row.alert_enabled,
+          ...(isFleet ? { fleet_id: effectiveFleetId } : { vehicle_id: threshVehicleId }),
+        };
+        const res = await fetch(baseUrl, { method: 'POST', headers, body: JSON.stringify(payload) });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error((body as any).error ?? `Save failed (${res.status})`);
+        }
+      }
+      setThreshSaveOk(true);
+      setThresholdRows(prev => {
+        const m = new Map(prev);
+        m.forEach((v, k) => m.set(k, { ...v, dirty: false }));
+        return m;
+      });
+    } catch (e: any) {
+      setThreshError(e?.message ?? 'Unexpected error');
+    } finally {
+      setThreshSaving(false);
+    }
+  };
+
+  const updateThreshRow = (key: string, field: keyof ThresholdRow, value: string | boolean) => {
+    setThresholdRows(prev => {
+      const m = new Map(prev);
+      const row = m.get(key);
+      if (row) m.set(key, { ...row, [field]: value, dirty: true });
+      return m;
+    });
+    setThreshSaveOk(false);
+  };
 
   useEffect(() => {
-    if (!fleetId) return;
+    if (!effectiveFleetId) return;
     if (activeTab === 'subscription')  loadSubscription();
     if (activeTab === 'drivers')       loadDrivers();
     if (activeTab === 'audit')         loadAuditLogs();
     if (activeTab === 'device-health') loadDeviceHealth();
     if (activeTab === 'settings')      loadFuelPrice();
-  }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice]);
+    if (activeTab === 'thresholds')    initThresholds();
+  }, [activeTab, effectiveFleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, initThresholds]);
 
   // Billing details are needed both inside the checkout modal (GSTIN
   // pre-fill) and on the soon-to-arrive Invoices section, so we fetch them
@@ -641,13 +1061,15 @@ export default function AdminPage() {
     setDeletingDriverId(driver.id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No active session — please log in again');
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/driver-management`,
+        `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/driver-management`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${session?.access_token}`,
+            'apikey':       import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+            Authorization:  `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({ action: 'delete', driver_id: driver.id }),
         },
@@ -694,7 +1116,7 @@ export default function AdminPage() {
     if (!rawNumber) {
       alert(
         `Contact us at ${salesEmail} to upgrade to Enterprise.\n\n` +
-        `Please mention: ${fleetName ?? '(your fleet name)'} — ${vehiclesUsed} vehicles.`,
+        `Please mention: ${fleetName || '(your fleet name)'} — ${vehiclesUsed} vehicles.`,
       );
       return;
     }
@@ -707,7 +1129,7 @@ export default function AdminPage() {
       `Hi VehicleSense team,`,
       ``,
       `I'd like to discuss the Enterprise plan for our fleet:`,
-      `• Fleet: ${fleetName ?? '(name)'}`,
+      `• Fleet: ${fleetName || '(name)'}`,
       `• Vehicles in use: ${vehiclesUsed}`,
       userEmail ? `• Contact email: ${userEmail}` : null,
       ``,
@@ -850,12 +1272,13 @@ export default function AdminPage() {
   // ─── Tabs config ─────────────────────────────────────────────────────────────
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; locked?: boolean }[] = [
-    { id: 'subscription',  label: 'Subscription',   icon: <CreditCard size={15} /> },
-    { id: 'drivers',       label: 'Drivers',         icon: <Users size={15} /> },
-    { id: 'audit',         label: 'Audit Log',       icon: <Shield size={15} /> },
-    { id: 'device-health', label: 'Device Health',   icon: <Settings size={15} /> },
-    { id: 'api-access',    label: 'API Access',      icon: <Key size={15} />, locked: !hasApiAccess },
-    { id: 'settings',      label: 'Settings',         icon: <Settings size={15} /> },
+    { id: 'subscription',  label: 'Subscription',  icon: <CreditCard size={15} /> },
+    { id: 'drivers',       label: 'Drivers',        icon: <Users size={15} /> },
+    { id: 'thresholds',    label: 'Thresholds',     icon: <Bell size={15} /> },
+    { id: 'audit',         label: 'Audit Log',      icon: <Shield size={15} /> },
+    { id: 'device-health', label: 'Device Health',  icon: <Settings size={15} /> },
+    { id: 'api-access',    label: 'API Access',     icon: <Key size={15} />, locked: !hasApiAccess },
+    { id: 'settings',      label: 'Settings',       icon: <Settings size={15} /> },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -1336,9 +1759,179 @@ export default function AdminPage() {
         <ApiAccessTab fleetId={fleetId} />
       )}
 
+      {/* ── Tab: Thresholds ───────────────────────────────────────────────────── */}
+      {activeTab === 'thresholds' && (
+        <div className="space-y-5 max-w-3xl">
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+
+            {/* Scope selector */}
+            <div className="flex flex-wrap items-center gap-3 mb-5">
+              <div className="flex items-center gap-2">
+                <Globe size={15} className="text-gray-400" />
+                <label className="text-sm text-gray-400 whitespace-nowrap">Apply to:</label>
+              </div>
+              <select
+                value={threshVehicleId}
+                onChange={e => {
+                  setThreshVehicleId(e.target.value);
+                  setThreshSaveOk(false);
+                  loadThresholds(e.target.value);
+                }}
+                className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="__fleet__">All fleet vehicles (fleet default)</option>
+                {threshVehicles.map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+              {threshVehicleId === '__fleet__' && (
+                <span className="text-xs text-purple-400 bg-purple-900/30 border border-purple-700/40 px-2 py-1 rounded-lg">
+                  Fleet-wide default — overridden by per-vehicle settings
+                </span>
+              )}
+            </div>
+
+            {threshLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader className="w-5 h-5 text-blue-400 animate-spin" />
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {THRESHOLD_SENSOR_GROUPS.map(group => {
+                  const visibleSensors = group.sensors.filter(s => thresholdRows.has(s.key));
+                  if (visibleSensors.length === 0) return null;
+                  return (
+                    <div key={group.category}>
+                      {/* Category header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-xs font-semibold uppercase tracking-widest text-blue-400">{group.category}</p>
+                        <div className="flex-1 h-px bg-gray-800" />
+                        {/* Column labels — only shown on first group to save space */}
+                      </div>
+                      {/* Column labels */}
+                      <div className="grid grid-cols-[1fr_88px_88px_40px] gap-2 px-2 mb-1.5">
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide">Sensor</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">Min</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">Max</span>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-wide text-center">On</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {group.sensors.map(sensor => {
+                          const row = thresholdRows.get(sensor.key);
+                          if (!row) return null;
+                          return (
+                            <div
+                              key={sensor.key}
+                              className={`grid grid-cols-[1fr_88px_88px_40px] gap-2 items-center px-3 py-2.5 rounded-xl border ${
+                                row.dirty ? 'border-blue-700/50 bg-blue-900/10' : 'border-gray-800 bg-gray-800/30'
+                              }`}
+                            >
+                              <div>
+                                <p className="text-sm text-white font-medium">{sensor.label}</p>
+                                {sensor.unit && <p className="text-xs text-gray-500">{sensor.unit}</p>}
+                              </div>
+                              <input
+                                type="number"
+                                value={row.min_value}
+                                onChange={e => updateThreshRow(sensor.key, 'min_value', e.target.value)}
+                                placeholder="—"
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                              />
+                              <input
+                                type="number"
+                                value={row.max_value}
+                                onChange={e => updateThreshRow(sensor.key, 'max_value', e.target.value)}
+                                placeholder="—"
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                              />
+                              <button
+                                onClick={() => updateThreshRow(sensor.key, 'alert_enabled', !row.alert_enabled)}
+                                className="flex justify-center"
+                                title={row.alert_enabled ? 'Alerts enabled' : 'Alerts disabled'}
+                              >
+                                {row.alert_enabled
+                                  ? <ToggleRight className="w-6 h-6 text-green-400" />
+                                  : <ToggleLeft  className="w-6 h-6 text-gray-600" />}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {threshError && (
+              <p className="text-xs text-red-400 text-center mt-3">{threshError}</p>
+            )}
+
+            <button
+              onClick={saveThresholds}
+              disabled={threshSaving || threshLoading}
+              className="mt-5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium text-sm transition-colors"
+            >
+              {threshSaving
+                ? <Loader className="w-4 h-4 animate-spin" />
+                : threshSaveOk
+                  ? <CheckCircle className="w-4 h-4 text-green-300" />
+                  : <Save className="w-4 h-4" />}
+              {threshSaving ? 'Saving…' : threshSaveOk
+                ? (threshVehicleId === '__fleet__' ? 'Applied to fleet!' : 'Saved!')
+                : 'Save Thresholds'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Tab: Settings ─────────────────────────────────────────────────────── */}
       {activeTab === 'settings' && (
         <div className="max-w-lg space-y-6">
+
+          {/* Fleet join code card */}
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-500/15 rounded-lg">
+                <Link2 className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <p className="text-white font-semibold">Fleet Join Code</p>
+                <p className="text-gray-400 text-xs">
+                  Share this code with drivers so they can join your fleet from the mobile app — no invite needed.
+                </p>
+              </div>
+            </div>
+
+            {fleetName && (
+              <p className="text-xs text-gray-500">
+                Fleet: <span className="text-gray-300 font-medium">{fleetName}</span>
+              </p>
+            )}
+
+            <div className="flex items-center gap-3">
+              <div className="flex-1 flex items-center justify-center bg-gray-800 border border-gray-700 rounded-xl py-4">
+                <span className="text-3xl font-mono font-bold tracking-[0.3em] text-white">
+                  {fleetJoinCode || '——'}
+                </span>
+              </div>
+              <button
+                onClick={handleCopyJoinCode}
+                disabled={!fleetJoinCode}
+                className="flex flex-col items-center gap-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl transition-colors disabled:opacity-40"
+                title="Copy join code"
+              >
+                {joinCodeCopied
+                  ? <CheckCircle className="w-5 h-5 text-green-400" />
+                  : <Copy className="w-5 h-5 text-gray-400" />}
+                <span className="text-[10px] text-gray-500">{joinCodeCopied ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Drivers open the FTPGo mobile app → tap <span className="text-gray-400">Join Fleet</span> → enter this code to be added to your fleet automatically.
+            </p>
+          </div>
 
           {/* Fuel price card */}
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 space-y-5">
@@ -1422,6 +2015,147 @@ export default function AdminPage() {
                   Check <span className="text-gray-500">iocl.com</span> for the latest Chennai / TN price.
                 </p>
               </div>
+            )}
+          </div>
+
+          {/* ── Danger Zone ─────────────────────────────────────────────────── */}
+          <div className="bg-gray-900 rounded-xl border border-red-800/60 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-red-500/15 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <p className="text-red-400 font-semibold">Danger Zone</p>
+                <p className="text-gray-400 text-xs">
+                  Irreversible actions that permanently destroy data.
+                </p>
+              </div>
+            </div>
+
+            <div className="border border-red-900/50 rounded-xl p-4 space-y-3 bg-red-950/20">
+              <p className="text-white font-medium text-sm">Delete Fleet &amp; All Data</p>
+              <p className="text-gray-400 text-xs leading-relaxed">
+                Permanently removes your fleet and every piece of data linked to it:
+              </p>
+              <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li>All vehicles and their sensor history</li>
+                <li>All trips, alerts, and cost predictions</li>
+                <li>All driver accounts and their credentials</li>
+                <li>Subscription, invite codes, and audit logs</li>
+                <li>OBD device health records and thresholds</li>
+              </ul>
+              <p className="text-xs text-red-400 font-medium pt-1">
+                This action cannot be undone. Your manager account will be signed out immediately.
+              </p>
+              <button
+                onClick={openDeleteModal}
+                className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Fleet and All Data…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Fleet Confirmation Modal ────────────────────────────────────── */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-red-800/70 rounded-2xl w-full max-w-md p-6 space-y-5">
+
+            {/* Header */}
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-red-500/15 rounded-xl">
+                <AlertTriangle className="w-6 h-6 text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-white font-bold text-lg">Delete Fleet</h2>
+                <p className="text-gray-400 text-xs">This is permanent and cannot be reversed.</p>
+              </div>
+            </div>
+
+            {/* Loading state while fleet is fetched */}
+            {modalLoading ? (
+              <div className="flex items-center justify-center gap-3 py-6 text-gray-400 text-sm">
+                <Loader className="w-5 h-5 animate-spin" />
+                Looking up your fleet…
+              </div>
+            ) : (
+              <>
+                {/* What will be deleted */}
+                <div className="bg-red-950/30 border border-red-900/50 rounded-xl p-4 space-y-2">
+                  <p className="text-red-300 text-xs font-semibold uppercase tracking-wide">
+                    The following will be permanently deleted:
+                  </p>
+                  <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
+                    <li>
+                      Fleet:{' '}
+                      <span className="text-white font-medium">
+                        {modalFleetName || '—'}
+                      </span>
+                    </li>
+                    <li>All vehicles, sensor data, trips &amp; alerts</li>
+                    <li>All driver accounts and credentials</li>
+                    <li>Subscription, billing history &amp; audit logs</li>
+                  </ul>
+                </div>
+
+                {/* Confirm by typing fleet name — only shown when name resolved */}
+                {modalFleetName && (
+                  <div className="space-y-2">
+                    <label className="text-sm text-gray-300">
+                      Type{' '}
+                      <span className="text-white font-mono font-semibold">
+                        {modalFleetName}
+                      </span>{' '}
+                      to confirm:
+                    </label>
+                    <input
+                      type="text"
+                      value={deleteConfirmName}
+                      onChange={e => { setDeleteConfirmName(e.target.value); setDeleteError(null); }}
+                      placeholder={modalFleetName}
+                      className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-red-500 text-sm"
+                      autoComplete="off"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                {deleteError && (
+                  <div className="flex items-start gap-2 px-3 py-2.5 bg-red-900/20 border border-red-700/40 rounded-lg text-red-400 text-xs">
+                    <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    {deleteError}
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex gap-3 pt-1">
+                  <button
+                    onClick={() => setShowDeleteModal(false)}
+                    disabled={deleting}
+                    className="flex-1 py-2.5 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteFleet}
+                    disabled={
+                      deleting ||
+                      !modalFleetId ||
+                      (modalFleetName
+                        ? deleteConfirmName.trim() !== modalFleetName.trim()
+                        : true)
+                    }
+                    className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    {deleting
+                      ? <><Loader className="w-4 h-4 animate-spin" /> Deleting…</>
+                      : <><Trash2 className="w-4 h-4" /> Permanently Delete</>}
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

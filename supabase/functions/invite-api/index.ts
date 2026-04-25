@@ -28,8 +28,10 @@ const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
@@ -283,15 +285,19 @@ serve(async (req) => {
     const phone = invite.driver_phone as string;
     const email = invite.driver_email as string | null;
 
-    // Try to find an existing user by phone or email
+    // Try to find an existing auth user by phone or email
     let existingUserId: string | null = null;
 
-    if (email) {
+    if (email || phone) {
       const { data: listData } = await adminClient.auth.admin.listUsers();
       const match = listData?.users?.find((u: { email?: string; phone?: string; id: string }) =>
-        u.email === email || u.phone === phone
+        (email && u.email === email) || u.phone === phone
       );
-      if (match) existingUserId = match.id;
+      // Only reuse if the user actually exists in auth (guards against orphaned driver_accounts)
+      if (match?.id) {
+        const { data: verifiedUser } = await adminClient.auth.admin.getUserById(match.id);
+        existingUserId = verifiedUser?.user?.id ?? null;
+      }
     }
 
     if (!existingUserId) {
@@ -299,7 +305,7 @@ serve(async (req) => {
       const { data: newUser, error: createErr } = await adminClient.auth.admin.createUser({
         phone,
         email: email ?? undefined,
-        password: `VS_${invite.invite_token.substring(0, 12)}`, // temporary password from token
+        password: generateToken(), // crypto-random temporary password
         email_confirm: true,
         phone_confirm: true,
         user_metadata: { name: invite.vehicle_name, fleet_id: invite.fleet_id },

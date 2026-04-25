@@ -84,7 +84,7 @@ const severityDotClass: Record<Alert['severity'], string> = {
 export default function AnomalyFeedPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [vehicleFilter, setVehicleFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<'all' | Alert['severity']>('all');
@@ -94,6 +94,7 @@ export default function AnomalyFeedPage() {
   }, []);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [alertsRes, vehiclesRes] = await Promise.all([
         supabase
@@ -109,6 +110,7 @@ export default function AnomalyFeedPage() {
     } catch (error) {
       console.error('Error loading anomaly feed:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };

@@ -1,324 +1,365 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:vehicle_telemetry/config/supabase_config.dart';
 import 'package:vehicle_telemetry/models/sensor_data.dart';
 import 'package:vehicle_telemetry/models/threshold.dart';
-import 'package:vehicle_telemetry/services/driver_behaviour_recorder.dart';
-import 'package:vehicle_telemetry/services/location_service.dart';
-import 'package:vehicle_telemetry/services/mock_gps_detector.dart';
 import 'package:vehicle_telemetry/services/obd_service.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
 import 'package:vehicle_telemetry/services/notification_service.dart';
-import 'package:vehicle_telemetry/services/trip_recorder.dart';
+import 'package:vehicle_telemetry/services/location_service.dart';
+import 'package:vehicle_telemetry/services/heartbeat_service.dart';
+import 'package:vehicle_telemetry/services/fuel_monitor_service.dart';
+import 'package:vehicle_telemetry/services/movement_anomaly_service.dart';
+
+// Driver-behaviour thresholds — update here if calibration changes.
+const double _kHarshBrakingDeltaKmh    = 15.0;
+const double _kHarshAccelDeltaKmh      = 20.0;
+const double _kExcessiveRpmThreshold   = 4000.0;
+const double _kExcessiveSpeedKmh       = 120.0;
 
 class SensorProvider extends ChangeNotifier {
-  final OBDService _obdService = OBDService();
-  final SupabaseService _supabaseService = SupabaseService();
-  final NotificationService _notificationService = NotificationService();
-  final LocationService _locationService = LocationService();
+  final OBDService               _obdService              = OBDService();
+  final SupabaseService          _supabaseService         = SupabaseService();
+  final NotificationService      _notificationService     = NotificationService();
+  final LocationService          _locationService         = LocationService();
+  final HeartbeatService         _heartbeatService        = HeartbeatService();
+  final MovementAnomalyService   _movementAnomalyService  = MovementAnomalyService();
+  final FuelMonitorService       _fuelMonitorService      = FuelMonitorService();
 
+  // ── Sensor state ────────────────────────────────────────────────────────
   final Map<SensorType, SensorData> _latestSensorData = {};
-  StreamSubscription? _sensorSubscription;
-  StreamSubscription? _locationSubscription;
+  StreamSubscription? _batchSubscription;
   String? _currentVehicleId;
   String? _currentVehicleName;
-  String? _currentDriverAccountId;   // MOB-2: for data attribution
   List<Threshold> _thresholds = [];
 
-  // ── Trip & behaviour recorders ────────────────────────────────────────────
-  TripRecorder? _tripRecorder;
-  DriverBehaviourRecorder? _behaviourRecorder;
+  // ── Realtime threshold sync ─────────────────────────────────────────────
+  RealtimeChannel? _thresholdChannel;
 
-  // ── Watchdog ──────────────────────────────────────────────────────────────
-  Timer? _watchdogTimer;
-  DateTime? _lastDataReceivedAt;
-  static const Duration _offlineThreshold = Duration(minutes: 2);
-  static const Duration _excessiveIdleThreshold = Duration(minutes: 15);
-  bool _offlineEventFired = false;
+  // ── Driver behavior tracking ────────────────────────────────────────────
+  // Per-session event counters and rolling engine-load average.
+  double?  _prevSpeed;
+  int      _harshBrakingCount     = 0;
+  int      _harshAccelCount       = 0;
+  int      _excessiveRpmCount     = 0;
+  int      _excessiveSpeedCount   = 0;
+  double   _engineLoadSum         = 0;
+  int      _engineLoadReadings    = 0;
+  String?  _behaviorSessionId;
+  Timer?   _behaviorSyncTimer;
+  DateTime? _tripStart;
 
+  // ── Public getters ──────────────────────────────────────────────────────
   Map<SensorType, SensorData> get latestSensorData => _latestSensorData;
-  bool get isMonitoring => _sensorSubscription != null;
+  bool get isMonitoring => _batchSubscription != null;
 
-  void startMonitoring(
-    String vehicleId,
-    String vehicleName,
-    List<Threshold> thresholds, {
-    String? driverAccountId,   // MOB-2: optional driver attribution
-  }) {
-    if (_sensorSubscription != null) return;
+  // ══════════════════════════════════════════════════════════════════════════
+  // startMonitoring
+  // ══════════════════════════════════════════════════════════════════════════
 
-    _currentVehicleId        = vehicleId;
-    _currentVehicleName      = vehicleName;
-    _currentDriverAccountId  = driverAccountId;
-    _thresholds              = thresholds;
-    _lastDataReceivedAt = DateTime.now();
-    _offlineEventFired  = false;
+  /// Start listening to OBD sensor data.
+  ///
+  /// [vehicleId] / [vehicleName] / [thresholds] are optional.  Sensor readings
+  /// are always displayed on the dashboard; Supabase upload, threshold alerts,
+  /// driver-behavior detection, and Realtime threshold sync are only active
+  /// when a vehicle is provided.
+  Future<void> startMonitoring([
+    String?         vehicleId,
+    String?         vehicleName,
+    List<Threshold> thresholds = const [],
+  ]) async {
+    if (_batchSubscription != null) return;
 
-    // Restore the threshold-alerts toggle preference on every session start
-    SharedPreferences.getInstance().then((prefs) {
-      _notificationService.alertsEnabled =
-          prefs.getBool('threshold_alerts_enabled') ?? true;
-    });
+    _currentVehicleId   = vehicleId;
+    _currentVehicleName = vehicleName;
+    _thresholds         = List.of(thresholds);
 
-    // ── Trip & behaviour recorder setup ──────────────────────────────────────
-    _behaviourRecorder = DriverBehaviourRecorder(
-      vehicleId:       vehicleId,
-      supabaseService: _supabaseService,
-      driverAccountId: driverAccountId,
-    );
+    // ── Subscribe to Realtime threshold changes ───────────────────────────
+    if (vehicleId != null) {
+      _subscribeToThresholds(vehicleId);
+    }
 
-    _tripRecorder = TripRecorder(
-      vehicleId:       vehicleId,
-      supabaseService: _supabaseService,
-      driverAccountId: driverAccountId,
-      onTripSaved: (tripId, tripStart, tripEnd) {
-        // Forward trip context to behaviour recorder to persist one linked row
-        _behaviourRecorder?.finalizeTripBehavior(
-          tripId:    tripId,
-          tripStart: tripStart,
-          tripEnd:   tripEnd,
-        );
-      },
-    );
+    // ── Subscribe to OBD sensor batch stream ─────────────────────────────
+    _batchSubscription = _obdService.sensorBatchStream.listen((batch) {
+      batch.forEach((type, sensorData) {
+        _latestSensorData[type] = sensorData;
+        _checkThresholds(sensorData);
+      });
 
-    // OBD sensor stream
-    _sensorSubscription = _obdService.sensorDataStream.listen((sensorData) {
-      _lastDataReceivedAt = DateTime.now();
-      _offlineEventFired  = false; // reset on data received
-      _latestSensorData[sensorData.type] = sensorData;
-      _checkThresholds(sensorData);
+      _detectDriverEvents(batch);   // driver behavior analysis
       notifyListeners();
-      _supabaseService.saveSensorData(
-        vehicleId,
-        sensorData,
-        driverAccountId: _currentDriverAccountId,  // MOB-2
-      );
 
-      // ── Feed real OBD readings to trip & behaviour recorders ────────────
-      final ts = sensorData.timestamp;
-      switch (sensorData.type) {
-        case SensorType.speed:
-          _tripRecorder?.onSpeedReading(sensorData.value, ts);
-          _behaviourRecorder?.onSpeedReading(sensorData.value, ts);
-        case SensorType.rpm:
-          _behaviourRecorder?.onRpmReading(sensorData.value, ts);
-        case SensorType.engineLoad:
-          _behaviourRecorder?.onEngineLoadReading(sensorData.value);
-        default:
-          break;
+      if (_currentVehicleId != null) {
+        _supabaseService.saveSensorBatch(_currentVehicleId!, batch);
+
+        // Keep LocationService informed of ignition state for vehicle_locations.
+        _locationService.updateIgnitionStatus(batch[SensorType.rpm]?.value);
+
+        // Real-time movement anomaly detection (GPS mismatch + excessive idle).
+        _movementAnomalyService.update(
+          vehicleId:   _currentVehicleId!,
+          obdRpm:      batch[SensorType.rpm]?.value,
+          obdSpeedKmh: batch[SensorType.speed]?.value,
+          gpsPosition: _locationService.lastPosition,
+        );
+
+        // Real-time fuel monitoring (refuel + theft detection).
+        _fuelMonitorService.update(
+          vehicleId:   _currentVehicleId!,
+          fuelPct:     batch[SensorType.fuelLevel]?.value,
+          obdSpeedKmh: batch[SensorType.speed]?.value,
+        );
       }
     });
 
     _obdService.startPolling();
 
-    // GPS continuous stream (background-safe via foreground service)
-    _locationService.start();
-    _locationSubscription = _locationService.locationStream.listen(
-      (reading) => _onLocationReading(reading, vehicleId),
-    );
+    // ── Start driver behavior session ─────────────────────────────────────
+    if (vehicleId != null) {
+      _tripStart = DateTime.now();
+      _resetBehaviorCounters();
+      _behaviorSessionId = await _supabaseService
+          .createDriverBehaviorSession(vehicleId, _tripStart!);
 
-    // Watchdog: check every 30 seconds if data has stopped
-    _watchdogTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _checkWatchdog(vehicleId);
-    });
+      // Periodic DB sync every 60 s so data is never stale by more than 1 min.
+      _behaviorSyncTimer = Timer.periodic(
+        const Duration(seconds: 60),
+        (_) => _syncDriverBehavior(),
+      );
+
+      // Start GPS trip tracking in parallel — failure is non-fatal.
+      _locationService.startTrip(vehicleId);
+
+      // Start 10-second heartbeat so backend can detect unexpected silence.
+      _heartbeatService.start(vehicleId);
+
+      // Start real-time movement anomaly detection.
+      _movementAnomalyService.start(vehicleId);
+
+      // Start real-time fuel monitoring.
+      _fuelMonitorService.start(vehicleId);
+    }
   }
 
-  Future<void> stopMonitoring() async {
-    // Close any open trip before tearing down
-    await _tripRecorder?.finish();
-    _tripRecorder = null;
-    _behaviourRecorder = null;
+  // ══════════════════════════════════════════════════════════════════════════
+  // setVehicle — switch vehicle without stopping OBD polling
+  // ══════════════════════════════════════════════════════════════════════════
 
-    _sensorSubscription?.cancel();
-    _sensorSubscription = null;
-    _locationSubscription?.cancel();
-    _locationSubscription = null;
-    _watchdogTimer?.cancel();
-    _watchdogTimer = null;
+  void setVehicle(
+    String         vehicleId,
+    String         vehicleName,
+    List<Threshold> thresholds,
+  ) {
+    final wasMonitoring = _batchSubscription != null;
+    if (wasMonitoring) {
+      _batchSubscription?.cancel();
+      _batchSubscription = null;
+    }
+    unawaited(startMonitoring(vehicleId, vehicleName, thresholds));
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // stopMonitoring
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void stopMonitoring() {
+    // Final driver-behavior sync and trip close before clearing state.
+    _syncDriverBehavior();
+    if (_behaviorSessionId != null) {
+      _supabaseService.closeDriverBehaviorSession(_behaviorSessionId!);
+    }
+
+    // Report normal disconnect for anti-tamper tracking.
+    if (_currentVehicleId != null) {
+      final lastRpm = _latestSensorData[SensorType.rpm]?.value;
+      _supabaseService.reportNormalDisconnect(_currentVehicleId!, lastRpm: lastRpm);
+    }
+
+    // End GPS trip tracking.
+    _locationService.endTrip();
+
+    // Stop heartbeat loop.
+    _heartbeatService.stop();
+
+    // Stop movement anomaly detection (resolves any open excessive_idle event).
+    _movementAnomalyService.stop();
+
+    // Stop fuel monitoring.
+    _fuelMonitorService.stop();
+
+    _behaviorSyncTimer?.cancel();
+    _behaviorSyncTimer   = null;
+    _behaviorSessionId   = null;
+    _resetBehaviorCounters();
+    _prevSpeed = null;
+
+    // Cancel Realtime subscription.
+    _thresholdChannel?.unsubscribe();
+    _thresholdChannel = null;
+
+    _batchSubscription?.cancel();
+    _batchSubscription = null;
     _obdService.stopPolling();
-    _locationService.stop();
     _latestSensorData.clear();
     notifyListeners();
   }
 
-  // ── GPS heartbeat handler ─────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // Realtime threshold sync
+  // ══════════════════════════════════════════════════════════════════════════
 
-  Future<void> _onLocationReading(LocationReading reading, String vehicleId) async {
-    // Feed GPS into trip recorder for Haversine distance accumulation
-    _tripRecorder?.onLocationReading(reading.latitude, reading.longitude);
-
-    // Determine ignition status from last known RPM or speed
-    final rpmData   = _latestSensorData[SensorType.rpm];
-    final speedData = _latestSensorData[SensorType.speed];
-    final ignition  = (rpmData != null && rpmData.value > 0) ||
-                      (speedData != null && speedData.value > 0);
-
-    // Detect mock GPS
-    bool isMock = reading.isMockGps;
-    if (!isMock) {
-      isMock = await MockGpsDetector.isMockGps();
-    }
-
-    // Save to vehicle_logs
-    await _supabaseService.saveVehicleLog(
-      vehicleId:        vehicleId,
-      latitude:         reading.latitude,
-      longitude:        reading.longitude,
-      accuracy:         reading.accuracy,
-      altitude:         reading.altitude,
-      speed:            reading.speedKmh,
-      ignitionStatus:   ignition,
-      isMockGps:        isMock,
-      driverAccountId:  _currentDriverAccountId,  // MOB-2
-    );
-
-    // Fire mock GPS event if detected
-    if (isMock) {
-      await _fireVehicleEvent(
-        vehicleId: vehicleId,
-        eventType: 'mock_gps_detected',
-        title:     'Mock GPS Detected',
-        description: 'Device is using a fake GPS provider. Location data may be unreliable.',
-        severity:  'critical',
-        metadata:  { 'latitude': reading.latitude, 'longitude': reading.longitude },
-      );
-      _notificationService.showConnectionAlert(
-        'Mock GPS Detected',
-        'Warning: Fake GPS provider detected on this device.',
-      );
-    }
-  }
-
-  // ── Watchdog ──────────────────────────────────────────────────────────────
-
-  Future<void> _checkWatchdog(String vehicleId) async {
-    if (_lastDataReceivedAt == null) return;
-
-    final elapsed = DateTime.now().difference(_lastDataReceivedAt!);
-
-    if (elapsed >= _offlineThreshold && !_offlineEventFired) {
-      _offlineEventFired = true;
-
-      // Check ignition state from last known RPM
-      final rpmData = _latestSensorData[SensorType.rpm];
-      final ignitionWasOn = rpmData != null && rpmData.value > 0;
-
-      if (ignitionWasOn) {
-        // Ignition ON but no data → possible tamper
-        await _fireVehicleEvent(
-          vehicleId:   vehicleId,
-          eventType:   'device_tamper',
-          title:       'Possible Device Tampering',
-          description: 'Ignition was ON but device stopped transmitting data '
-              '${elapsed.inMinutes} minutes ago.',
-          severity:    'warning',
-          metadata:    {
-            'elapsed_minutes': elapsed.inMinutes,
-            'last_rpm':        rpmData?.value,
+  void _subscribeToThresholds(String vehicleId) {
+    _thresholdChannel = SupabaseConfig.client
+        .channel('thresholds-$vehicleId')
+        .onPostgresChanges(
+          event:  PostgresChangeEvent.all,
+          schema: 'public',
+          table:  'thresholds',
+          filter: PostgresChangeFilter(
+            type:   PostgresChangeFilterType.eq,
+            column: 'vehicle_id',
+            value:  vehicleId,
+          ),
+          callback: (PostgresChangePayload payload) {
+            // Reload from DB on any INSERT / UPDATE / DELETE so the mobile app
+            // picks up threshold changes made by the fleet manager on the web
+            // dashboard without requiring the driver to reconnect.
+            _supabaseService.getThresholds(vehicleId).then((updated) {
+              _thresholds = updated;
+              debugPrint(
+                'SensorProvider: thresholds reloaded via Realtime — '
+                '${_thresholds.length} rules active',
+              );
+            }).catchError((e) {
+              debugPrint('SensorProvider: threshold reload failed — $e (retaining previous thresholds)');
+            });
           },
-        );
-        _notificationService.showConnectionAlert(
-          'Possible Tampering',
-          'Ignition ON but no sensor data received for ${elapsed.inMinutes} minutes.',
-        );
-      } else {
-        // No ignition data → generic offline
-        await _fireVehicleEvent(
-          vehicleId:   vehicleId,
-          eventType:   'device_offline',
-          title:       'Device Offline',
-          description: 'No sensor data received for ${elapsed.inMinutes} minutes.',
-          severity:    'critical',
-          metadata:    { 'elapsed_minutes': elapsed.inMinutes },
-        );
-        _notificationService.showConnectionAlert(
-          'Device Offline',
-          'No OBD data received for ${elapsed.inMinutes} minutes.',
-        );
-      }
-    }
-
-    // Check excessive idle: ignition ON, speed = 0 for > 15 minutes
-    final speedData = _latestSensorData[SensorType.speed];
-    final rpmData   = _latestSensorData[SensorType.rpm];
-    if (speedData != null &&
-        speedData.value < 1 &&
-        rpmData != null &&
-        rpmData.value > 300) {
-      // Engine running but not moving — check how long
-      final speedTimestamp = speedData.timestamp;
-      final idleDuration   = DateTime.now().difference(speedTimestamp);
-      if (idleDuration >= _excessiveIdleThreshold) {
-        await _fireVehicleEvent(
-          vehicleId:   vehicleId,
-          eventType:   'excessive_idle',
-          title:       'Excessive Idle Detected',
-          description: 'Engine has been idling for ${idleDuration.inMinutes} minutes '
-              'without movement.',
-          severity:    'warning',
-          metadata:    {
-            'idle_minutes': idleDuration.inMinutes,
-            'rpm':          rpmData.value,
-          },
-        );
-      }
-    }
+        )
+        .subscribe();
+    debugPrint('SensorProvider: subscribed to Realtime thresholds for $vehicleId');
   }
 
-  Future<void> _fireVehicleEvent({
-    required String vehicleId,
-    required String eventType,
-    required String title,
-    required String description,
-    String severity = 'warning',
-    Map<String, dynamic> metadata = const {},
-  }) async {
-    final prefs  = await SharedPreferences.getInstance();
-    final fleetId = prefs.getString('fleet_id') ?? '';
-    await _supabaseService.createVehicleEvent(
-      vehicleId:   vehicleId,
-      fleetId:     fleetId,
-      eventType:   eventType,
-      title:       title,
-      description: description,
-      severity:    severity,
-      metadata:    metadata,
-    );
-  }
-
-  // ── Threshold checking ────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // Threshold checking
+  // ══════════════════════════════════════════════════════════════════════════
 
   void _checkThresholds(SensorData sensorData) {
     final threshold = _thresholds.firstWhere(
       (t) => t.sensorType == sensorData.type,
       orElse: () => Threshold(
-        id: '',
-        vehicleId: '',
-        sensorType: sensorData.type,
+        id:           '',
+        vehicleId:    '',
+        sensorType:   sensorData.type,
         alertEnabled: false,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdAt:    DateTime.now(),
+        updatedAt:    DateTime.now(),
       ),
     );
 
     if (threshold.alertEnabled && threshold.isViolated(sensorData.value)) {
-      final updatedSensorData = sensorData.copyWith(isWarning: true);
-      _latestSensorData[sensorData.type] = updatedSensorData;
+      final warned = sensorData.copyWith(isWarning: true);
+      _latestSensorData[sensorData.type] = warned;
 
       _notificationService.showThresholdAlert(
-        updatedSensorData,
+        warned,
         _currentVehicleName ?? 'Vehicle',
       );
 
       if (_currentVehicleId != null) {
         _supabaseService.createAlert(
           _currentVehicleId!,
-          updatedSensorData,
-          '${sensorData.name} exceeded threshold: ${sensorData.value.toStringAsFixed(1)} ${sensorData.unit}',
+          warned,
+          '${sensorData.name} exceeded threshold: '
+          '${sensorData.value.toStringAsFixed(1)} ${sensorData.unit}',
         );
       }
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Driver behavior detection
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Analyse each sensor batch for driving events and update running counters.
+  ///
+  /// Thresholds used for event detection (tuned for typical OBD poll rates):
+  ///   • Harsh braking:      speed drops  > 15 km/h per cycle
+  ///   • Harsh acceleration: speed gains  > 20 km/h per cycle
+  ///   • Excessive RPM:      rpm          > 4 000
+  ///   • Excessive speed:    speed        > 120 km/h
+  void _detectDriverEvents(Map<SensorType, SensorData> batch) {
+    final speed       = batch[SensorType.speed]?.value;
+    final rpm         = batch[SensorType.rpm]?.value;
+    final engineLoad  = batch[SensorType.engineLoad]?.value;
+    bool  eventFired  = false;
+
+    if (speed != null && _prevSpeed != null) {
+      final delta = speed - _prevSpeed!;
+      if (_prevSpeed! - speed > _kHarshBrakingDeltaKmh) {   // harsh braking
+        _harshBrakingCount++;
+        eventFired = true;
+        debugPrint('Driver event: harsh braking (Δ${(speed - _prevSpeed!).abs().toStringAsFixed(1)} km/h)');
+      }
+      if (delta > _kHarshAccelDeltaKmh) {                 // harsh acceleration
+        _harshAccelCount++;
+        eventFired = true;
+        debugPrint('Driver event: harsh acceleration (Δ${delta.toStringAsFixed(1)} km/h)');
+      }
+    }
+
+    if (rpm != null && rpm > _kExcessiveRpmThreshold) {    // excessive RPM
+      _excessiveRpmCount++;
+      eventFired = true;
+    }
+
+    if (speed != null && speed > _kExcessiveSpeedKmh) { // excessive speed
+      _excessiveSpeedCount++;
+      eventFired = true;
+    }
+
+    if (engineLoad != null) {
+      _engineLoadSum += engineLoad;
+      _engineLoadReadings++;
+    }
+
+    _prevSpeed = speed;
+
+    // Flush to DB immediately on event; periodic timer handles the rest.
+    if (eventFired && _behaviorSessionId != null) {
+      _syncDriverBehavior();
+    }
+  }
+
+  /// Push the latest counters to the driver_behavior row in Supabase.
+  Future<void> _syncDriverBehavior() async {
+    if (_behaviorSessionId == null || _currentVehicleId == null) return;
+    final avgLoad = _engineLoadReadings > 0
+        ? _engineLoadSum / _engineLoadReadings
+        : 0.0;
+    await _supabaseService.updateDriverBehavior(
+      sessionId:          _behaviorSessionId!,
+      harshBrakingCount:  _harshBrakingCount,
+      harshAccelCount:    _harshAccelCount,
+      excessiveRpmCount:  _excessiveRpmCount,
+      excessiveSpeedCount: _excessiveSpeedCount,
+      avgEngineLoad:      avgLoad,
+    );
+  }
+
+  void _resetBehaviorCounters() {
+    _harshBrakingCount   = 0;
+    _harshAccelCount     = 0;
+    _excessiveRpmCount   = 0;
+    _excessiveSpeedCount = 0;
+    _engineLoadSum       = 0;
+    _engineLoadReadings  = 0;
+    _tripStart           = null;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Helpers
+  // ══════════════════════════════════════════════════════════════════════════
 
   SensorData? getSensorData(SensorType type) => _latestSensorData[type];
 

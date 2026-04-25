@@ -1,7 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
 };
@@ -50,7 +52,14 @@ Deno.serve(async (req: Request) => {
 
         if (limitErr) throw limitErr;
 
-        const check = limitData as { allowed: boolean; reason?: string; plan?: string };
+        const check = limitData as { allowed?: boolean; reason?: string; plan?: string } | null;
+        if (!check || typeof check.allowed !== 'boolean') {
+          // RPC returned unexpected shape — fail safe by blocking creation
+          return new Response(
+            JSON.stringify({ error: 'Unable to verify vehicle limit; please try again' }),
+            { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
         if (!check.allowed) {
           return new Response(
             JSON.stringify({ error: check.reason ?? 'Vehicle limit reached', plan: check.plan }),

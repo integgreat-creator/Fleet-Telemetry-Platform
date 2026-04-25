@@ -22,13 +22,26 @@ class OBDService {
   OBDService._internal();
 
   final BluetoothService _bluetoothService = BluetoothService();
-  final _sensorDataController = StreamController<SensorData>.broadcast();
+  final _sensorDataController       = StreamController<SensorData>.broadcast();
+  final _connectionStateController  = StreamController<String>.broadcast();
+  final _vinController              = StreamController<String?>.broadcast();
+  final _batchController            = StreamController<Map<SensorType, SensorData>>.broadcast();
   Timer? _pollingTimer;
 
   final Map<String, String> _responseBuffer = {};
   StreamSubscription? _dataSubscription;
 
-  Stream<SensorData> get sensorDataStream => _sensorDataController.stream;
+  Stream<SensorData>               get sensorDataStream      => _sensorDataController.stream;
+  Stream<String>                   get connectionStateStream => _connectionStateController.stream;
+  Stream<String?>                  get vinStream             => _vinController.stream;
+  Stream<Map<SensorType, SensorData>> get sensorBatchStream  => _batchController.stream;
+
+  void init() {
+    // Wire individual sensor readings into batch emissions.
+    _sensorDataController.stream.listen((data) {
+      _batchController.add({data.type: data});
+    });
+  }
 
   final List<OBDCommand> _commands = [
 
@@ -807,5 +820,8 @@ class OBDService {
   void dispose() {
     stopPolling();
     _sensorDataController.close();
+    _connectionStateController.close();
+    _vinController.close();
+    _batchController.close();
   }
 }

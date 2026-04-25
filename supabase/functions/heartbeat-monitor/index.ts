@@ -15,8 +15,10 @@ const SUPABASE_URL       = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OFFLINE_THRESHOLD  = 120; // seconds
 
+const ALLOWED_ORIGIN = Deno.env.get("ALLOWED_ORIGIN") ?? "*";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  ALLOWED_ORIGIN,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
@@ -191,7 +193,7 @@ serve(async (req) => {
         log_count: count,
         deletion_date: new Date(Date.now() + 7 * 24 * 3600 * 1000).toLocaleDateString("en-IN"),
       },
-      redirectTo: `${Deno.env.get("SITE_URL") ?? "https://vehiclesense.app"}/admin`,
+      redirectTo: `${Deno.env.get("SITE_URL") ?? "https://ftpgo.app"}/admin`,
     }).catch(() => null);
 
     results.push(`Retention warning email queued for fleet ${fleet.name}`);

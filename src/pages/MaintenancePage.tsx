@@ -349,11 +349,12 @@ export default function MaintenancePage() {
   const [logs,          setLogs]          = useState<MaintenanceLog[]>([]);
   const [vehicles,      setVehicles]      = useState<Vehicle[]>([]);
   const [vehicleLocs,   setVehicleLocs]   = useState<Record<string, { lat: number; lng: number }>>({});
-  const [loading,       setLoading]       = useState(true);
+  const [loading,       setLoading]       = useState(false);
   const [refreshing,    setRefreshing]    = useState(false);
   const [modalPred,     setModalPred]     = useState<MaintenancePrediction | null>(null);
 
   const loadData = useCallback(async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const [predsRes, vehiclesRes, logsRes] = await Promise.all([
         supabase
@@ -398,6 +399,7 @@ export default function MaintenancePage() {
     } catch (err) {
       console.error('Maintenance loadData error:', err);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, []);

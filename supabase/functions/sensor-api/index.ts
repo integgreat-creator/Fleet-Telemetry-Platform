@@ -1,7 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey, X-API-Key',
 };
@@ -91,6 +93,19 @@ Deno.serve(async (req: Request) => {
     if (req.method === 'POST') {
       const reading: SensorReading = await req.json();
 
+      // Validate required fields and types
+      if (
+        !reading.vehicle_id || typeof reading.vehicle_id !== 'string' ||
+        !reading.sensor_type || typeof reading.sensor_type !== 'string' ||
+        typeof reading.value !== 'number' || !isFinite(reading.value) ||
+        !reading.unit || typeof reading.unit !== 'string'
+      ) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid reading: vehicle_id, sensor_type (string), value (finite number), and unit are required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+
       // When authenticated via API key, verify the vehicle belongs to the key's fleet
       if (apiKeyFleetId) {
         const { data: vehicle } = await supabase
@@ -154,13 +169,37 @@ Deno.serve(async (req: Request) => {
       }
 
       // ── Standard Threshold Check ────────────────────────────────────────
-      const { data: thresholds } = await supabase
+      // Look up vehicle's fleet so fleet-level thresholds are also matched.
+      const { data: vehicleRow } = await supabase
+        .from('vehicles')
+        .select('fleet_id')
+        .eq('id', reading.vehicle_id)
+        .maybeSingle();
+
+      const fleetId = (vehicleRow as { fleet_id?: string } | null)?.fleet_id ?? null;
+
+      // Single query: vehicle-specific threshold OR fleet-wide fallback.
+      // Vehicle-specific is preferred and resolved in JS below.
+      let thresholdQuery = supabase
         .from('thresholds')
         .select('*')
-        .eq('vehicle_id', reading.vehicle_id)
         .eq('sensor_type', reading.sensor_type)
-        .eq('alert_enabled', true)
-        .maybeSingle();
+        .eq('alert_enabled', true);
+
+      if (fleetId) {
+        thresholdQuery = thresholdQuery.or(
+          `vehicle_id.eq.${reading.vehicle_id},and(fleet_id.eq.${fleetId},vehicle_id.is.null)`,
+        );
+      } else {
+        thresholdQuery = thresholdQuery.eq('vehicle_id', reading.vehicle_id);
+      }
+
+      const { data: thresholdRows } = await thresholdQuery;
+
+      // Vehicle-specific threshold wins over fleet-wide default.
+      const thresholds = thresholdRows?.find(
+        (t: { vehicle_id: string | null }) => t.vehicle_id === reading.vehicle_id,
+      ) ?? thresholdRows?.[0] ?? null;
 
       if (thresholds) {
         const { min_value, max_value, id: threshold_id } = thresholds;

@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:vehicle_telemetry/models/vehicle.dart';
 import 'package:vehicle_telemetry/models/threshold.dart';
 import 'package:vehicle_telemetry/services/supabase_service.dart';
@@ -10,42 +9,34 @@ class VehicleProvider extends ChangeNotifier {
 
   List<Vehicle> _vehicles = [];
   Vehicle? _selectedVehicle;
-  Map<String, List<Threshold>> _thresholds = {};
+  final Map<String, List<Threshold>> _thresholds = {};
   bool _isLoading = false;
-
-  /// Supabase Realtime channel for live threshold updates on the selected vehicle.
-  RealtimeChannel? _thresholdChannel;
+  String? _errorMessage;
 
   List<Vehicle> get vehicles => _vehicles;
   Vehicle? get selectedVehicle => _selectedVehicle;
   List<Threshold> get selectedVehicleThresholds =>
       _thresholds[_selectedVehicle?.id] ?? [];
   bool get isLoading => _isLoading;
+  String? get errorMessage => _errorMessage;
+
+  void clearError() {
+    _errorMessage = null;
+    notifyListeners();
+  }
 
   Future<void> loadVehicles() async {
     _isLoading = true;
     notifyListeners();
 
-    try {
-      // N+1 FIX: single joined query fetches vehicles + all their thresholds
-      final vehiclesWithThresholds =
-          await _supabaseService.getVehiclesWithThresholds();
+    _vehicles = await _supabaseService.getVehicles();
 
-      _vehicles = vehiclesWithThresholds.keys.toList();
-      // Cache thresholds for every vehicle in one shot
-      for (final entry in vehiclesWithThresholds.entries) {
-        _thresholds[entry.key.id] = entry.value;
-      }
-
-      if (_vehicles.isNotEmpty && _selectedVehicle == null) {
-        await _loadSelectedVehicle();
-      }
-    } catch (e) {
-      debugPrint('loadVehicles error: $e');
-    } finally {
-      _isLoading = false;
-      notifyListeners();
+    if (_vehicles.isNotEmpty && _selectedVehicle == null) {
+      await _loadSelectedVehicle();
     }
+
+    _isLoading = false;
+    notifyListeners();
   }
 
   Future<void> _loadSelectedVehicle() async {
@@ -61,14 +52,8 @@ class VehicleProvider extends ChangeNotifier {
       _selectedVehicle = _vehicles.first;
     }
 
-    // Thresholds already loaded by loadVehicles() — no extra query needed
-  }
-
-  /// Selects a vehicle by its ID. Used after invite acceptance and driver login.
-  Future<void> selectVehicleById(String vehicleId) async {
-    final idx = _vehicles.indexWhere((v) => v.id == vehicleId);
-    if (idx != -1) {
-      await selectVehicle(_vehicles[idx]);
+    if (_selectedVehicle != null) {
+      await loadThresholds(_selectedVehicle!.id);
     }
   }
 
@@ -79,100 +64,80 @@ class VehicleProvider extends ChangeNotifier {
     await prefs.setString('selected_vehicle_id', vehicle.id);
 
     await loadThresholds(vehicle.id);
-
-    // Start Realtime subscription so threshold changes on the web dashboard
-    // are pushed to the mobile app automatically (within ~1 second).
-    _subscribeToThresholdUpdates(vehicle.id);
-
     notifyListeners();
   }
 
-  // ── Realtime threshold subscription ──────────────────────────────────────
-
-  /// Subscribes to INSERT/UPDATE/DELETE events on the thresholds table
-  /// for the given vehicle. Re-fetches thresholds on any change.
-  void _subscribeToThresholdUpdates(String vehicleId) {
-    _unsubscribeThresholds(); // cancel any previous subscription first
-
-    _thresholdChannel = Supabase.instance.client
-        .channel('thresholds:vehicle:$vehicleId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'thresholds',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'vehicle_id',
-            value: vehicleId,
-          ),
-          callback: (_) async {
-            // Re-load thresholds whenever the fleet manager changes them
-            await loadThresholds(vehicleId);
-          },
-        )
-        .subscribe();
-  }
-
-  void _unsubscribeThresholds() {
-    _thresholdChannel?.unsubscribe();
-    _thresholdChannel = null;
-  }
-
-  @override
-  void dispose() {
-    _unsubscribeThresholds();
-    super.dispose();
+  /// Convenience method used after an invite accept — selects the vehicle
+  /// with [vehicleId] if it exists in the already-loaded list.
+  Future<void> selectVehicleById(String vehicleId) async {
+    final match = _vehicles.where((v) => v.id == vehicleId).toList();
+    if (match.isNotEmpty) {
+      await selectVehicle(match.first);
+    }
   }
 
   Future<bool> createVehicle(Vehicle vehicle) async {
-    final created = await _supabaseService.createVehicle(vehicle);
-    if (created != null) {
-      _vehicles.add(created);
-
-      if (_selectedVehicle == null) {
-        await selectVehicle(created);
+    _errorMessage = null;
+    try {
+      final created = await _supabaseService.createVehicle(vehicle);
+      if (created != null) {
+        _vehicles.add(created);
+        if (_selectedVehicle == null) await selectVehicle(created);
+        notifyListeners();
+        return true;
       }
-
+      _errorMessage = 'Failed to create vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Create vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<bool> updateVehicle(Vehicle vehicle) async {
-    final updated = await _supabaseService.updateVehicle(vehicle);
-    if (updated != null) {
-      final index = _vehicles.indexWhere((v) => v.id == vehicle.id);
-      if (index != -1) {
-        _vehicles[index] = updated;
+    _errorMessage = null;
+    try {
+      final updated = await _supabaseService.updateVehicle(vehicle);
+      if (updated != null) {
+        final index = _vehicles.indexWhere((v) => v.id == vehicle.id);
+        if (index != -1) _vehicles[index] = updated;
+        if (_selectedVehicle?.id == vehicle.id) _selectedVehicle = updated;
+        notifyListeners();
+        return true;
       }
-
-      if (_selectedVehicle?.id == vehicle.id) {
-        _selectedVehicle = updated;
-      }
-
+      _errorMessage = 'Failed to update vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Update vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<bool> deleteVehicle(String vehicleId) async {
-    final success = await _supabaseService.deleteVehicle(vehicleId);
-    if (success) {
-      _vehicles.removeWhere((v) => v.id == vehicleId);
-
-      if (_selectedVehicle?.id == vehicleId) {
-        _selectedVehicle = _vehicles.isNotEmpty ? _vehicles.first : null;
-        if (_selectedVehicle != null) {
-          await selectVehicle(_selectedVehicle!);
+    _errorMessage = null;
+    try {
+      final success = await _supabaseService.deleteVehicle(vehicleId);
+      if (success) {
+        _vehicles.removeWhere((v) => v.id == vehicleId);
+        if (_selectedVehicle?.id == vehicleId) {
+          _selectedVehicle = _vehicles.isNotEmpty ? _vehicles.first : null;
+          if (_selectedVehicle != null) await selectVehicle(_selectedVehicle!);
         }
+        notifyListeners();
+        return true;
       }
-
+      _errorMessage = 'Failed to delete vehicle. Please try again.';
       notifyListeners();
-      return true;
+      return false;
+    } catch (e) {
+      _errorMessage = 'Delete vehicle failed: $e';
+      notifyListeners();
+      return false;
     }
-    return false;
   }
 
   Future<void> loadThresholds(String vehicleId) async {
@@ -215,5 +180,19 @@ class VehicleProvider extends ChangeNotifier {
     } catch (e) {
       return null;
     }
+  }
+
+  void clear() {
+    _vehicles = [];
+    _selectedVehicle = null;
+    _thresholds.clear();
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    clear();
+    super.dispose();
   }
 }

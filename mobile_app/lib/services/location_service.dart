@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vehicle_telemetry/services/tracking_persistence_service.dart';
 
 /// Result of a single GPS heartbeat reading.
 class LocationReading {
@@ -44,8 +46,37 @@ class LocationService {
   StreamSubscription<Position>? _positionSubscription;
   LocationReading? _lastReading;
 
+  String? _activeVehicleId;
+  bool    _ignitionOn = false;
+
   Stream<LocationReading> get locationStream => _controller.stream;
-  LocationReading? get lastReading => _lastReading;
+  LocationReading? get lastReading  => _lastReading;
+  LocationReading? get lastPosition => _lastReading;
+  bool             get isTracking   => _positionSubscription != null;
+
+  /// Start a trip for [vehicleId]: persists the ID for boot recovery and starts
+  /// continuous GPS streaming.  Returns true on success.
+  Future<bool> startTrip(String vehicleId) async {
+    _activeVehicleId = vehicleId;
+    await TrackingPersistenceService.save(vehicleId);
+    await start();
+    return isTracking;
+  }
+
+  /// End the active trip: clears persistence and stops GPS streaming.
+  Future<void> endTrip() async {
+    _activeVehicleId = null;
+    _ignitionOn      = false;
+    await TrackingPersistenceService.clear();
+    stop();
+  }
+
+  /// Called by SensorProvider on each OBD batch to inform the service whether
+  /// the engine is currently running (rpm > 0 means ignition on).
+  void updateIgnitionStatus(double? rpm) {
+    _ignitionOn = (rpm != null && rpm > 0);
+    debugPrint('LocationService: ignition ${_ignitionOn ? "ON" : "OFF"} (rpm=$rpm)');
+  }
 
   /// Start emitting GPS readings continuously.
   /// Safe to call multiple times — subsequent calls are no-ops if already

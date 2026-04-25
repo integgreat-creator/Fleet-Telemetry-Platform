@@ -45,8 +45,10 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
 };
@@ -187,11 +189,27 @@ Deno.serve(async (req: Request) => {
     if (singleVehicleId) {
       vehicleIds = [singleVehicleId];
     } else {
-      const { data: vehicles } = await db
-        .from('vehicles')
+      // Fetch fleet IDs the user manages using the query builder (no interpolation).
+      const { data: fleets } = await db
+        .from('fleets')
         .select('id')
-        .or(`owner_id.eq.${user.id},fleet_id.in.(${await getFleetIds(db, user.id)})`);
-      vehicleIds = (vehicles || []).map((v: any) => v.id as string);
+        .eq('manager_id', user.id);
+      const fleetIds = (fleets || []).map((f: any) => f.id as string);
+
+      // Two separate queries, each using parameterised filters, then merge + deduplicate.
+      const [{ data: ownedVehicles }, { data: fleetVehicles }] = await Promise.all([
+        db.from('vehicles').select('id').eq('owner_id', user.id),
+        fleetIds.length > 0
+          ? db.from('vehicles').select('id').in('fleet_id', fleetIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      vehicleIds = [
+        ...new Set([
+          ...(ownedVehicles || []).map((v: any) => v.id as string),
+          ...(fleetVehicles || []).map((v: any) => v.id as string),
+        ]),
+      ];
     }
 
     if (vehicleIds.length === 0) {
@@ -227,20 +245,6 @@ Deno.serve(async (req: Request) => {
     });
   }
 });
-
-// ── Fleet helper ──────────────────────────────────────────────────────────────
-
-async function getFleetIds(
-  db: ReturnType<typeof createClient>,
-  userId: string,
-): Promise<string> {
-  const { data } = await db
-    .from('fleets')
-    .select('id')
-    .eq('manager_id', userId);
-  if (!data || data.length === 0) return "''";
-  return (data as any[]).map((f: any) => `'${f.id}'`).join(',');
-}
 
 // ── Maintenance predictions ────────────────────────────────────────────────────
 

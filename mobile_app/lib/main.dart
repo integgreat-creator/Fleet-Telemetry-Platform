@@ -12,6 +12,7 @@ import 'package:vehicle_telemetry/providers/subscription_provider.dart';
 import 'package:vehicle_telemetry/providers/vehicle_provider.dart';
 import 'package:vehicle_telemetry/screens/home_screen.dart';
 import 'package:vehicle_telemetry/screens/invite_accept_screen.dart';
+import 'package:vehicle_telemetry/screens/join_fleet_screen.dart';
 import 'package:vehicle_telemetry/screens/login_screen.dart';
 import 'package:vehicle_telemetry/services/notification_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -214,7 +215,7 @@ class _AppHomeState extends State<_AppHome> {
   Future<void> _initDeepLinks() async {
     _appLinks = AppLinks();
 
-    // Cold-start: app opened directly from the vehiclesense:// link
+    // Cold-start: app opened directly from the ftpgo:// link
     try {
       final initialUri = await _appLinks.getInitialLink();
       if (initialUri != null) _handleDeepLink(initialUri);
@@ -229,10 +230,10 @@ class _AppHomeState extends State<_AppHome> {
     );
   }
 
-  /// Parses `vehiclesense://join?token=<token>` and stores the token
+  /// Parses `ftpgo://join?token=<token>` and stores the token
   /// in [InviteProvider] so the router redirects to [InviteAcceptScreen].
   void _handleDeepLink(Uri uri) {
-    if (uri.scheme == 'vehiclesense' && uri.host == 'join') {
+    if (uri.scheme == 'ftpgo' && uri.host == 'join') {
       final token = uri.queryParameters['token'];
       if (token != null && token.isNotEmpty) {
         context.read<InviteProvider>().setPendingToken(token);
@@ -250,7 +251,12 @@ class _AppHomeState extends State<_AppHome> {
           return InviteAcceptScreen(token: invite.pendingToken!);
         }
 
-        // Authenticated driver / fleet manager → main app
+        // Authenticated but not yet in any fleet → join fleet
+        if (auth.noFleetLinked) {
+          return const JoinFleetScreen();
+        }
+
+        // Authenticated driver in a fleet → main app
         if (auth.isAuthenticated) {
           return const HomeScreen();
         }

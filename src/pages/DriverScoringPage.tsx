@@ -11,13 +11,14 @@ interface BehaviorWithVehicle extends DriverBehavior {
 
 export default function DriverScoringPage() {
   const [behaviors, setBehaviors] = useState<BehaviorWithVehicle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadData();
   }, []);
 
   const loadData = async () => {
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { data } = await supabase
         .from('driver_behavior')
@@ -39,6 +40,7 @@ export default function DriverScoringPage() {
     } catch (error) {
       console.error('Error loading driver behavior:', error);
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };
