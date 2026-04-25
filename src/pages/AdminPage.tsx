@@ -20,7 +20,8 @@ import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
 import { usePlanCatalog, type PlanCatalogEntry } from '../hooks/usePlanCatalog';
 import ApiAccessTab from '../components/ApiAccessTab';
-import PlanCheckoutModal from '../components/PlanCheckoutModal';
+import PlanCheckoutModal, { type BillingDetails } from '../components/PlanCheckoutModal';
+import InvoicesPanel from '../components/InvoicesPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -363,6 +364,11 @@ export default function AdminPage() {
   // entry so the modal has prices, min_vehicles, and (later) Razorpay plan IDs.
   const [checkoutPlan, setCheckoutPlan] = useState<PlanCatalogEntry | null>(null);
 
+  // Customer billing identity (GSTIN + address + state code), fetched once
+  // and refreshed after each save. Pre-fills the GSTIN form in the checkout
+  // modal so returning customers don't retype. Phase 1.3.1.
+  const [billingDetails, setBillingDetails] = useState<BillingDetails | null>(null);
+
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
   // ── Fuel price settings state ────────────────────────────────────────────
@@ -463,6 +469,64 @@ export default function AdminPage() {
     fetchFleet();
   }, []);
 
+  // ── Billing details (1.3.1) — fetched once per fleet, refreshed on save ───
+  // Drives both the GSTIN pre-fill in PlanCheckoutModal and the customer
+  // block on past invoices. Reads via admin-api so the route stays the only
+  // place enforcing the cross-field GSTIN/state-code consistency rule.
+  const loadBillingDetails = useCallback(async () => {
+    if (!fleetId) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) return;
+      const { data, error } = await supabase.functions.invoke(
+        'admin-api?action=billing-details',
+        { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (error) {
+        console.warn('[admin] billing-details load failed', error);
+        return;
+      }
+      setBillingDetails({
+        gstin:          (data?.gstin           as string | null) ?? null,
+        billingAddress: (data?.billing_address as string | null) ?? null,
+        stateCode:      (data?.state_code      as string | null) ?? null,
+      });
+    } catch (e) {
+      console.warn('[admin] billing-details load threw', e);
+    }
+  }, [fleetId]);
+
+  /// Persists customer GSTIN + billing address + state code via admin-api,
+  /// then refreshes local state so future PlanCheckoutModal opens pre-fill.
+  /// Errors are surfaced as thrown Errors — PlanCheckoutModal's handleContinue
+  /// catches them and shows the message inline without losing the user's input.
+  const handleSaveBillingDetails = async (details: BillingDetails) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) throw new Error('Please log in again to save billing details.');
+
+    const { error } = await supabase.functions.invoke('admin-api', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: {
+        action:           'update-billing-details',
+        gstin:            details.gstin,
+        billing_address:  details.billingAddress,
+        state_code:       details.stateCode,
+      },
+    });
+    if (error) {
+      let msg = error.message ?? 'Failed to save billing details';
+      try {
+        const errBody = await (error as unknown as { context?: { json?: () => Promise<{ error?: string }> } })
+          .context?.json?.();
+        msg = errBody?.error ?? msg;
+      } catch { /* fall back to error.message */ }
+      throw new Error(msg);
+    }
+    setBillingDetails(details);
+  };
+
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
 
   const loadSubscription = useCallback(async () => {
@@ -561,6 +625,14 @@ export default function AdminPage() {
     if (activeTab === 'device-health') loadDeviceHealth();
     if (activeTab === 'settings')      loadFuelPrice();
   }, [activeTab, fleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice]);
+
+  // Billing details are needed both inside the checkout modal (GSTIN
+  // pre-fill) and on the soon-to-arrive Invoices section, so we fetch them
+  // once per fleet rather than gating on activeTab.
+  useEffect(() => {
+    if (!fleetId) return;
+    loadBillingDetails();
+  }, [fleetId, loadBillingDetails]);
 
   // ── Delete driver ───────────────────────────────────────────────────────────
 
@@ -986,6 +1058,15 @@ export default function AdminPage() {
                   })}
                 </div>
               </div>
+
+              {/* ── Invoices (Phase 1.3.3) ──────────────────────────────── */}
+              {/* Lives inside the Subscription tab so customers don't need a
+                  whole new top-level tab for the (initially empty) invoice
+                  list. Hidden if the fleet has never been on a paid plan,
+                  to keep the trial-stage UI simple. */}
+              {subscription && subscription.status !== 'trial' && (
+                <InvoicesPanel />
+              )}
             </>
           )}
         </div>
@@ -1346,13 +1427,15 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* ── Plan checkout modal (1.2.2 + 1.2.3) ─────────────────────────────── */}
+      {/* ── Plan checkout modal (1.2.2 + 1.2.3 + 1.3.1) ─────────────────────── */}
       {checkoutPlan && (
         <PlanCheckoutModal
           plan={checkoutPlan}
           vehiclesUsed={vehiclesUsed}
           annualUnlocked={annualUnlockedAt != null}
+          initialBilling={billingDetails ?? undefined}
           onClose={() => setCheckoutPlan(null)}
+          onSaveBilling={handleSaveBillingDetails}
           onContinue={handleCheckoutContinue}
         />
       )}

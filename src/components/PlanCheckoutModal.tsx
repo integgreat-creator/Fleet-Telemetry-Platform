@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { X, Plus, Minus, AlertCircle, ArrowRight, Lock, Loader2 } from 'lucide-react';
+import { X, Plus, Minus, AlertCircle, ArrowRight, Lock, Loader2, Receipt, ChevronDown } from 'lucide-react';
 import {
   monthlyPriceFor,
   annualPriceFor,
@@ -10,6 +10,18 @@ import type { BillingCycle } from '../hooks/useSubscription';
 // Soft cap: fleets larger than this are routed to Enterprise (custom pricing).
 const SOFT_CAP_VEHICLES = 500;
 
+// 15-char GSTIN: 2-digit state + 5 alpha (PAN org) + 4 digits + 1 alpha (PAN check)
+// + 1 digit (entity number) + 1 alpha ('Z' for normal taxpayers) + 1 alphanumeric.
+// Validated client-side for fast feedback; the server validates again with
+// the same rule (admin-api → update-billing-details).
+const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9]{1}[A-Z]{1}[0-9A-Z]{1}$/;
+
+export interface BillingDetails {
+  gstin:           string | null;
+  billingAddress:  string | null;
+  stateCode:       string | null;
+}
+
 interface Props {
   plan:          PlanCatalogEntry;
   /// How many vehicles the fleet currently has registered — the stepper
@@ -18,7 +30,17 @@ interface Props {
   /// True once the fleet has been active on monthly billing for ≥ 3 months
   /// (tracked via `subscriptions.annual_unlocked_at`). Gates the Annual tab.
   annualUnlocked: boolean;
+  /// Existing customer billing identity, fetched by the parent before opening
+  /// the modal (admin-api ?action=billing-details). Pre-fills the GSTIN form
+  /// so returning customers don't retype it. All fields nullable for
+  /// first-time customers and B2C users without a GSTIN.
+  initialBilling?: BillingDetails;
   onClose:       () => void;
+  /// Persists customer billing identity (GSTIN, address, state code) BEFORE
+  /// the Razorpay subscription is created — so the invoice that fires when
+  /// `subscription.charged` lands has the right snapshot. The modal awaits
+  /// this; throwing surfaces inline like onContinue errors.
+  onSaveBilling: (details: BillingDetails) => Promise<void> | void;
   /// Called when the customer commits. Receives the chosen vehicle_count and
   /// billing cycle, and is expected to (a) create a Razorpay subscription
   /// server-side and (b) open the embedded Razorpay Checkout. The modal
@@ -45,7 +67,9 @@ export default function PlanCheckoutModal({
   plan,
   vehiclesUsed,
   annualUnlocked,
+  initialBilling,
   onClose,
+  onSaveBilling,
   onContinue,
 }: Props) {
   // The floor the customer can select:
@@ -56,6 +80,19 @@ export default function PlanCheckoutModal({
   const [vehicleCount, setVehicleCount] = useState<number>(minCount);
   const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
 
+  // ── GSTIN / billing-address capture (Phase 1.3.1) ────────────────────────
+  // Auto-expanded if the customer already has details on file (so they
+  // immediately see what we'll print on their invoice). Closed by default
+  // for first-time customers — the section is opt-in to keep the modal
+  // light for B2C, but heavily encouraged via copy.
+  const [gstin,           setGstin]          = useState<string>(initialBilling?.gstin          ?? '');
+  const [billingAddress,  setBillingAddress] = useState<string>(initialBilling?.billingAddress ?? '');
+  const [stateCode,       setStateCode]      = useState<string>(initialBilling?.stateCode      ?? '');
+  const [gstinExpanded,   setGstinExpanded]  = useState<boolean>(!!initialBilling?.gstin);
+
+  // Format error shown inline under the GSTIN input. Cleared on every keystroke.
+  const [gstinError,      setGstinError]     = useState<string | null>(null);
+
   // Set true while the parent's onContinue promise is in flight (Razorpay
   // subscription create + embedded checkout open). Disables the form so the
   // customer can't double-submit.
@@ -64,11 +101,56 @@ export default function PlanCheckoutModal({
   /// 422 below-minimum). null while the form is healthy.
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Normalize the GSTIN as the user types: uppercase + strip whitespace, then
+  // validate against the canonical regex once they've typed all 15 chars.
+  const handleGstinChange = (raw: string) => {
+    const normalized = raw.replace(/\s+/g, '').toUpperCase().slice(0, 15);
+    setGstin(normalized);
+    setGstinError(null);
+    // Auto-fill state code from the first 2 digits of the GSTIN — saves a
+    // step and guarantees gstin/state_code consistency the server enforces.
+    if (normalized.length >= 2 && /^[0-9]{2}/.test(normalized)) {
+      setStateCode(normalized.slice(0, 2));
+    }
+  };
+
+  // Snapshot of "did the user actually fill in any billing detail?" — used to
+  // decide whether to call onSaveBilling at all (saves a needless round-trip
+  // for B2C customers who skip the section).
+  const hasBillingChanges = useMemo(() => {
+    return (
+      gstin           !== (initialBilling?.gstin          ?? '') ||
+      billingAddress  !== (initialBilling?.billingAddress ?? '') ||
+      stateCode       !== (initialBilling?.stateCode      ?? '')
+    );
+  }, [gstin, billingAddress, stateCode, initialBilling]);
+
   const handleContinue = async () => {
     if (submitting) return;
+
+    // Validate GSTIN format up-front (skip if unset — GSTIN is optional).
+    const trimmedGstin = gstin.trim();
+    if (trimmedGstin && !GSTIN_PATTERN.test(trimmedGstin)) {
+      setGstinExpanded(true);
+      setGstinError('GSTIN must be 15 characters (e.g. 33ABCDE1234F1Z5).');
+      return;
+    }
+
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Persist billing details first — so the invoice generated when
+      // Razorpay charges has the correct customer snapshot. If save fails,
+      // we don't proceed to checkout: the customer should know their tax
+      // invoice would have been wrong before paying.
+      if (hasBillingChanges) {
+        await onSaveBilling({
+          gstin:          trimmedGstin || null,
+          billingAddress: billingAddress.trim() || null,
+          stateCode:      stateCode.trim()      || null,
+        });
+      }
+
       await onContinue(vehicleCount, billingCycle);
       // Success — close the modal so the parent's payment overlay (Razorpay)
       // owns the screen. Don't clear `submitting` first; the unmount is
@@ -246,6 +328,99 @@ export default function PlanCheckoutModal({
               <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
                 Annual billing unlocks after your fleet has been active on monthly billing for 3 months.
               </p>
+            )}
+          </div>
+
+          {/* ── GSTIN / billing-address capture (1.3.1) ───────────────── */}
+          {/* Collapsible. Auto-expanded if the customer already has details
+              on file. Optional — B2C customers who skip this still get a
+              valid (non-tax) invoice. State code is auto-filled from the
+              first 2 digits of the GSTIN. */}
+          <div className="border border-gray-800 rounded-xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setGstinExpanded(e => !e)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-gray-800/40 hover:bg-gray-800/70 transition-colors"
+            >
+              <div className="flex items-center gap-2.5">
+                <Receipt size={15} className="text-gray-400" />
+                <span className="text-sm font-medium text-gray-200">
+                  {gstin ? 'GST tax invoice details' : 'Add GSTIN for tax invoice'}
+                </span>
+                {!gstin && (
+                  <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                    Optional
+                  </span>
+                )}
+                {gstin && GSTIN_PATTERN.test(gstin) && (
+                  <span className="text-[10px] uppercase tracking-wider text-green-400 font-semibold">
+                    Saved
+                  </span>
+                )}
+              </div>
+              <ChevronDown
+                size={16}
+                className={`text-gray-400 transition-transform ${gstinExpanded ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {gstinExpanded && (
+              <div className="p-4 space-y-3 bg-gray-900/40">
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  Adding your GSTIN lets you claim Input Tax Credit on this subscription.
+                  We'll print these details on every invoice — leave blank if you're not GST-registered.
+                </p>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    GSTIN <span className="text-gray-600">(15 characters)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={gstin}
+                    onChange={e => handleGstinChange(e.target.value)}
+                    placeholder="33ABCDE1234F1Z5"
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={`w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm font-mono tracking-wider text-white focus:outline-none focus:ring-2 ${
+                      gstinError
+                        ? 'border-red-700 focus:ring-red-500/40'
+                        : 'border-gray-700 focus:ring-blue-500/40 focus:border-blue-500'
+                    }`}
+                  />
+                  {gstinError && (
+                    <p className="mt-1 text-[11px] text-red-400">{gstinError}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    Billing address
+                  </label>
+                  <textarea
+                    value={billingAddress}
+                    onChange={e => setBillingAddress(e.target.value)}
+                    placeholder="Street, city, state, PIN"
+                    rows={2}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    State code <span className="text-gray-600">(auto-filled from GSTIN)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={stateCode}
+                    onChange={e => setStateCode(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                    placeholder="33"
+                    maxLength={2}
+                    inputMode="numeric"
+                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-center font-mono text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+                  />
+                </div>
+              </div>
             )}
           </div>
 
