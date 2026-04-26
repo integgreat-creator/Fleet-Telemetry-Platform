@@ -22,6 +22,7 @@ import {
   Copy,
   Link2,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
 import { usePendingCheckout } from '../hooks/usePendingCheckout';
@@ -416,61 +417,71 @@ interface PlanCard {
   highlight: boolean;
 }
 
-const TRIAL_CARD: PlanCard = {
-  plan:      'trial',
-  label:     'Trial',
-  price:     '₹0',
-  period:    '30 days',
-  vehicles:  '2 vehicles',
-  drivers:   '3 drivers',
-  features:  ['Live tracking', 'Basic alerts', 'Trip history', '7-day data'],
-  cta:       null,
-  highlight: false,
+// Per-plan i18n key for the feature-bullet array. Keeps the planName→key
+// mapping in one place so adding a new plan is a one-line addition here +
+// one new array in en.json (and ta.json).
+const FEATURE_KEY_BY_PLAN: Record<string, string> = {
+  essential:    'pricing.essentialFeatures',
+  professional: 'pricing.professionalFeatures',
+  business:     'pricing.businessFeatures',
+  enterprise:   'pricing.enterpriseFeatures',
 };
 
-// Marketing copy per paid plan — keyed by plan_name. If a catalog entry comes
-// back with a plan_name not in this map, we fall back to a generic bullet set.
-const PLAN_COPY: Record<string, { features: string[]; highlight?: boolean }> = {
-  essential: {
-    features:  ['Live tracking', 'Fuel monitoring', 'Idle detection', 'Overspeed alerts'],
-  },
-  professional: {
-    features:  ['Everything in Essential', 'Driver behaviour', 'Maintenance alerts', 'Cost analytics', 'Multi-user'],
-    highlight: true,
-  },
-  business: {
-    features:  ['Everything in Professional', 'AI predictions', 'Fuel theft detection', 'API access', 'Custom reports', 'Priority support'],
-  },
-  enterprise: {
-    features:  ['Everything in Business', 'Dedicated CSM', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
-  },
-};
+const HIGHLIGHTED_PLANS: ReadonlySet<string> = new Set(['professional']);
 
-function buildCardFromCatalog(p: PlanCatalogEntry): PlanCard {
-  const copy = PLAN_COPY[p.planName] ?? { features: [], highlight: false };
+/// Translation-aware variant of the old TRIAL_CARD constant. Called inside
+/// AdminPage so the strings flip when the user toggles language.
+function buildTrialCard(t: (k: string, opts?: Record<string, unknown>) => string): PlanCard {
+  return {
+    plan:      'trial',
+    label:     t('pricing.trialCardLabel'),
+    price:     t('pricing.trialCardPrice'),
+    period:    t('pricing.trialCardPeriod'),
+    vehicles:  t('pricing.trialCardVehicles'),
+    drivers:   t('pricing.trialCardDrivers'),
+    features:  (t('pricing.trialFeatures', { returnObjects: true }) as unknown as string[]) ?? [],
+    cta:       null,
+    highlight: false,
+  };
+}
 
-  const vehicleLabel = p.minVehicles === 1
-    ? 'From 1 vehicle'
-    : `From ${p.minVehicles} vehicles`;
+/// Translation-aware variant of the old buildCardFromCatalog. Takes `t` as
+/// an explicit dependency — keeps the function pure and testable instead of
+/// reaching for a context.
+function buildCardFromCatalog(
+  p:    PlanCatalogEntry,
+  t:    (k: string, opts?: Record<string, unknown>) => string,
+): PlanCard {
+  const featureKey = FEATURE_KEY_BY_PLAN[p.planName];
+  const features   = featureKey
+    ? ((t(featureKey, { returnObjects: true }) as unknown as string[]) ?? [])
+    : [];
 
-  const isCustom = p.billingModel === 'custom' || p.pricePerVehicleInr == null;
+  const vehicleLabel = t('pricing.fromVehicles', { count: p.minVehicles });
+  const isCustom     = p.billingModel === 'custom' || p.pricePerVehicleInr == null;
 
   return {
     plan:      p.planName as Subscription['plan'],
     label:     p.displayName,
-    price:     isCustom ? 'Custom' : `₹${p.pricePerVehicleInr}`,
-    period:    isCustom ? (p.minVehicles >= 50 ? `From ${p.minVehicles} vehicles` : '') : '/vehicle/mo',
-    vehicles:  isCustom ? 'Unlimited vehicles' : vehicleLabel,
-    drivers:   'Unlimited drivers',
-    features:  copy.features,
-    cta:       p.planName === 'enterprise' ? 'Contact Sales' : `Select ${p.displayName}`,
-    highlight: copy.highlight ?? false,
+    price:     isCustom ? t('pricing.customPrice') : `₹${p.pricePerVehicleInr}`,
+    period:    isCustom
+      ? (p.minVehicles >= 50 ? t('pricing.fromVehicles', { count: p.minVehicles }) : '')
+      : t('pricing.perVehiclePerMonth'),
+    vehicles:  isCustom ? t('pricing.unlimitedVehicles') : vehicleLabel,
+    drivers:   t('pricing.unlimitedDrivers'),
+    features,
+    cta:       p.planName === 'enterprise'
+      ? t('pricing.ctaContactSales')
+      : t('pricing.ctaSelect', { plan: p.displayName }),
+    highlight: HIGHLIGHTED_PLANS.has(p.planName),
   };
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  const { t } = useTranslation();
+
   // useSubscription is the app-wide source of truth for billing + fleet ids.
   // We pull `fleetId` (renamed `subFleetId` here) as a fallback in case the
   // local manager-by-id fetch misses (race / RLS hiccup), plus `vehiclesUsed`
@@ -1189,7 +1200,7 @@ export default function AdminPage() {
     // catalog rows), fall back to the legacy alert for visibility.
     const entry = catalogPlans.find(p => p.planName === plan);
     if (!entry) {
-      alert(`Plan "${plan}" is not available for online checkout. Contact support.`);
+      alert(t('pricing.planNotInCatalog', { plan }));
       return;
     }
     setCheckoutPlan(entry);
@@ -1450,8 +1461,8 @@ export default function AdminPage() {
                     ))
                   )}
                   {!catalogLoading && [
-                    TRIAL_CARD,
-                    ...catalogPlans.map(buildCardFromCatalog),
+                    buildTrialCard(t),
+                    ...catalogPlans.map(p => buildCardFromCatalog(p, t)),
                   ].map(card => {
                     const isCurrent = subscription?.plan === card.plan;
                     return (

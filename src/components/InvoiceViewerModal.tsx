@@ -1,5 +1,6 @@
 import { X, Printer } from 'lucide-react';
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -51,14 +52,26 @@ function formatInr(n: number): string {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-IN', {
+/// Locale-aware date formatter — prints "27 April 2026" in en, falls back to
+/// the host platform's Tamil rendering of the same date when the active locale
+/// is `ta`. The `Rupees in words` line below stays English-only for now: see
+/// the comment on `rupeesInWords`.
+function formatDate(iso: string, locale: string): string {
+  return new Date(iso).toLocaleDateString(locale || 'en-IN', {
     day: '2-digit', month: 'long', year: 'numeric',
   });
 }
 
 // Convert a number to Indian-numbering words for the legal "Amount in words"
 // line every GST invoice carries. Handles up to ten crore.
+//
+// Intentionally English-only for now. The "amount in words" line is legally
+// satisfied in either language, and Tamil cardinal numerals (ஒன்று, இரண்டு,
+// …) follow different combinator rules than English (no straight `Crore +
+// Lakh + Thousand + below1000` recipe). Building a proper Tamil version is
+// scoped for a later sub-phase. Per Phase 1.5 D14 (b), Tamil ships with
+// English placeholders here too — the rest of the invoice header / footer
+// IS keyed via i18n, so flipping this on later is a localized change.
 function rupeesInWords(n: number): string {
   const ones = [
     '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
@@ -107,6 +120,8 @@ function rupeesInWords(n: number): string {
 /// invoice itself. Avoids a PDF library entirely — Indian B2B accounting
 /// teams accept browser-printed PDFs without issue.
 export default function InvoiceViewerModal({ invoice, onClose }: Props) {
+  const { t, i18n } = useTranslation();
+
   // Esc to close — skip while a native print dialog is open since browsers
   // already handle Esc there.
   useEffect(() => {
@@ -156,12 +171,12 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
               onClick={() => window.print()}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-md transition-colors"
             >
-              <Printer size={12} /> Print / Save as PDF
+              <Printer size={12} /> {t('invoices.viewer.printButton')}
             </button>
             <button
               onClick={onClose}
               className="p-1.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200 rounded-md transition-colors"
-              aria-label="Close"
+              aria-label={t('common.close')}
             >
               <X size={16} />
             </button>
@@ -173,13 +188,12 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
           {/* Status banners (printed too — these are legally meaningful) */}
           {cancelled && (
             <div className="mb-6 px-4 py-2 bg-red-50 border-l-4 border-red-500 text-sm text-red-900 font-semibold">
-              CANCELLED — this invoice has been voided.
+              {t('invoices.viewer.statusCancelled')}
             </div>
           )}
           {dormant && !cancelled && (
             <div className="mb-6 px-4 py-2 bg-yellow-50 border-l-4 border-yellow-500 text-xs text-yellow-900 leading-relaxed">
-              Issued before our GST registration was active. Treated as a non-GST
-              receipt — no Input Tax Credit available on this invoice.
+              {t('invoices.viewer.statusDormant')}
             </div>
           )}
 
@@ -187,42 +201,46 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
           <div className="flex items-start justify-between gap-6 pb-6 border-b border-gray-200">
             <div>
               <h1 className="text-2xl font-bold tracking-tight">
-                {dormant ? 'Receipt' : 'Tax Invoice'}
+                {dormant ? t('invoices.viewer.titleReceipt') : t('invoices.viewer.titleTaxInvoice')}
               </h1>
               <p className="text-xs text-gray-500 mt-1">
                 {dormant
-                  ? 'Pre-GST registration — issued for accounting reference.'
-                  : 'Original for Recipient'}
+                  ? t('invoices.viewer.subtitleReceipt')
+                  : t('invoices.viewer.subtitleTaxInvoice')}
               </p>
             </div>
             <div className="text-right text-sm">
               <div className="font-mono font-semibold">{invoice.invoice_number}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Issued {formatDate(invoice.invoice_date)}</div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                {t('invoices.viewer.issuedDate', {
+                  date: formatDate(invoice.invoice_date, i18n.language),
+                })}
+              </div>
             </div>
           </div>
 
           {/* Parties */}
           <div className="grid grid-cols-2 gap-6 py-6 border-b border-gray-200">
             <div>
-              <h3 className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">From</h3>
+              <h3 className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">{t('invoices.viewer.partyFromHeader')}</h3>
               <p className="font-semibold">{invoice.supplier_name}</p>
               <p className="text-xs text-gray-600 whitespace-pre-line mt-0.5">{invoice.supplier_address}</p>
               {invoice.supplier_gstin
-                ? <p className="text-xs text-gray-700 mt-1.5">GSTIN: <span className="font-mono">{invoice.supplier_gstin}</span></p>
-                : <p className="text-xs text-yellow-700 mt-1.5 italic">GST registration pending</p>}
-              <p className="text-xs text-gray-500 mt-0.5">State code: {invoice.supplier_state_code}</p>
+                ? <p className="text-xs text-gray-700 mt-1.5">{t('invoices.viewer.gstinLabel')} <span className="font-mono">{invoice.supplier_gstin}</span></p>
+                : <p className="text-xs text-yellow-700 mt-1.5 italic">{t('invoices.viewer.gstinPending')}</p>}
+              <p className="text-xs text-gray-500 mt-0.5">{t('invoices.viewer.stateCodeLabel')} {invoice.supplier_state_code}</p>
             </div>
             <div>
-              <h3 className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">Bill to</h3>
+              <h3 className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">{t('invoices.viewer.partyBillToHeader')}</h3>
               <p className="font-semibold">{invoice.customer_name}</p>
               {invoice.customer_address && (
                 <p className="text-xs text-gray-600 whitespace-pre-line mt-0.5">{invoice.customer_address}</p>
               )}
               {invoice.customer_gstin && (
-                <p className="text-xs text-gray-700 mt-1.5">GSTIN: <span className="font-mono">{invoice.customer_gstin}</span></p>
+                <p className="text-xs text-gray-700 mt-1.5">{t('invoices.viewer.gstinLabel')} <span className="font-mono">{invoice.customer_gstin}</span></p>
               )}
               {invoice.customer_state_code && (
-                <p className="text-xs text-gray-500 mt-0.5">State code: {invoice.customer_state_code}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{t('invoices.viewer.stateCodeLabel')} {invoice.customer_state_code}</p>
               )}
             </div>
           </div>
@@ -232,11 +250,11 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left  py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Description</th>
-                  <th className="text-left  py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">HSN/SAC</th>
-                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Qty</th>
-                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Unit (₹)</th>
-                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Taxable (₹)</th>
+                  <th className="text-left  py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{t('invoices.viewer.tableDescription')}</th>
+                  <th className="text-left  py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{t('invoices.viewer.tableHsnSac')}</th>
+                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{t('invoices.viewer.tableQty')}</th>
+                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{t('invoices.viewer.tableUnit')}</th>
+                  <th className="text-right py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{t('invoices.viewer.tableTaxable')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -255,49 +273,50 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
           <div className="flex justify-end pb-6">
             <div className="w-72 text-sm space-y-1.5">
               <div className="flex justify-between">
-                <span className="text-gray-600">Taxable amount</span>
+                <span className="text-gray-600">{t('invoices.viewer.totalsTaxable')}</span>
                 <span>{formatInr(invoice.taxable_amount_inr)}</span>
               </div>
               {intraState && (
                 <>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">CGST @ {invoice.cgst_pct}%</span>
+                    <span className="text-gray-600">{t('invoices.viewer.totalsCgst', { pct: invoice.cgst_pct })}</span>
                     <span>{formatInr(invoice.cgst_amount_inr)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-gray-600">SGST @ {invoice.sgst_pct}%</span>
+                    <span className="text-gray-600">{t('invoices.viewer.totalsSgst', { pct: invoice.sgst_pct })}</span>
                     <span>{formatInr(invoice.sgst_amount_inr)}</span>
                   </div>
                 </>
               )}
               {interState && (
                 <div className="flex justify-between">
-                  <span className="text-gray-600">IGST @ {invoice.igst_pct}%</span>
+                  <span className="text-gray-600">{t('invoices.viewer.totalsIgst', { pct: invoice.igst_pct })}</span>
                   <span>{formatInr(invoice.igst_amount_inr)}</span>
                 </div>
               )}
               {dormant && (
                 <div className="flex justify-between text-xs text-gray-500 italic">
-                  <span>GST not applicable</span>
+                  <span>{t('invoices.viewer.totalsGstNotApplicable')}</span>
                   <span>—</span>
                 </div>
               )}
               <div className="flex justify-between pt-2 mt-2 border-t border-gray-300 font-bold text-base">
-                <span>Total</span>
+                <span>{t('invoices.viewer.totalsTotal')}</span>
                 <span>{formatInr(invoice.total_inr)}</span>
               </div>
               {totalGst > 0 && (
                 <div className="text-[10px] text-gray-500 text-right">
-                  (incl. {formatInr(totalGst)} GST)
+                  {t('invoices.viewer.totalsInclGst', { amount: formatInr(totalGst) })}
                 </div>
               )}
             </div>
           </div>
 
-          {/* Amount in words */}
+          {/* Amount in words — see rupeesInWords() comment for the
+              English-only rationale. */}
           <div className="pb-6 border-b border-gray-200 text-sm">
             <span className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mr-2">
-              Amount in words
+              {t('invoices.viewer.amountInWordsLabel')}
             </span>
             {rupeesInWords(invoice.total_inr)}
           </div>
@@ -307,24 +326,24 @@ export default function InvoiceViewerModal({ invoice, onClose }: Props) {
             <div>
               {invoice.razorpay_payment_id && (
                 <p>
-                  <span className="text-gray-500">Payment ref: </span>
+                  <span className="text-gray-500">{t('invoices.viewer.paymentRefLabel')} </span>
                   <span className="font-mono">{invoice.razorpay_payment_id}</span>
                 </p>
               )}
               {invoice.razorpay_subscription_id && (
                 <p className="mt-1">
-                  <span className="text-gray-500">Subscription: </span>
+                  <span className="text-gray-500">{t('invoices.viewer.subscriptionRefLabel')} </span>
                   <span className="font-mono">{invoice.razorpay_subscription_id}</span>
                 </p>
               )}
               <p className="mt-3 text-gray-500 italic leading-relaxed">
-                This is a system-generated invoice and does not require a signature.
+                {t('invoices.viewer.systemGenerated')}
               </p>
             </div>
             <div className="text-right">
               <div className="border-t border-gray-300 pt-2 mt-12 inline-block min-w-[12rem]">
-                <p className="text-xs">For {invoice.supplier_name}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5">Authorized signatory</p>
+                <p className="text-xs">{t('invoices.viewer.forSupplier', { supplier: invoice.supplier_name })}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">{t('invoices.viewer.authorizedSignatory')}</p>
               </div>
             </div>
           </div>
