@@ -1,8 +1,21 @@
 import { useState } from 'react';
 import { Car } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
+import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '../i18n';
 
 export default function Auth() {
+  const { t, i18n } = useTranslation();
+
+  // Pre-login language toggle — the sidebar switcher only appears AFTER auth,
+  // so a Tamil-preferring user landing on the signup screen needs an in-page
+  // override here. Pure presentation, no copy of LanguageSwitcher's chrome —
+  // just two buttons stacked into the auth card footer.
+  const currentLang: SupportedLanguage =
+    SUPPORTED_LANGUAGES.find(l => i18n.language?.startsWith(l)) ?? 'en';
+  const handleLangSelect = (lng: SupportedLanguage) => {
+    if (lng !== currentLang) void i18n.changeLanguage(lng);
+  };
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,7 +37,7 @@ export default function Auth() {
         if (error) throw error;
       } else {
         if (!fleetName.trim()) {
-          throw new Error('Fleet Name is required for sign up');
+          throw new Error(t('auth.errorFleetNameRequired'));
         }
 
         // Use the fleet-signup edge function which uses the service role to:
@@ -50,18 +63,18 @@ export default function Auth() {
             }
           );
         } catch {
-          throw new Error('Cannot reach the server. Please check your internet connection.');
+          throw new Error(t('auth.errorNetwork'));
         }
 
         let body: any;
         try {
           body = await res.json();
         } catch {
-          throw new Error(`Server error (HTTP ${res.status}). The fleet-signup function may not be deployed yet.`);
+          throw new Error(t('auth.errorServerWithStatus', { status: res.status }));
         }
 
         if (!res.ok) {
-          throw new Error(body?.error || `Sign up failed (HTTP ${res.status})`);
+          throw new Error(body?.error || t('auth.errorSignUpFailed', { status: res.status }));
         }
 
         // Edge function created the account + fleet.
@@ -73,11 +86,11 @@ export default function Auth() {
           password,
         });
         if (signInError) {
-          throw new Error('Account created but sign-in failed. Please use the Login tab.');
+          throw new Error(t('auth.errorPostSignUpSignIn'));
         }
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred');
+      setError(err.message || t('common.errorGeneric'));
     } finally {
       setLoading(false);
     }
@@ -89,9 +102,9 @@ export default function Auth() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <Car className="w-12 h-12 text-blue-500" />
-            <h1 className="text-4xl font-bold text-white">FTPGo</h1>
+            <h1 className="text-4xl font-bold text-white">{t('auth.appName')}</h1>
           </div>
-          <p className="text-gray-400">Smart fleet management platform</p>
+          <p className="text-gray-400">{t('auth.tagline')}</p>
         </div>
 
         <div className="bg-gray-900 rounded-lg p-8 border border-gray-800">
@@ -104,7 +117,7 @@ export default function Auth() {
                   : 'bg-gray-800 text-gray-400 hover:text-white'
               }`}
             >
-              Login
+              {t('auth.tabLogin')}
             </button>
             <button
               onClick={() => setIsLogin(false)}
@@ -114,46 +127,46 @@ export default function Auth() {
                   : 'bg-gray-800 text-gray-400 hover:text-white'
               }`}
             >
-              Sign Up
+              {t('auth.tabSignUp')}
             </button>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             {!isLogin && (
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-2">Fleet Name</label>
+                <label className="block text-sm font-medium text-gray-400 mb-2">{t('auth.labelFleetName')}</label>
                 <input
                   type="text"
                   required
                   value={fleetName}
                   onChange={(e) => setFleetName(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                  placeholder="Your Fleet Name"
+                  placeholder={t('auth.placeholderFleetName')}
                 />
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Email</label>
+              <label className="block text-sm font-medium text-gray-400 mb-2">{t('auth.labelEmail')}</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                placeholder="you@example.com"
+                placeholder={t('auth.placeholderEmail')}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Password</label>
+              <label className="block text-sm font-medium text-gray-400 mb-2">{t('auth.labelPassword')}</label>
               <input
                 type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                placeholder="••••••••"
+                placeholder={t('auth.placeholderPassword')}
                 minLength={6}
               />
             </div>
@@ -169,25 +182,49 @@ export default function Auth() {
               disabled={loading}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors"
             >
-              {loading ? 'Loading...' : isLogin ? 'Login' : 'Sign Up'}
+              {loading
+                ? t('auth.submitLoading')
+                : isLogin ? t('auth.submitLogin') : t('auth.submitSignUp')}
             </button>
           </form>
 
           <div className="mt-6 pt-6 border-t border-gray-800">
             <p className="text-xs text-gray-500 text-center">
-              {isLogin ? "Don't have an account? " : 'Already have an account? '}
+              {isLogin ? t('auth.switchToSignUpPrompt') : t('auth.switchToLoginPrompt')}{' '}
               <button
                 onClick={() => setIsLogin(!isLogin)}
                 className="text-blue-500 hover:text-blue-400"
               >
-                {isLogin ? 'Sign up' : 'Login'}
+                {isLogin ? t('auth.switchToSignUpAction') : t('auth.switchToLoginAction')}
               </button>
             </p>
           </div>
         </div>
 
         <div className="mt-8 text-center text-xs text-gray-500">
-          <p>Demo credentials available for testing</p>
+          <p>{t('auth.demoFooter')}</p>
+        </div>
+
+        {/* Pre-login language switcher (Phase 1.5.1) — same idiom as the
+            sidebar version but inlined here because the sidebar isn't
+            mounted yet. */}
+        <div className="mt-4 flex items-center justify-center gap-1 text-xs">
+          {SUPPORTED_LANGUAGES.map((lng, i) => (
+            <span key={lng} className="contents">
+              {i > 0 && <span className="text-gray-700">·</span>}
+              <button
+                onClick={() => handleLangSelect(lng)}
+                className={`px-2 py-1 rounded transition-colors ${
+                  currentLang === lng
+                    ? 'text-white font-semibold'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+                aria-pressed={currentLang === lng}
+              >
+                {lng === 'en' ? t('common.languageEnglish') : t('common.languageTamil')}
+              </button>
+            </span>
+          ))}
         </div>
       </div>
     </div>

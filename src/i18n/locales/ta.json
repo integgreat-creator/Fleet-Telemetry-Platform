@@ -1,0 +1,40 @@
+{
+  "//": "Tamil locale — placeholder (English) strings shipped intentionally. Per Phase 1.5.1 D14 (option b): structure first, native-Tamil reviewer fills these in before the language switcher is exposed to customers. The 'languageTamil' label below uses Tamil script so the switcher button reads correctly even before the rest is translated.",
+  "translation": {
+    "common": {
+      "loading": "Loading…",
+      "cancel": "Cancel",
+      "save": "Save",
+      "close": "Close",
+      "retry": "Retry",
+      "errorGeneric": "Something went wrong. Please try again.",
+      "languageEnglish": "English",
+      "languageTamil": "தமிழ்"
+    },
+    "auth": {
+      "appName": "FTPGo",
+      "tagline": "Smart fleet management platform",
+      "tabLogin": "Login",
+      "tabSignUp": "Sign Up",
+      "labelFleetName": "Fleet Name",
+      "labelEmail": "Email",
+      "labelPassword": "Password",
+      "placeholderFleetName": "Your Fleet Name",
+      "placeholderEmail": "you@example.com",
+      "placeholderPassword": "••••••••",
+      "submitLoading": "Loading…",
+      "submitLogin": "Login",
+      "submitSignUp": "Sign Up",
+      "switchToSignUpPrompt": "Don't have an account?",
+      "switchToLoginPrompt": "Already have an account?",
+      "switchToSignUpAction": "Sign up",
+      "switchToLoginAction": "Login",
+      "demoFooter": "Demo credentials available for testing",
+      "errorFleetNameRequired": "Fleet Name is required for sign up",
+      "errorNetwork": "Cannot reach the server. Please check your internet connection.",
+      "errorServerWithStatus": "Server error (HTTP {{status}}). The fleet-signup function may not be deployed yet.",
+      "errorSignUpFailed": "Sign up failed (HTTP {{status}})",
+      "errorPostSignUpSignIn": "Account created but sign-in failed. Please use the Login tab."
+    }
+  }
+}

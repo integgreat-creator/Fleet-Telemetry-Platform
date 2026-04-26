@@ -7,6 +7,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
 import TrialBanner from './TrialBanner';
+import LanguageSwitcher from './LanguageSwitcher';
 import type { Page } from '../App';
 
 interface LayoutProps {
@@ -152,6 +153,13 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
             </div>
           </div>
         </nav>
+
+        {/* ── Language switcher (Phase 1.5.1) ─────────────────────────────── */}
+        {/* Sits above Logout so the bottom of the sidebar tells a small story:
+            "switch language → sign out". Logout is the more destructive action
+            and stays last; language switch is a routine preference, surfaced
+            here because every page needs it. */}
+        <LanguageSwitcher />
 
         <div className="px-3 py-4 border-t border-gray-800">
           <button
