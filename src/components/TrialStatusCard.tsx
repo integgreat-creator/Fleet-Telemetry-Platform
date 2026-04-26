@@ -1,4 +1,5 @@
 import { Clock, ArrowRight, AlertCircle, CreditCard } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useSubscription } from '../hooks/useSubscription';
 import { useTrialBannerState } from '../hooks/useTrialBannerState';
 import { usePendingCheckout } from '../hooks/usePendingCheckout';
@@ -10,12 +11,6 @@ import { usePendingCheckout } from '../hooks/usePendingCheckout';
 /// a constant — using the catalog value would mean threading it through
 /// useSubscription too, and the value never changes per fleet.
 const ASSUMED_TRIAL_LENGTH_DAYS = 30;
-
-function formatTimeLeft(daysLeft: number, hoursLeft: number): string {
-  if (daysLeft <= 0 && hoursLeft <= 0) return 'expired';
-  if (daysLeft <= 1)                   return `${hoursLeft} hour${hoursLeft === 1 ? '' : 's'} left`;
-  return `${daysLeft} day${daysLeft === 1 ? '' : 's'} left`;
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -39,9 +34,19 @@ interface Props {
 /// the card so the user has a single, prominent action surface — no need
 /// to scroll past the trial card to find the right banner.
 export default function TrialStatusCard({ onUpgradeClick }: Props) {
+  const { t, i18n }               = useTranslation();
   const { trialEndsAt, status }   = useSubscription();
   const banner                    = useTrialBannerState();
   const pendingCheckout           = usePendingCheckout();
+
+  // Centralized "X hours left" / "X days left" copy. Lives inside the
+  // component so it can use the same `t` instance as the rest of the JSX —
+  // hoisting it would mean threading t through, with no real win.
+  const formatTimeLeft = (daysLeft: number, hoursLeft: number): string => {
+    if (daysLeft <= 0 && hoursLeft <= 0) return t('trialCard.timeLeftExpired');
+    if (daysLeft <= 1)                   return t('trialCard.timeLeftHours', { count: hoursLeft });
+    return t('trialCard.timeLeftDays', { count: daysLeft });
+  };
 
   // Hide card entirely when there's nothing to surface.
   if (banner.kind === 'none')    return null;
@@ -65,7 +70,9 @@ export default function TrialStatusCard({ onUpgradeClick }: Props) {
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-semibold text-white">
-            {banner.kind === 'suspended' ? 'Payment failed' : 'Subscription expired'}
+            {banner.kind === 'suspended'
+              ? t('trialCard.headingPaymentFailed')
+              : t('trialCard.headingExpired')}
           </h3>
           <p className="text-xs text-red-200/90 mt-1 leading-relaxed">{banner.message}</p>
         </div>
@@ -106,7 +113,7 @@ export default function TrialStatusCard({ onUpgradeClick }: Props) {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline justify-between gap-3 flex-wrap">
-              <h3 className="text-sm font-semibold text-white">Free trial</h3>
+              <h3 className="text-sm font-semibold text-white">{t('trialCard.headingFreeTrial')}</h3>
               <span className={`text-xs font-semibold ${tone.text}`}>
                 {formatTimeLeft(daysLeft, hoursLeft)}
               </span>
@@ -121,15 +128,23 @@ export default function TrialStatusCard({ onUpgradeClick }: Props) {
               />
             </div>
             <p className="text-[11px] text-gray-500 mt-1.5">
-              {daysUsed} of {ASSUMED_TRIAL_LENGTH_DAYS} days used.
-              Trial ends {trialEndsAt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}.
+              {/* Date format follows the active locale — `i18n.language`
+                  feeds Intl directly. For English-fallback Tamil this also
+                  renders sensibly because Intl handles `ta-IN` natively. */}
+              {t('trialCard.progressLine', {
+                used:  daysUsed,
+                total: ASSUMED_TRIAL_LENGTH_DAYS,
+                date:  trialEndsAt.toLocaleDateString(i18n.language || 'en-IN', {
+                  day: '2-digit', month: 'short', year: 'numeric',
+                }),
+              })}
             </p>
           </div>
           <button
             onClick={handleUpgrade}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shrink-0"
           >
-            Choose plan
+            {t('trialCard.chooseplanCta')}
             <ArrowRight size={12} />
           </button>
         </div>

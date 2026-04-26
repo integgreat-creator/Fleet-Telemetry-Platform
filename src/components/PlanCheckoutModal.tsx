@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { X, Plus, Minus, AlertCircle, ArrowRight, Lock, Loader2, Receipt, ChevronDown } from 'lucide-react';
+import { useTranslation, Trans } from 'react-i18next';
 import {
   monthlyPriceFor,
   annualPriceFor,
@@ -72,6 +73,8 @@ export default function PlanCheckoutModal({
   onSaveBilling,
   onContinue,
 }: Props) {
+  const { t } = useTranslation();
+
   // The floor the customer can select:
   //   - at least plan.minVehicles (business rule)
   //   - at least current vehiclesUsed (can't under-provision)
@@ -132,7 +135,7 @@ export default function PlanCheckoutModal({
     const trimmedGstin = gstin.trim();
     if (trimmedGstin && !GSTIN_PATTERN.test(trimmedGstin)) {
       setGstinExpanded(true);
-      setGstinError('GSTIN must be 15 characters (e.g. 33ABCDE1234F1Z5).');
+      setGstinError(t('checkout.gstinFormatError'));
       return;
     }
 
@@ -157,7 +160,7 @@ export default function PlanCheckoutModal({
       // imminent and a dangling state update would warn.
       onClose();
     } catch (e) {
-      setSubmitError((e as Error).message || 'Something went wrong. Please try again.');
+      setSubmitError((e as Error).message || t('common.errorGeneric'));
       setSubmitting(false);
     }
   };
@@ -193,16 +196,16 @@ export default function PlanCheckoutModal({
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex items-start justify-between p-6 border-b border-gray-800">
           <div>
-            <p className="text-xs text-gray-500 uppercase tracking-widest font-semibold">Subscribe</p>
-            <h2 className="text-xl font-bold text-white mt-1">{plan.displayName} plan</h2>
+            <p className="text-xs text-gray-500 uppercase tracking-widest font-semibold">{t('checkout.headerLabel')}</p>
+            <h2 className="text-xl font-bold text-white mt-1">{t('checkout.modalTitle', { plan: plan.displayName })}</h2>
             <p className="text-sm text-gray-400 mt-1">
-              {formatInr(plan.pricePerVehicleInr ?? 0)} per vehicle, per month
+              {t('checkout.pricePerVehicle', { price: (plan.pricePerVehicleInr ?? 0).toLocaleString('en-IN') })}
             </p>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             <X size={18} />
           </button>
@@ -212,7 +215,7 @@ export default function PlanCheckoutModal({
         <div className="p-6 space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
-              How many vehicles?
+              {t('checkout.vehicleCountLabel')}
             </label>
 
             <div className="flex items-center gap-3">
@@ -220,7 +223,7 @@ export default function PlanCheckoutModal({
                 onClick={dec}
                 disabled={vehicleCount <= minCount}
                 className="w-11 h-11 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
-                aria-label="Decrease vehicle count"
+                aria-label={t('checkout.vehicleAriaDecrease')}
               >
                 <Minus size={16} />
               </button>
@@ -241,7 +244,7 @@ export default function PlanCheckoutModal({
                 onClick={inc}
                 disabled={vehicleCount >= SOFT_CAP_VEHICLES}
                 className="w-11 h-11 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
-                aria-label="Increase vehicle count"
+                aria-label={t('checkout.vehicleAriaIncrease')}
               >
                 <Plus size={16} />
               </button>
@@ -249,12 +252,13 @@ export default function PlanCheckoutModal({
 
             <div className="mt-2 flex items-start justify-between gap-3 text-xs text-gray-400">
               <span>
-                {plan.minVehicles > 1
-                  ? `Minimum ${plan.minVehicles} vehicles on ${plan.displayName}`
-                  : 'Starts from 1 vehicle'}
+                {t('checkout.vehicleMinHint', {
+                  count: plan.minVehicles,
+                  plan:  plan.displayName,
+                })}
               </span>
               {vehiclesUsed > plan.minVehicles && (
-                <span>You currently have {vehiclesUsed} vehicles</span>
+                <span>{t('checkout.vehicleCurrentHint', { count: vehiclesUsed })}</span>
               )}
             </div>
           </div>
@@ -264,8 +268,16 @@ export default function PlanCheckoutModal({
             <div className="flex gap-3 p-3 bg-yellow-950/40 border border-yellow-900/60 rounded-lg">
               <AlertCircle size={16} className="text-yellow-500 shrink-0 mt-0.5" />
               <div className="text-xs text-yellow-200 leading-relaxed">
-                Fleets of {SOFT_CAP_VEHICLES}+ vehicles get custom pricing and a dedicated CSM on the{' '}
-                <span className="font-semibold">Enterprise</span> plan. Consider contacting sales for a better rate.
+                {/* <Trans> preserves the inline <strong> wrapper around
+                    "Enterprise" so the translation stays one cohesive
+                    sentence — translators see the placeholder as <1> in
+                    the source string and produce a Tamil equivalent that
+                    keeps the emphasis where it belongs. */}
+                <Trans
+                  i18nKey="checkout.softCapNudge"
+                  values={{ cap: SOFT_CAP_VEHICLES }}
+                  components={{ strong: <span className="font-semibold" /> }}
+                />
               </div>
             </div>
           )}
@@ -273,10 +285,10 @@ export default function PlanCheckoutModal({
           {/* ── Billing-cycle toggle (1.2.3) ───────────────────────────── */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-gray-300">Billing cycle</label>
+              <label className="block text-sm font-medium text-gray-300">{t('checkout.billingCycleLabel')}</label>
               {plan.annualDiscountPct > 0 && (
                 <span className="text-[11px] text-green-400 font-semibold">
-                  Save {plan.annualDiscountPct}% with annual
+                  {t('checkout.annualSavingsBadge', { pct: plan.annualDiscountPct })}
                 </span>
               )}
             </div>
@@ -290,7 +302,7 @@ export default function PlanCheckoutModal({
                     : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
-                Monthly
+                {t('checkout.monthlyTab')}
               </button>
               <button
                 onClick={() => annualUnlocked && setBillingCycle('annual')}
@@ -298,7 +310,7 @@ export default function PlanCheckoutModal({
                 title={
                   annualUnlocked
                     ? undefined
-                    : 'Annual billing unlocks after 3 months on monthly'
+                    : t('checkout.annualLockTooltip')
                 }
                 className={`relative py-2 rounded-md text-sm font-medium transition-colors ${
                   billingCycle === 'annual'
@@ -310,7 +322,7 @@ export default function PlanCheckoutModal({
               >
                 <span className="inline-flex items-center gap-1.5">
                   {!annualUnlocked && <Lock size={11} />}
-                  Annual
+                  {t('checkout.annualTab')}
                   {plan.annualDiscountPct > 0 && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
                       annualUnlocked
@@ -326,7 +338,7 @@ export default function PlanCheckoutModal({
 
             {!annualUnlocked && (
               <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
-                Annual billing unlocks after your fleet has been active on monthly billing for 3 months.
+                {t('checkout.annualLockHelp')}
               </p>
             )}
           </div>
@@ -345,16 +357,16 @@ export default function PlanCheckoutModal({
               <div className="flex items-center gap-2.5">
                 <Receipt size={15} className="text-gray-400" />
                 <span className="text-sm font-medium text-gray-200">
-                  {gstin ? 'GST tax invoice details' : 'Add GSTIN for tax invoice'}
+                  {gstin ? t('checkout.gstinSectionTitleOpen') : t('checkout.gstinSectionTitleClosed')}
                 </span>
                 {!gstin && (
                   <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
-                    Optional
+                    {t('checkout.gstinChipOptional')}
                   </span>
                 )}
                 {gstin && GSTIN_PATTERN.test(gstin) && (
                   <span className="text-[10px] uppercase tracking-wider text-green-400 font-semibold">
-                    Saved
+                    {t('checkout.gstinChipSaved')}
                   </span>
                 )}
               </div>
@@ -367,13 +379,12 @@ export default function PlanCheckoutModal({
             {gstinExpanded && (
               <div className="p-4 space-y-3 bg-gray-900/40">
                 <p className="text-[11px] text-gray-500 leading-relaxed">
-                  Adding your GSTIN lets you claim Input Tax Credit on this subscription.
-                  We'll print these details on every invoice — leave blank if you're not GST-registered.
+                  {t('checkout.gstinHelp')}
                 </p>
 
                 <div>
                   <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    GSTIN <span className="text-gray-600">(15 characters)</span>
+                    {t('checkout.gstinFieldLabel')} <span className="text-gray-600">{t('checkout.gstinFieldHint')}</span>
                   </label>
                   <input
                     type="text"
@@ -395,12 +406,12 @@ export default function PlanCheckoutModal({
 
                 <div>
                   <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    Billing address
+                    {t('checkout.billingAddressLabel')}
                   </label>
                   <textarea
                     value={billingAddress}
                     onChange={e => setBillingAddress(e.target.value)}
-                    placeholder="Street, city, state, PIN"
+                    placeholder={t('checkout.billingAddressPlaceholder')}
                     rows={2}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 resize-none"
                   />
@@ -408,13 +419,13 @@ export default function PlanCheckoutModal({
 
                 <div>
                   <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                    State code <span className="text-gray-600">(auto-filled from GSTIN)</span>
+                    {t('checkout.stateCodeLabel')} <span className="text-gray-600">{t('checkout.stateCodeHint')}</span>
                   </label>
                   <input
                     type="text"
                     value={stateCode}
                     onChange={e => setStateCode(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                    placeholder="33"
+                    placeholder={t('checkout.stateCodePlaceholder')}
                     maxLength={2}
                     inputMode="numeric"
                     className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-center font-mono text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
@@ -428,24 +439,27 @@ export default function PlanCheckoutModal({
           <div className="bg-gray-800/60 border border-gray-800 rounded-xl p-4 space-y-2">
             <div className="flex items-center justify-between text-sm text-gray-300">
               <span>
-                {formatInr(plan.pricePerVehicleInr ?? 0)} × {vehicleCount} vehicle{vehicleCount === 1 ? '' : 's'}
+                {t('checkout.priceLine', {
+                  count: vehicleCount,
+                  price: (plan.pricePerVehicleInr ?? 0).toLocaleString('en-IN'),
+                })}
               </span>
               <span className="font-semibold text-white">
                 {monthlyTotal != null ? formatInr(monthlyTotal) : '—'}
-                <span className="text-gray-400 text-xs font-normal"> /mo</span>
+                <span className="text-gray-400 text-xs font-normal"> {t('checkout.perMonthSuffix')}</span>
               </span>
             </div>
 
             {billingCycle === 'annual' && annualSavings != null && annualSavings > 0 && (
               <div className="flex items-center justify-between text-xs text-green-400">
-                <span>Annual savings ({plan.annualDiscountPct}% off)</span>
+                <span>{t('checkout.annualSavingsLine', { pct: plan.annualDiscountPct })}</span>
                 <span className="font-semibold">− {formatInr(annualSavings)}</span>
               </div>
             )}
 
             <div className="flex items-center justify-between pt-2 border-t border-gray-800">
               <span className="text-sm font-semibold text-white">
-                {billingCycle === 'annual' ? 'Billed annually' : 'Billed monthly'}
+                {billingCycle === 'annual' ? t('checkout.billedAnnually') : t('checkout.billedMonthly')}
               </span>
               <div className="text-right">
                 <div className="text-lg font-bold text-white">
@@ -453,10 +467,10 @@ export default function PlanCheckoutModal({
                     ? (annualTotal  != null ? formatInr(annualTotal)  : '—')
                     : (monthlyTotal != null ? formatInr(monthlyTotal) : '—')}
                   <span className="text-gray-400 text-sm font-normal">
-                    {billingCycle === 'annual' ? ' /yr' : ' /mo'}
+                    {' '}{billingCycle === 'annual' ? t('checkout.perYearSuffix') : t('checkout.perMonthSuffix')}
                   </span>
                 </div>
-                <div className="text-[11px] text-gray-500">Plus GST where applicable</div>
+                <div className="text-[11px] text-gray-500">{t('checkout.gstFootnote')}</div>
               </div>
             </div>
           </div>
@@ -479,7 +493,7 @@ export default function PlanCheckoutModal({
             disabled={submitting}
             className="px-5 py-2.5 text-sm text-gray-400 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed transition-colors"
           >
-            Cancel
+            {t('checkout.cancelButton')}
           </button>
           <button
             onClick={handleContinue}
@@ -494,11 +508,11 @@ export default function PlanCheckoutModal({
             {submitting ? (
               <>
                 <Loader2 size={14} className="animate-spin" />
-                Opening checkout…
+                {t('checkout.continueButtonLoading')}
               </>
             ) : (
               <>
-                Continue to payment
+                {t('checkout.continueButton')}
                 <ArrowRight size={14} />
               </>
             )}
