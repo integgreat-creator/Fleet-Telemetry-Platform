@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useSubscription, type PlanName } from './useSubscription';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -68,7 +69,11 @@ const TRIAL_DEFAULT_PLAN: PlanName = 'essential';
 /// flags + copy. Pure (no side effects, no fetches) — re-renders only when
 /// the subscription state itself changes.
 export function useTrialBannerState(): TrialBannerState {
-  const sub = useSubscription();
+  const sub      = useSubscription();
+  // useTranslation makes this hook re-evaluate on language change — `t` is a
+  // stable function whose identity flips when i18n.language changes, which is
+  // exactly what we want for the useMemo to recompute message + ctaLabel.
+  const { t }    = useTranslation();
 
   return useMemo<TrialBannerState>(() => {
     // ── Suspended (payment failed) ────────────────────────────────────────
@@ -82,10 +87,8 @@ export function useTrialBannerState(): TrialBannerState {
         daysLeft:        null,
         hoursLeft:       null,
         pulse:           true,
-        message:
-          'Your last payment didn’t go through. Update your billing details to ' +
-          'restore full access — your data is safe in the meantime.',
-        ctaLabel:        'Update billing',
+        message:         t('trialBanner.suspendedMessage'),
+        ctaLabel:        t('trialBanner.ctaUpdateBilling'),
         recommendedPlan: null,
       };
     }
@@ -98,10 +101,8 @@ export function useTrialBannerState(): TrialBannerState {
         daysLeft:        null,
         hoursLeft:       null,
         pulse:           false,
-        message:
-          'Your subscription has expired and features are locked. ' +
-          'Pick a plan to restore access — your data is preserved.',
-        ctaLabel:        'Upgrade now',
+        message:         t('trialBanner.expiredMessage'),
+        ctaLabel:        t('trialBanner.ctaUpgradeNow'),
         recommendedPlan: null,
       };
     }
@@ -114,10 +115,8 @@ export function useTrialBannerState(): TrialBannerState {
         daysLeft:        null,
         hoursLeft:       null,
         pulse:           true,
-        message:
-          'Your subscription has expired. You have a 7-day grace period — ' +
-          'upgrade now to avoid losing access.',
-        ctaLabel:        'Upgrade now',
+        message:         t('trialBanner.graceMessage'),
+        ctaLabel:        t('trialBanner.ctaUpgradeNow'),
         recommendedPlan: null,
       };
     }
@@ -132,20 +131,18 @@ export function useTrialBannerState(): TrialBannerState {
 
       // Copy: prefer hour-level granularity in the last day. "Expires in 4
       // hours" reads more urgently than "expires today" and gives the
-      // customer real information.
+      // customer real information. i18next picks the right plural form
+      // (`_one` / `_other`) automatically based on the `count` arg using
+      // CLDR rules.
       let message: string;
       if (msLeft <= 0) {
-        message = 'Your free trial has expired. Upgrade to keep full access.';
+        message = t('trialBanner.trialMessageExpired');
       } else if (msLeft <= 3_600_000) {
-        message = 'Your free trial expires in less than an hour. Upgrade to keep full access.';
+        message = t('trialBanner.trialMessageMinutes');
       } else if (msLeft <= 86_400_000) {
-        message =
-          `Your free trial expires in ${hoursLeft} hour${hoursLeft === 1 ? '' : 's'}. ` +
-          `Upgrade to keep full access.`;
+        message = t('trialBanner.trialMessageHours', { count: hoursLeft });
       } else {
-        message =
-          `Your free trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. ` +
-          `Upgrade to keep full access.`;
+        message = t('trialBanner.trialMessageDays', { count: daysLeft });
       }
 
       return {
@@ -155,7 +152,9 @@ export function useTrialBannerState(): TrialBannerState {
         hoursLeft,
         pulse,
         message,
-        ctaLabel:        severity === 'critical' ? 'Upgrade now' : 'View plans',
+        ctaLabel:        severity === 'critical'
+          ? t('trialBanner.ctaUpgradeNow')
+          : t('trialBanner.ctaViewPlans'),
         recommendedPlan: TRIAL_DEFAULT_PLAN,
       };
     }
@@ -172,6 +171,7 @@ export function useTrialBannerState(): TrialBannerState {
       recommendedPlan: null,
     };
   }, [
+    t,
     sub.status,
     sub.isExpired,
     sub.isInGrace,
