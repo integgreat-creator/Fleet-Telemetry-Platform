@@ -24,10 +24,12 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
+import { usePendingCheckout } from '../hooks/usePendingCheckout';
 import { usePlanCatalog, type PlanCatalogEntry } from '../hooks/usePlanCatalog';
 import ApiAccessTab from '../components/ApiAccessTab';
 import PlanCheckoutModal, { type BillingDetails } from '../components/PlanCheckoutModal';
 import InvoicesPanel from '../components/InvoicesPanel';
+import TrialStatusCard from '../components/TrialStatusCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -484,6 +486,11 @@ export default function AdminPage() {
   // Live plan catalog from `plan_definitions` — single source of truth for
   // prices and minimum-vehicle floors shown on the pricing grid.
   const { plans: catalogPlans, loading: catalogLoading } = usePlanCatalog();
+
+  // Cross-page deep-link channel (Phase 1.4.2). When TrialBanner queues
+  // pendingPlan + navigates here, we consume the request below in a
+  // useEffect that runs once the catalog is loaded.
+  const pendingCheckout = usePendingCheckout();
 
   // Currently-open checkout modal (null = closed). Holds the full catalog
   // entry so the modal has prices, min_vehicles, and (later) Razorpay plan IDs.
@@ -1054,6 +1061,25 @@ export default function AdminPage() {
     loadBillingDetails();
   }, [fleetId, loadBillingDetails]);
 
+  // ── Consume pending checkout request (Phase 1.4.2) ────────────────────────
+  // TrialBanner sets pendingCheckout.pendingPlan and navigates here. We wait
+  // until the live plan catalog has loaded — opening the modal with a stale
+  // entry would silently use the wrong price. Once consumed, we clear the
+  // request so re-mounting AdminPage doesn't re-open the modal in a loop.
+  useEffect(() => {
+    if (catalogLoading)              return;
+    if (!pendingCheckout.pendingPlan) return;
+
+    const entry = catalogPlans.find(p => p.planName === pendingCheckout.pendingPlan);
+    if (entry) {
+      // Switch to the Subscription tab so the user can see their existing
+      // plan + pricing context behind the modal.
+      setActiveTab('subscription');
+      setCheckoutPlan(entry);
+    }
+    pendingCheckout.clear();
+  }, [catalogLoading, catalogPlans, pendingCheckout]);
+
   // ── Delete driver ───────────────────────────────────────────────────────────
 
   const handleDeleteDriver = async (driver: DriverAccount) => {
@@ -1334,6 +1360,12 @@ export default function AdminPage() {
 
           {!subLoading && !subError && (
             <>
+              {/* Trial / grace / suspended status card (Phase 1.4.3) — sits
+                  above the current-plan card so the most urgent state is the
+                  first thing the customer sees on this tab. Returns null when
+                  the customer is on a healthy paid plan. */}
+              <TrialStatusCard />
+
               {/* Current plan overview */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Current Plan</h2>

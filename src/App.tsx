@@ -4,6 +4,7 @@ import Auth from './components/Auth';
 import Layout from './components/Layout';
 import { realtimeService } from './services/realtimeService';
 import { SubscriptionProvider, useSubscription } from './hooks/useSubscription';
+import { PendingCheckoutProvider } from './hooks/usePendingCheckout';
 import FeatureGate from './components/FeatureGate';
 
 // ─── Lazy page imports ────────────────────────────────────────────────────────
@@ -311,9 +312,15 @@ function AppInner() {
 }
 
 function App() {
+  // Provider order matters: PendingCheckoutProvider has no dependencies on
+  // subscription state, but consumers (TrialBanner) read both — so any
+  // ordering works. Putting subscription outermost matches existing
+  // assumptions in components that read useSubscription before mount.
   return (
     <SubscriptionProvider>
-      <AppInner />
+      <PendingCheckoutProvider>
+        <AppInner />
+      </PendingCheckoutProvider>
     </SubscriptionProvider>
   );
 }
