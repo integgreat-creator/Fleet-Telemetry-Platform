@@ -24,7 +24,10 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
+import { usePlanCatalog, type PlanCatalogEntry } from '../hooks/usePlanCatalog';
 import ApiAccessTab from '../components/ApiAccessTab';
+import PlanCheckoutModal, { type BillingDetails } from '../components/PlanCheckoutModal';
+import InvoicesPanel from '../components/InvoicesPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -395,70 +398,101 @@ function WhatsAppNumberField({ fleetId }: { fleetId: string | null }) {
 }
 
 // ─── Plan Cards ───────────────────────────────────────────────────────────────
+//
+// Pricing and min_vehicles come from `plan_definitions` via `usePlanCatalog`.
+// Only the marketing copy (feature bullets, highlight flag) lives here.
 
-const PLAN_CARDS = [
-  {
-    plan: 'trial' as const,
-    label: 'Trial',
-    price: '₹0',
-    period: '30 days',
-    vehicles: '2 vehicles',
-    drivers: '3 drivers',
-    features: ['Live tracking', 'Basic alerts', 'Trip history', '7-day data'],
-    cta: null,
-    highlight: false,
+interface PlanCard {
+  plan:      Subscription['plan'];
+  label:     string;
+  price:     string;   // already-formatted, e.g. "₹300" or "Custom"
+  period:    string;   // e.g. "/vehicle/mo" or "30 days"
+  vehicles:  string;   // e.g. "From 5 vehicles"
+  drivers:   string;   // e.g. "Unlimited drivers"
+  features:  string[];
+  cta:       string | null;
+  highlight: boolean;
+}
+
+const TRIAL_CARD: PlanCard = {
+  plan:      'trial',
+  label:     'Trial',
+  price:     '₹0',
+  period:    '30 days',
+  vehicles:  '2 vehicles',
+  drivers:   '3 drivers',
+  features:  ['Live tracking', 'Basic alerts', 'Trip history', '7-day data'],
+  cta:       null,
+  highlight: false,
+};
+
+// Marketing copy per paid plan — keyed by plan_name. If a catalog entry comes
+// back with a plan_name not in this map, we fall back to a generic bullet set.
+const PLAN_COPY: Record<string, { features: string[]; highlight?: boolean }> = {
+  essential: {
+    features:  ['Live tracking', 'Fuel monitoring', 'Idle detection', 'Overspeed alerts'],
   },
-  {
-    plan: 'essential' as const,
-    label: 'Essential',
-    price: '₹299',
-    period: '/vehicle/mo',
-    vehicles: 'From 1 vehicle',
-    drivers: 'Unlimited drivers',
-    features: ['Live tracking', 'Fuel monitoring', 'Idle detection', 'Overspeed alerts'],
-    cta: 'Select Essential',
-    highlight: false,
-  },
-  {
-    plan: 'professional' as const,
-    label: 'Professional',
-    price: '₹499',
-    period: '/vehicle/mo',
-    vehicles: 'From 3 vehicles',
-    drivers: 'Unlimited drivers',
-    features: ['Everything in Essential', 'Driver behaviour', 'Maintenance alerts', 'Cost analytics', 'Multi-user'],
-    cta: 'Select Professional',
+  professional: {
+    features:  ['Everything in Essential', 'Driver behaviour', 'Maintenance alerts', 'Cost analytics', 'Multi-user'],
     highlight: true,
   },
-  {
-    plan: 'business' as const,
-    label: 'Business',
-    price: '₹799',
-    period: '/vehicle/mo',
-    vehicles: 'From 10 vehicles',
-    drivers: 'Unlimited drivers',
-    features: ['Everything in Professional', 'AI predictions', 'Fuel theft detection', 'API access', 'Custom reports', 'Priority support'],
-    cta: 'Select Business',
-    highlight: false,
+  business: {
+    features:  ['Everything in Professional', 'AI predictions', 'Fuel theft detection', 'API access', 'Custom reports', 'Priority support'],
   },
-  {
-    plan: 'enterprise' as const,
-    label: 'Enterprise',
-    price: 'Custom',
-    period: 'From 50 vehicles',
-    vehicles: 'Unlimited vehicles',
-    drivers: 'Unlimited drivers',
-    features: ['Everything in Business', 'Dedicated CSM', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
-    cta: 'Contact Sales',
-    highlight: false,
+  enterprise: {
+    features:  ['Everything in Business', 'Dedicated CSM', 'Custom integrations', 'SLA guarantee', 'On-premise option'],
   },
-];
+};
+
+function buildCardFromCatalog(p: PlanCatalogEntry): PlanCard {
+  const copy = PLAN_COPY[p.planName] ?? { features: [], highlight: false };
+
+  const vehicleLabel = p.minVehicles === 1
+    ? 'From 1 vehicle'
+    : `From ${p.minVehicles} vehicles`;
+
+  const isCustom = p.billingModel === 'custom' || p.pricePerVehicleInr == null;
+
+  return {
+    plan:      p.planName as Subscription['plan'],
+    label:     p.displayName,
+    price:     isCustom ? 'Custom' : `₹${p.pricePerVehicleInr}`,
+    period:    isCustom ? (p.minVehicles >= 50 ? `From ${p.minVehicles} vehicles` : '') : '/vehicle/mo',
+    vehicles:  isCustom ? 'Unlimited vehicles' : vehicleLabel,
+    drivers:   'Unlimited drivers',
+    features:  copy.features,
+    cta:       p.planName === 'enterprise' ? 'Contact Sales' : `Select ${p.displayName}`,
+    highlight: copy.highlight ?? false,
+  };
+}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const { feature, fleetId: subFleetId } = useSubscription();
+  // useSubscription is the app-wide source of truth for billing + fleet ids.
+  // We pull `fleetId` (renamed `subFleetId` here) as a fallback in case the
+  // local manager-by-id fetch misses (race / RLS hiccup), plus `vehiclesUsed`
+  // and `annualUnlockedAt` for the Phase 1.2 checkout flow.
+  const {
+    feature,
+    fleetId:          subFleetId,
+    vehiclesUsed,
+    annualUnlockedAt,
+  } = useSubscription();
   const hasApiAccess = feature('api_access') === 'full';
+
+  // Live plan catalog from `plan_definitions` — single source of truth for
+  // prices and minimum-vehicle floors shown on the pricing grid.
+  const { plans: catalogPlans, loading: catalogLoading } = usePlanCatalog();
+
+  // Currently-open checkout modal (null = closed). Holds the full catalog
+  // entry so the modal has prices, min_vehicles, and (later) Razorpay plan IDs.
+  const [checkoutPlan, setCheckoutPlan] = useState<PlanCatalogEntry | null>(null);
+
+  // Customer billing identity (GSTIN + address + state code), fetched once
+  // and refreshed after each save. Pre-fills the GSTIN form in the checkout
+  // modal so returning customers don't retype. Phase 1.3.1.
+  const [billingDetails, setBillingDetails] = useState<BillingDetails | null>(null);
 
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
@@ -545,10 +579,13 @@ export default function AdminPage() {
   // Fleet context
   // fleetId — set by fetchFleet; subFleetId is the authoritative fallback from
   // useSubscription which loads app-wide before any page renders.
-  const [fleetId,       setFleetId]       = useState<string | null>(null);
-  const [fleetName,     setFleetName]     = useState<string>('');
-  const [fleetJoinCode, setFleetJoinCode] = useState<string>('');
+  const [fleetId,        setFleetId]        = useState<string | null>(null);
+  const [fleetName,      setFleetName]      = useState<string>('');
+  const [fleetJoinCode,  setFleetJoinCode]  = useState<string>('');
   const [joinCodeCopied, setJoinCodeCopied] = useState(false);
+  // Captured at mount so the Enterprise WhatsApp prefill (Phase 1.2.5) doesn't
+  // have to do its own auth round-trip on click.
+  const [userEmail,      setUserEmail]      = useState<string | null>(null);
 
   // The first non-null source wins: local fetch → subscription context
   const effectiveFleetId = fleetId ?? subFleetId ?? null;
@@ -571,6 +608,9 @@ export default function AdminPage() {
     const fetchFleet = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      // Cache email up front so handleEnterpriseContact doesn't need its own
+      // auth round-trip when the user clicks "Contact Sales".
+      setUserEmail(user.email ?? null);
 
       // Primary: find by manager_id (most reliable for fleet managers)
       let data: { id: string; name: string | null; join_code: string | null } | null = null;
@@ -698,6 +738,64 @@ export default function AdminPage() {
       setDeleteError(e instanceof Error ? e.message : 'Fleet deletion failed');
       setDeleting(false);
     }
+  };
+
+  // ── Billing details (1.3.1) — fetched once per fleet, refreshed on save ───
+  // Drives both the GSTIN pre-fill in PlanCheckoutModal and the customer
+  // block on past invoices. Reads via admin-api so the route stays the only
+  // place enforcing the cross-field GSTIN/state-code consistency rule.
+  const loadBillingDetails = useCallback(async () => {
+    if (!fleetId) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) return;
+      const { data, error } = await supabase.functions.invoke(
+        'admin-api?action=billing-details',
+        { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (error) {
+        console.warn('[admin] billing-details load failed', error);
+        return;
+      }
+      setBillingDetails({
+        gstin:          (data?.gstin           as string | null) ?? null,
+        billingAddress: (data?.billing_address as string | null) ?? null,
+        stateCode:      (data?.state_code      as string | null) ?? null,
+      });
+    } catch (e) {
+      console.warn('[admin] billing-details load threw', e);
+    }
+  }, [fleetId]);
+
+  /// Persists customer GSTIN + billing address + state code via admin-api,
+  /// then refreshes local state so future PlanCheckoutModal opens pre-fill.
+  /// Errors are surfaced as thrown Errors — PlanCheckoutModal's handleContinue
+  /// catches them and shows the message inline without losing the user's input.
+  const handleSaveBillingDetails = async (details: BillingDetails) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) throw new Error('Please log in again to save billing details.');
+
+    const { error } = await supabase.functions.invoke('admin-api', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: {
+        action:           'update-billing-details',
+        gstin:            details.gstin,
+        billing_address:  details.billingAddress,
+        state_code:       details.stateCode,
+      },
+    });
+    if (error) {
+      let msg = error.message ?? 'Failed to save billing details';
+      try {
+        const errBody = await (error as unknown as { context?: { json?: () => Promise<{ error?: string }> } })
+          .context?.json?.();
+        msg = errBody?.error ?? msg;
+      } catch { /* fall back to error.message */ }
+      throw new Error(msg);
+    }
+    setBillingDetails(details);
   };
 
   // ── Load tab data when fleet or tab changes ─────────────────────────────────
@@ -948,6 +1046,14 @@ export default function AdminPage() {
     if (activeTab === 'thresholds')    initThresholds();
   }, [activeTab, effectiveFleetId, loadSubscription, loadDrivers, loadAuditLogs, loadDeviceHealth, loadFuelPrice, initThresholds]);
 
+  // Billing details are needed both inside the checkout modal (GSTIN
+  // pre-fill) and on the soon-to-arrive Invoices section, so we fetch them
+  // once per fleet rather than gating on activeTab.
+  useEffect(() => {
+    if (!fleetId) return;
+    loadBillingDetails();
+  }, [fleetId, loadBillingDetails]);
+
   // ── Delete driver ───────────────────────────────────────────────────────────
 
   const handleDeleteDriver = async (driver: DriverAccount) => {
@@ -978,14 +1084,182 @@ export default function AdminPage() {
     }
   };
 
+  // ── Enterprise contact-sales (1.2.5) ────────────────────────────────────────
+  // Opens https://wa.me/<number>?text=<message> in a new tab, with a payload
+  // that gives sales enough context to qualify and follow up:
+  //   - Fleet name + current vehicle count → enterprise threshold check
+  //   - Manager email                       → callback channel
+  //   - "via app" tag                       → distinguishes from cold inbound
+  //
+  // Falls back to the email path if VITE_SALES_WHATSAPP_NUMBER is unset, so
+  // dev environments and pre-launch tenants don't hit a broken link.
+  const handleEnterpriseContact = () => {
+    const rawNumber  = (import.meta.env.VITE_SALES_WHATSAPP_NUMBER ?? '').trim();
+    const salesEmail = 'sales@vehiclesense.in';
+
+    // Audit so we can measure enterprise-lead intent without instrumenting the
+    // landing page on the sales side. Best-effort — the redirect happens
+    // regardless of audit success.
+    if (fleetId) {
+      void supabase.from('audit_logs').insert({
+        fleet_id:      fleetId,
+        action:        'subscription.enterprise_contact_initiated',
+        resource_type: 'subscription',
+        new_values: {
+          channel:        rawNumber ? 'whatsapp' : 'email_fallback',
+          fleet_name:     fleetName,
+          vehicles_used:  vehiclesUsed,
+        },
+      });
+    }
+
+    if (!rawNumber) {
+      alert(
+        `Contact us at ${salesEmail} to upgrade to Enterprise.\n\n` +
+        `Please mention: ${fleetName || '(your fleet name)'} — ${vehiclesUsed} vehicles.`,
+      );
+      return;
+    }
+
+    // Strip everything except digits — wa.me wants country-code + number with
+    // no plus sign or punctuation.
+    const number = rawNumber.replace(/\D/g, '');
+
+    const lines = [
+      `Hi VehicleSense team,`,
+      ``,
+      `I'd like to discuss the Enterprise plan for our fleet:`,
+      `• Fleet: ${fleetName || '(name)'}`,
+      `• Vehicles in use: ${vehiclesUsed}`,
+      userEmail ? `• Contact email: ${userEmail}` : null,
+      ``,
+      `(Sent from the FTPGo app.)`,
+    ].filter(Boolean) as string[];
+    const url = `https://wa.me/${number}?text=${encodeURIComponent(lines.join('\n'))}`;
+
+    // Use noopener so the new tab can't navigate us back via window.opener.
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   // ── Upgrade CTA ─────────────────────────────────────────────────────────────
 
   const handleUpgrade = (plan: string) => {
+    // Enterprise → WhatsApp click-to-chat (Phase 1.2.5).
+    // Self-serve checkout doesn't apply: enterprise is custom-priced and the
+    // sales conversation needs to happen first. We deep-link to a wa.me URL
+    // pre-filled with the qualifying signals sales actually needs (fleet
+    // name, current vehicle count, manager email) so the rep doesn't have to
+    // open a discovery thread cold.
     if (plan === 'enterprise') {
-      alert('Contact us at sales@ftpgo.app to upgrade to Enterprise.');
-    } else {
-      alert(`Razorpay payment for ${plan} plan — contact sales@ftpgo.app or integrate Razorpay Checkout to proceed.`);
+      handleEnterpriseContact();
+      return;
     }
+    // Trial isn't purchasable — its CTA is null in the pricing grid, but guard
+    // here in case something else calls handleUpgrade with it.
+    if (plan === 'trial') return;
+
+    // Open the checkout modal with the matching catalog entry. If the plan
+    // isn't in the catalog (shouldn't happen — buttons only render for
+    // catalog rows), fall back to the legacy alert for visibility.
+    const entry = catalogPlans.find(p => p.planName === plan);
+    if (!entry) {
+      alert(`Plan "${plan}" is not available for online checkout. Contact support.`);
+      return;
+    }
+    setCheckoutPlan(entry);
+  };
+
+  // ── Razorpay checkout handoff (Phase 1.2.4) ───────────────────────────────
+  // Two-step flow:
+  //   1. Call razorpay-create-subscription edge fn → get subscription_id + key_id
+  //   2. Open window.Razorpay(...) → embedded checkout collects payment
+  // The webhook (razorpay-webhook) is what actually flips subscriptions.status
+  // to 'active' once Razorpay confirms the first charge — we never write that
+  // here, otherwise a card-failure on Razorpay's side would leave us claiming
+  // an active subscription that doesn't exist.
+  //
+  // Errors are thrown back to PlanCheckoutModal which surfaces them inline; on
+  // success we close the modal so the Razorpay overlay owns the screen.
+  const handleCheckoutContinue = async (
+    vehicleCount: number,
+    billingCycle: 'monthly' | 'annual',
+  ) => {
+    const p = checkoutPlan;
+    if (!p) return;
+
+    // ── Auth ────────────────────────────────────────────────────────────────
+    const { data: { session } } = await supabase.auth.getSession();
+    const accessToken = session?.access_token;
+    if (!accessToken) throw new Error('Please log in again to continue.');
+
+    // ── Create Razorpay subscription server-side ────────────────────────────
+    const { data, error } = await supabase.functions.invoke(
+      'razorpay-create-subscription',
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: {
+          plan:          p.planName,
+          vehicle_count: vehicleCount,
+          billing_cycle: billingCycle,
+        },
+      },
+    );
+
+    if (error) {
+      // Drill into the FunctionsHttpError to surface the server's friendly
+      // message (e.g. "Razorpay not configured" → 503 detail copy).
+      let msg = error.message ?? 'Failed to start checkout';
+      try {
+        const errBody = await (error as unknown as { context?: { json?: () => Promise<{ error?: string; detail?: string }> } })
+          .context?.json?.();
+        msg = errBody?.detail ?? errBody?.error ?? msg;
+      } catch { /* context not parseable — fall back to error.message */ }
+      throw new Error(msg);
+    }
+
+    const subscriptionId = data?.razorpay_subscription_id as string | undefined;
+    const keyId          = data?.key_id as string | undefined;
+    if (!subscriptionId || !keyId) {
+      throw new Error('Checkout response was missing subscription details.');
+    }
+
+    // ── Open embedded Razorpay Checkout ─────────────────────────────────────
+    if (typeof window === 'undefined' || !window.Razorpay) {
+      throw new Error(
+        'Payment SDK failed to load. Please refresh and try again.',
+      );
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const checkout = new window.Razorpay({
+      key:             keyId,
+      subscription_id: subscriptionId,
+      name:            'Fleet Telemetry Platform',
+      description:     `${p.displayName} plan · ${vehicleCount} vehicle${vehicleCount === 1 ? '' : 's'} · ${billingCycle}`,
+      currency:        'INR',
+      prefill: {
+        email: user?.email ?? undefined,
+        name:  (user?.user_metadata?.full_name as string | undefined) ?? undefined,
+      },
+      theme: { color: '#2563eb' },
+      modal: {
+        // If the customer dismisses without paying, just leave the upgrade
+        // modal closed — they can re-open from the pricing grid.
+        ondismiss: () => {
+          console.info('[checkout] Razorpay modal dismissed');
+        },
+      },
+      handler: response => {
+        // Razorpay will fire the webhook server-side; this handler runs
+        // client-side purely for UX. We refresh the subscription view so the
+        // newly-active plan shows up without a manual reload.
+        console.info('[checkout] Razorpay handler', response);
+        loadSubscription();
+      },
+    });
+    checkout.open();
+    // PlanCheckoutModal closes itself once this promise resolves — Razorpay's
+    // overlay is now in front, so we don't want our own modal stacked behind it.
   };
 
   // ── Unique audit actions for filter ────────────────────────────────────────
@@ -1134,7 +1408,19 @@ export default function AdminPage() {
               <div>
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Available Plans</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-                  {PLAN_CARDS.map(card => {
+                  {catalogLoading && (
+                    // Skeleton row while plan_definitions loads
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <div
+                        key={`skeleton-${i}`}
+                        className="bg-gray-900 border border-gray-800 rounded-xl p-5 animate-pulse h-64"
+                      />
+                    ))
+                  )}
+                  {!catalogLoading && [
+                    TRIAL_CARD,
+                    ...catalogPlans.map(buildCardFromCatalog),
+                  ].map(card => {
                     const isCurrent = subscription?.plan === card.plan;
                     return (
                       <div
@@ -1195,6 +1481,15 @@ export default function AdminPage() {
                   })}
                 </div>
               </div>
+
+              {/* ── Invoices (Phase 1.3.3) ──────────────────────────────── */}
+              {/* Lives inside the Subscription tab so customers don't need a
+                  whole new top-level tab for the (initially empty) invoice
+                  list. Hidden if the fleet has never been on a paid plan,
+                  to keep the trial-stage UI simple. */}
+              {subscription && subscription.status !== 'trial' && (
+                <InvoicesPanel />
+              )}
             </>
           )}
         </div>
@@ -1864,6 +2159,19 @@ export default function AdminPage() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Plan checkout modal (1.2.2 + 1.2.3 + 1.3.1) ─────────────────────── */}
+      {checkoutPlan && (
+        <PlanCheckoutModal
+          plan={checkoutPlan}
+          vehiclesUsed={vehiclesUsed}
+          annualUnlocked={annualUnlockedAt != null}
+          initialBilling={billingDetails ?? undefined}
+          onClose={() => setCheckoutPlan(null)}
+          onSaveBilling={handleSaveBillingDetails}
+          onContinue={handleCheckoutContinue}
+        />
       )}
     </div>
   );

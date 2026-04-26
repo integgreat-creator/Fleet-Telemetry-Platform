@@ -149,6 +149,26 @@ Deno.serve(async (req: Request) => {
       return json(data ?? []);
     }
 
+    // ── GET ?action=billing-details ──────────────────────────────────────────
+    // Returns the customer's billing identity (used to pre-fill the GSTIN
+    // form in PlanCheckoutModal and to render the customer block on past
+    // invoices). All fields nullable — B2C customers without a GSTIN are
+    // first-class citizens here.
+    if (action === 'billing-details') {
+      const { data, error: bdErr } = await adminClient
+        .from('fleets')
+        .select('name, gstin, billing_address, state_code')
+        .eq('id', fleet.id)
+        .single();
+      if (bdErr) return err(bdErr.message, 500);
+      return json({
+        name:             data.name,
+        gstin:            data.gstin            ?? null,
+        billing_address:  data.billing_address  ?? null,
+        state_code:       data.state_code       ?? null,
+      });
+    }
+
     return err(`Unknown GET action: ${action}`);
   }
 
@@ -279,6 +299,88 @@ Deno.serve(async (req: Request) => {
       });
 
       return json({ success: true, updated: updatePayload });
+    }
+
+    // ── POST { action: 'update-billing-details', gstin?, billing_address?, state_code? }
+    // Persists the customer's GST identity to `fleets`. Used by:
+    //   - PlanCheckoutModal "Add GSTIN for tax invoice" before launching Razorpay
+    //   - the Subscription tab's billing-details edit form (future)
+    //
+    // All three fields are optional. To clear a field, pass null explicitly
+    // (undefined leaves the existing value alone). Validation:
+    //   - gstin: exactly 15 chars, classic format regex (state + PAN + entity + 'Z' + checksum)
+    //   - state_code: 2 digits
+    //   - if both gstin and state_code are set, state_code must equal gstin's first 2 chars
+    if (action === 'update-billing-details') {
+      const hasGstin    = Object.prototype.hasOwnProperty.call(body, 'gstin');
+      const hasAddress  = Object.prototype.hasOwnProperty.call(body, 'billing_address');
+      const hasState    = Object.prototype.hasOwnProperty.call(body, 'state_code');
+
+      const gstin    = hasGstin   ? (body.gstin           as string | null) : undefined;
+      const address  = hasAddress ? (body.billing_address as string | null) : undefined;
+      const state    = hasState   ? (body.state_code      as string | null) : undefined;
+
+      // GSTIN format: 2-digit state + 5 alpha (PAN org) + 4 digit + 1 alpha (PAN check)
+      // + 1 digit (entity) + 1 alpha ('Z' for normal taxpayers) + 1 alphanumeric (checksum)
+      const gstinPattern = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9]{1}[A-Z]{1}[0-9A-Z]{1}$/;
+      if (gstin !== undefined && gstin !== null) {
+        const trimmed = gstin.toUpperCase().trim();
+        if (!gstinPattern.test(trimmed)) {
+          return err('Invalid GSTIN format. Expected 15-character GSTIN (e.g. 33ABCDE1234F1Z5).');
+        }
+      }
+
+      if (state !== undefined && state !== null && !/^[0-9]{2}$/.test(state)) {
+        return err('state_code must be a 2-digit GST state code (e.g. "33").');
+      }
+
+      // Cross-field consistency. We need the *resolved* values — if the
+      // caller didn't include a field, fall back to the row's current value.
+      const { data: current, error: curErr } = await adminClient
+        .from('fleets')
+        .select('gstin, billing_address, state_code')
+        .eq('id', fleet.id)
+        .single();
+      if (curErr) return err(curErr.message, 500);
+
+      const resolvedGstin = gstin !== undefined ? gstin : current.gstin;
+      const resolvedState = state !== undefined ? state : current.state_code;
+      if (resolvedGstin && resolvedState &&
+          resolvedGstin.substring(0, 2) !== resolvedState) {
+        return err('state_code must match the first 2 digits of GSTIN.');
+      }
+
+      const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (gstin   !== undefined) updatePayload.gstin           = gstin === null ? null : gstin.toUpperCase().trim();
+      if (address !== undefined) updatePayload.billing_address = address;
+      if (state   !== undefined) updatePayload.state_code      = state;
+
+      const { error: updErr } = await adminClient
+        .from('fleets')
+        .update(updatePayload)
+        .eq('id', fleet.id);
+      if (updErr) return err(updErr.message, 500);
+
+      await adminClient.from('audit_logs').insert({
+        fleet_id:      fleet.id,
+        user_id:       user.id,
+        action:        'fleet.billing_details_updated',
+        resource_type: 'fleet',
+        resource_id:   fleet.id,
+        old_values: {
+          gstin:           current.gstin,
+          billing_address: current.billing_address,
+          state_code:      current.state_code,
+        },
+        new_values: updatePayload,
+      });
+
+      return json({
+        success:         true,
+        gstin:           updatePayload.gstin           ?? current.gstin           ?? null,
+        billing_address: updatePayload.billing_address ?? current.billing_address ?? null,
+        state_code:      updatePayload.state_code      ?? current.state_code      ?? null,
+      });
     }
 
     // ── POST { action: 'log-action', resource_type, action_name, ... } ────────
