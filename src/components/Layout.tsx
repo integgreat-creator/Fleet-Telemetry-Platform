@@ -2,10 +2,11 @@ import { ReactNode } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
-  Settings, Bug, Map, MapPin, Lock, AlertCircle, Clock, FileText,
+  Settings, Bug, Map, MapPin, Lock, FileText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSubscription } from '../hooks/useSubscription';
+import TrialBanner from './TrialBanner';
 import type { Page } from '../App';
 
 interface LayoutProps {
@@ -49,19 +50,13 @@ const systemNavItems: Array<{ id: Page; label: string; icon: typeof Car }> = [
 ];
 
 export default function Layout({ children, currentPage, onNavigate }: LayoutProps) {
-  const { feature, trialDaysLeft, isExpired, isInGrace, planDisplayName, plan, status } =
+  const { feature, trialDaysLeft, planDisplayName, plan, status } =
     useSubscription();
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     window.location.reload();
   };
-
-  // ── Trial / expiry banner ──────────────────────────────────────────────────
-
-  const showTrialBanner   = status === 'trial' && trialDaysLeft !== null;
-  const showGraceBanner   = isInGrace;
-  const showExpiredBanner = isExpired && !isInGrace;
 
   // ── Nav item ───────────────────────────────────────────────────────────────
 
@@ -170,65 +165,11 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
       </aside>
 
       <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
-        {/* ── Banner area ───────────────────────────────────────────────────── */}
-
-        {showExpiredBanner && (
-          <div className="bg-red-900/80 border-b border-red-700 px-6 py-2.5 flex items-center gap-3 flex-shrink-0">
-            <AlertCircle className="w-4 h-4 text-red-300 flex-shrink-0" />
-            <p className="text-sm text-red-200 font-medium flex-1">
-              Your subscription has expired. Features are locked — please upgrade to restore access.
-            </p>
-            <button
-              onClick={() => onNavigate('admin')}
-              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
-            >
-              Upgrade Now
-            </button>
-          </div>
-        )}
-
-        {showGraceBanner && (
-          <div className="bg-orange-900/70 border-b border-orange-700 px-6 py-2.5 flex items-center gap-3 flex-shrink-0">
-            <AlertCircle className="w-4 h-4 text-orange-300 flex-shrink-0" />
-            <p className="text-sm text-orange-200 font-medium flex-1">
-              Your subscription has expired. You have a 7-day grace period — upgrade now to avoid losing access.
-            </p>
-            <button
-              onClick={() => onNavigate('admin')}
-              className="px-3 py-1 bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
-            >
-              Upgrade Now
-            </button>
-          </div>
-        )}
-
-        {showTrialBanner && !showGraceBanner && !showExpiredBanner && (
-          <div className={`border-b px-6 py-2 flex items-center gap-3 flex-shrink-0 ${
-            trialDaysLeft! <= 3
-              ? 'bg-red-900/40 border-red-800'
-              : trialDaysLeft! <= 7
-              ? 'bg-yellow-900/40 border-yellow-800'
-              : 'bg-gray-800/60 border-gray-700'
-          }`}>
-            <Clock className={`w-3.5 h-3.5 flex-shrink-0 ${
-              trialDaysLeft! <= 3 ? 'text-red-400' : trialDaysLeft! <= 7 ? 'text-yellow-400' : 'text-gray-400'
-            }`} />
-            <p className={`text-xs font-medium flex-1 ${
-              trialDaysLeft! <= 3 ? 'text-red-300' : trialDaysLeft! <= 7 ? 'text-yellow-300' : 'text-gray-400'
-            }`}>
-              {trialDaysLeft === 0
-                ? 'Your trial expires today.'
-                : `Your trial ends in ${trialDaysLeft} day${trialDaysLeft === 1 ? '' : 's'}.`}{' '}
-              Upgrade to keep full access.
-            </p>
-            <button
-              onClick={() => onNavigate('admin')}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors flex-shrink-0"
-            >
-              View Plans
-            </button>
-          </div>
-        )}
+        {/* ── Trial / grace / expired / suspended banner (Phase 1.4) ──────── */}
+        {/* All banner severity + copy logic lives in useTrialBannerState; this
+            component just routes the CTA back to AdminPage. Returns null
+            when there is nothing to say. */}
+        <TrialBanner onNavigateToAdmin={() => onNavigate('admin')} />
 
         {/* ── Page content ──────────────────────────────────────────────────── */}
         <main className="flex-1 overflow-y-auto">
