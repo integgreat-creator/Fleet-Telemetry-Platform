@@ -272,18 +272,22 @@ function PlanBadge({ plan }: { plan: Subscription['plan'] }) {
 // ─── Status Badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: Subscription['status'] }) {
-  const cfg: Record<Subscription['status'], { cls: string; icon: React.ReactNode }> = {
-    active:    { cls: 'bg-green-900 text-green-300',   icon: <CheckCircle size={11} /> },
-    trial:     { cls: 'bg-yellow-900 text-yellow-300', icon: <Clock size={11} /> },
-    suspended: { cls: 'bg-red-900 text-red-300',       icon: <XCircle size={11} /> },
-    inactive:  { cls: 'bg-gray-700 text-gray-400',     icon: <XCircle size={11} /> },
-    expired:   { cls: 'bg-orange-900 text-orange-300', icon: <AlertTriangle size={11} /> },
+  // Inline `useTranslation` so the badge re-renders on language switch. The
+  // `cfg` map keys stay English (they index by the canonical status enum
+  // value) — only the displayed label flips per locale.
+  const { t } = useTranslation();
+  const cfg: Record<Subscription['status'], { cls: string; icon: React.ReactNode; labelKey: string }> = {
+    active:    { cls: 'bg-green-900 text-green-300',   icon: <CheckCircle size={11} />,    labelKey: 'admin.subscription.statusActive' },
+    trial:     { cls: 'bg-yellow-900 text-yellow-300', icon: <Clock size={11} />,          labelKey: 'admin.subscription.statusTrial' },
+    suspended: { cls: 'bg-red-900 text-red-300',       icon: <XCircle size={11} />,        labelKey: 'admin.subscription.statusSuspended' },
+    inactive:  { cls: 'bg-gray-700 text-gray-400',     icon: <XCircle size={11} />,        labelKey: 'admin.subscription.statusInactive' },
+    expired:   { cls: 'bg-orange-900 text-orange-300', icon: <AlertTriangle size={11} />,  labelKey: 'admin.subscription.statusExpired' },
   };
-  const { cls, icon } = cfg[status] ?? cfg.inactive;
+  const { cls, icon, labelKey } = cfg[status] ?? cfg.inactive;
   return (
     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${cls}`}>
       {icon}
-      {status}
+      {t(labelKey)}
     </span>
   );
 }
@@ -1150,10 +1154,20 @@ export default function AdminPage() {
       });
     }
 
+    // Both message variants below render via the active i18n locale. When a
+    // Tamil-preferring customer clicks "Contact Sales", the WhatsApp message
+    // arrives at the sales rep already in Tamil — saves a back-and-forth on
+    // language preference.
+    const fleetForCopy = fleetName || t('enterpriseContact.fallbackFleetPlaceholder');
+
     if (!rawNumber) {
       alert(
-        `Contact us at ${salesEmail} to upgrade to Enterprise.\n\n` +
-        `Please mention: ${fleetName || '(your fleet name)'} — ${vehiclesUsed} vehicles.`,
+        t('enterpriseContact.fallbackAlertLine1', { email: salesEmail }) +
+        '\n\n' +
+        t('enterpriseContact.fallbackAlertLine2', {
+          fleet:    fleetForCopy,
+          vehicles: vehiclesUsed,
+        }),
       );
       return;
     }
@@ -1162,15 +1176,16 @@ export default function AdminPage() {
     // no plus sign or punctuation.
     const number = rawNumber.replace(/\D/g, '');
 
+    const namedFleet = fleetName || t('enterpriseContact.namePlaceholder');
     const lines = [
-      `Hi VehicleSense team,`,
-      ``,
-      `I'd like to discuss the Enterprise plan for our fleet:`,
-      `• Fleet: ${fleetName || '(name)'}`,
-      `• Vehicles in use: ${vehiclesUsed}`,
-      userEmail ? `• Contact email: ${userEmail}` : null,
-      ``,
-      `(Sent from the FTPGo app.)`,
+      t('enterpriseContact.messageGreeting'),
+      '',
+      t('enterpriseContact.messageIntro'),
+      t('enterpriseContact.messageFleetLine',    { fleet:    namedFleet }),
+      t('enterpriseContact.messageVehiclesLine', { vehicles: vehiclesUsed }),
+      userEmail ? t('enterpriseContact.messageEmailLine', { email: userEmail }) : null,
+      '',
+      t('enterpriseContact.messageFooter'),
     ].filter(Boolean) as string[];
     const url = `https://wa.me/${number}?text=${encodeURIComponent(lines.join('\n'))}`;
 
@@ -1309,13 +1324,13 @@ export default function AdminPage() {
   // ─── Tabs config ─────────────────────────────────────────────────────────────
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; locked?: boolean }[] = [
-    { id: 'subscription',  label: 'Subscription',  icon: <CreditCard size={15} /> },
-    { id: 'drivers',       label: 'Drivers',        icon: <Users size={15} /> },
-    { id: 'thresholds',    label: 'Thresholds',     icon: <Bell size={15} /> },
-    { id: 'audit',         label: 'Audit Log',      icon: <Shield size={15} /> },
-    { id: 'device-health', label: 'Device Health',  icon: <Settings size={15} /> },
-    { id: 'api-access',    label: 'API Access',     icon: <Key size={15} />, locked: !hasApiAccess },
-    { id: 'settings',      label: 'Settings',       icon: <Settings size={15} /> },
+    { id: 'subscription',  label: t('admin.tabSubscription'), icon: <CreditCard size={15} /> },
+    { id: 'drivers',       label: t('admin.tabDrivers'),       icon: <Users size={15} /> },
+    { id: 'thresholds',    label: t('admin.tabThresholds'),    icon: <Bell size={15} /> },
+    { id: 'audit',         label: t('admin.tabAuditLog'),      icon: <Shield size={15} /> },
+    { id: 'device-health', label: t('admin.tabDeviceHealth'),  icon: <Settings size={15} /> },
+    { id: 'api-access',    label: t('admin.tabApiAccess'),     icon: <Key size={15} />, locked: !hasApiAccess },
+    { id: 'settings',      label: t('admin.tabSettings'),      icon: <Settings size={15} /> },
   ];
 
   // ─── Render ───────────────────────────────────────────────────────────────────
@@ -1328,9 +1343,9 @@ export default function AdminPage() {
           <div className="p-2 rounded-lg bg-blue-500/20">
             <Settings className="text-blue-400" size={20} />
           </div>
-          <h1 className="text-2xl font-bold text-white">Fleet Admin</h1>
+          <h1 className="text-2xl font-bold text-white">{t('admin.pageHeading')}</h1>
         </div>
-        <p className="text-gray-400 text-sm ml-11">Manage your fleet subscription, drivers, and compliance.</p>
+        <p className="text-gray-400 text-sm ml-11">{t('admin.pageDescription')}</p>
       </div>
 
       {/* Tab bar */}
@@ -1379,7 +1394,7 @@ export default function AdminPage() {
 
               {/* Current plan overview */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Current Plan</h2>
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">{t('admin.subscription.currentPlanHeading')}</h2>
                 {subscription ? (
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center gap-3">
@@ -1387,14 +1402,14 @@ export default function AdminPage() {
                       <StatusBadge status={subscription.status} />
                       {subscription.trial_ends_at && subscription.status === 'trial' && (
                         <span className="text-xs text-yellow-400 flex items-center gap-1">
-                          <Clock size={12} /> Trial ends {relativeTime(subscription.trial_ends_at)}
+                          <Clock size={12} /> {t('admin.subscription.labelTrialEnds')} {relativeTime(subscription.trial_ends_at)}
                         </span>
                       )}
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                      <UsageBar current={vehicleCount} max={subscription.max_vehicles} label="Vehicles" />
-                      <UsageBar current={driverCount}  max={subscription.max_drivers}  label="Drivers" />
+                      <UsageBar current={vehicleCount} max={subscription.max_vehicles} label={t('admin.subscription.usageVehicles')} />
+                      <UsageBar current={driverCount}  max={subscription.max_drivers}  label={t('admin.subscription.usageDrivers')} />
                     </div>
 
                     {subscription.current_period_start && subscription.current_period_end && (
@@ -1449,7 +1464,7 @@ export default function AdminPage() {
 
               {/* Plan cards */}
               <div>
-                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">Available Plans</h2>
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">{t('admin.subscription.availablePlansHeading')}</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
                   {catalogLoading && (
                     // Skeleton row while plan_definitions loads
@@ -1478,13 +1493,13 @@ export default function AdminPage() {
                       >
                         {card.highlight && !isCurrent && (
                           <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2.5 py-0.5 bg-teal-600 text-white text-[10px] font-bold rounded-full uppercase tracking-wide">
-                            Popular
+                            {t('admin.subscription.labelPopular')}
                           </span>
                         )}
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-white">{card.label}</span>
                           {isCurrent && (
-                            <span className="text-xs text-blue-400 font-medium bg-blue-500/15 px-2 py-0.5 rounded-full">Current</span>
+                            <span className="text-xs text-blue-400 font-medium bg-blue-500/15 px-2 py-0.5 rounded-full">{t('admin.subscription.labelCurrent')}</span>
                           )}
                         </div>
                         <div className="flex items-baseline gap-1">
