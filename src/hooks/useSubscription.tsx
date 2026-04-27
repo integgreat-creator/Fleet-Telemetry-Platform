@@ -57,6 +57,12 @@ export interface SubscriptionState {
   // unloaded or on the in-app trial; set once Razorpay's first charge lands.
   currentPeriodEnd:  Date | null;
 
+  /// Razorpay-hosted subscription page (card-on-file management, billing
+  /// history, cancel). Populated by razorpay-webhook on activation. Phase
+  /// 1.6.3. null while in trial / dormant Razorpay mode — the renewal CTA
+  /// falls back to in-app navigation in that case.
+  razorpaySubscriptionShortUrl: string | null;
+
   // Feature access
   feature: (name: string) => FeatureLevel;
 
@@ -92,6 +98,7 @@ const DEFAULT_STATE: SubscriptionState = {
   gracePeriodEnd:  null,
   isExpired:       false,
   currentPeriodEnd: null,
+  razorpaySubscriptionShortUrl: null,
   isInGrace:       false,
   // While loading, default every feature to 'full' so pages render normally
   // and don't flash the upgrade prompt before data arrives.
@@ -211,6 +218,12 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           ? new Date(sub.current_period_end as string)
           : null;
 
+        // ── Razorpay-hosted subscription page (Phase 1.6.3) ───────────────────
+        // Used by the renewal-reminder banner CTA. null on trial / dormant
+        // Razorpay mode → CTA falls back to AdminPage navigation.
+        const razorpaySubscriptionShortUrl =
+          (sub.razorpay_subscription_short_url as string | null) ?? null;
+
         let trialDaysLeft: number | null = null;
         if (sub.status === 'trial' && trialEndsAt) {
           trialDaysLeft = Math.max(0, Math.ceil((trialEndsAt.getTime() - now.getTime()) / 86_400_000));
@@ -270,6 +283,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           isExpired,
           isInGrace,
           currentPeriodEnd,
+          razorpaySubscriptionShortUrl,
           feature,
           loading: false,
           refresh,
