@@ -9,6 +9,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, x-razorpay-signature',
 };
 
+// ─── Cashback (Phase 1.6.1) ──────────────────────────────────────────────────
+// First-paid-charge bonus: customer gets 10% of the charge back, capped at
+// ₹500, applied as a partial refund on their NEXT charge. The cap matters —
+// without it a 10-vehicle Business plan would bank ₹3,000 the first month,
+// which is too generous for the conversion-incentive math we're targeting.
+const CASHBACK_RATE_PCT       = 10;
+const CASHBACK_MAX_INR        = 500;
+const CASHBACK_EXPIRY_DAYS    = 90;
+const CASHBACK_REASON         = 'first_charge_cashback';
+
 // ─── GST invoice helpers (Phase 1.3.2) ──────────────────────────────────────
 // Single GST rate for B2B SaaS (HSN/SAC 998314). Split into 9% CGST + 9% SGST
 // for intra-state, or 18% IGST for inter-state. If you ever support multiple
@@ -222,6 +232,197 @@ async function issueInvoiceForCharge(
   console.info('[invoice] issued', { invoice_number: invNum, payment_id: paymentId, dormant: tax.dormant });
 }
 
+// ─── Cashback ledger (Phase 1.6.1) ──────────────────────────────────────────
+
+interface CreditRow {
+  id:            string;
+  amount_inr:    number;
+  expires_at:    string;
+}
+
+/// Razorpay partial-refund call. Used to redeem cashback credits against a
+/// successful charge. Returns the refund_id on success or throws.
+///
+/// Razorpay's refund endpoint accepts an `amount` in paise; if omitted, it
+/// refunds the full charge. We always pass an amount because we're issuing
+/// partial refunds, never full ones.
+async function razorpayPartialRefund(opts: {
+  paymentId:  string;
+  amountInr:  number;
+  notes:      Record<string, string>;
+}): Promise<string> {
+  const keyId     = Deno.env.get('RAZORPAY_KEY_ID');
+  const keySecret = Deno.env.get('RAZORPAY_KEY_SECRET');
+  if (!keyId || !keySecret) {
+    throw new Error('Razorpay credentials not configured — refund skipped');
+  }
+  const auth = btoa(`${keyId}:${keySecret}`);
+  const res  = await fetch(
+    `https://api.razorpay.com/v1/payments/${encodeURIComponent(opts.paymentId)}/refund`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type':  'application/json',
+      },
+      body: JSON.stringify({
+        amount: Math.round(opts.amountInr * 100),    // paise
+        notes:  opts.notes,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Razorpay refund failed (${res.status}): ${errBody}`);
+  }
+  const body = await res.json();
+  return body.id as string;
+}
+
+/// First-charge cashback grant. Idempotent — the unique partial index on
+/// `fleet_credits(fleet_id) WHERE reason='first_charge_cashback'` makes a
+/// duplicate INSERT a no-op via ON CONFLICT DO NOTHING. Best-effort: any
+/// failure is logged but doesn't roll back the subscription update.
+async function maybeGrantFirstChargeCashback(
+  supabase: SupabaseClient,
+  opts: {
+    fleetId:    string;
+    paymentId:  string;
+    amountInr:  number;
+  },
+): Promise<void> {
+  const cashbackInr = Math.min(
+    Math.round((opts.amountInr * CASHBACK_RATE_PCT) / 100 * 100) / 100,
+    CASHBACK_MAX_INR,
+  );
+  if (cashbackInr <= 0) return;
+
+  const expiresAt = new Date(Date.now() + CASHBACK_EXPIRY_DAYS * 86_400_000).toISOString();
+  const { error } = await supabase
+    .from('fleet_credits')
+    .insert({
+      fleet_id:           opts.fleetId,
+      amount_inr:         cashbackInr,
+      reason:             CASHBACK_REASON,
+      expires_at:         expiresAt,
+      source_payment_id:  opts.paymentId,
+      notes: {
+        rate_pct: CASHBACK_RATE_PCT,
+        cap_inr:  CASHBACK_MAX_INR,
+      },
+    });
+
+  // 23505 = unique_violation. Means the cashback was already granted for
+  // this fleet (e.g. webhook redelivery hit a different ordering window).
+  // That's the desired no-op.
+  if (error && error.code !== '23505') {
+    console.error('[cashback] grant failed', error, opts);
+    return;
+  }
+  if (!error) {
+    console.info('[cashback] granted', {
+      fleet_id:    opts.fleetId,
+      amount_inr:  cashbackInr,
+      expires_at:  expiresAt,
+    });
+  }
+}
+
+/// Walks unredeemed, unexpired credits for a fleet and applies them as
+/// partial refunds against the just-captured payment. Stops at the charge
+/// amount — we never refund more than the customer paid this cycle.
+///
+/// IMPORTANT: callers must NOT invoke this for the SAME charge that
+/// triggered a cashback grant. The grant happens on the first paid charge;
+/// redemption only fires on subsequent charges. Otherwise the customer
+/// would effectively pay nothing on month 1.
+async function maybeRedeemCredits(
+  supabase: SupabaseClient,
+  opts: {
+    fleetId:        string;
+    paymentId:      string;
+    chargeAmountInr: number;
+  },
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const { data: credits, error: selErr } = await supabase
+    .from('fleet_credits')
+    .select('id, amount_inr, expires_at')
+    .eq('fleet_id', opts.fleetId)
+    .is('redeemed_at', null)
+    .gte('expires_at', nowIso)
+    .order('granted_at', { ascending: true });
+
+  if (selErr) {
+    console.error('[cashback] select failed', selErr, opts);
+    return;
+  }
+  if (!credits || credits.length === 0) return;
+
+  let remainingChargeInr = opts.chargeAmountInr;
+
+  for (const credit of credits as CreditRow[]) {
+    if (remainingChargeInr <= 0) break;
+
+    const refundInr = Math.min(Number(credit.amount_inr), remainingChargeInr);
+    if (refundInr <= 0) continue;
+
+    let refundId: string;
+    try {
+      refundId = await razorpayPartialRefund({
+        paymentId:  opts.paymentId,
+        amountInr:  refundInr,
+        notes: {
+          fleet_id:   opts.fleetId,
+          credit_id:  credit.id,
+          source:     'fleet_credit_redemption',
+        },
+      });
+    } catch (e) {
+      // Refund call failed — credit stays unredeemed for the next cycle.
+      // Don't mark it consumed; we'd lose track of an obligation we
+      // haven't fulfilled.
+      console.error('[cashback] refund failed', e, { credit_id: credit.id });
+      continue;
+    }
+
+    const { error: updErr } = await supabase
+      .from('fleet_credits')
+      .update({
+        redeemed_at:           new Date().toISOString(),
+        redemption_payment_id: opts.paymentId,
+        redemption_refund_id:  refundId,
+      })
+      .eq('id', credit.id)
+      .is('redeemed_at', null);              // CAS guard against double-redeem under webhook redelivery
+
+    if (updErr) {
+      console.error('[cashback] mark-redeemed failed', updErr, { credit_id: credit.id, refundId });
+      // Refund already happened; the audit log row below is the recovery hook.
+    }
+
+    remainingChargeInr -= refundInr;
+    console.info('[cashback] redeemed', {
+      fleet_id:    opts.fleetId,
+      credit_id:   credit.id,
+      refund_id:   refundId,
+      amount_inr:  refundInr,
+    });
+
+    await supabase.from('audit_logs').insert({
+      fleet_id:      opts.fleetId,
+      action:        'cashback.redeemed',
+      resource_type: 'fleet_credit',
+      resource_id:   credit.id,
+      new_values: {
+        amount_inr:           refundInr,
+        razorpay_payment_id:  opts.paymentId,
+        razorpay_refund_id:   refundId,
+      },
+    });
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 200, headers: corsHeaders });
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -348,7 +549,7 @@ Deno.serve(async (req: Request) => {
           },
         });
 
-        // ── Issue a GST tax invoice (Phase 1.3.2) ─────────────────────────
+        // ── Issue a GST tax invoice (Phase 1.3.2) + cashback (Phase 1.6.1) ─
         // Only on subscription.charged: subscription.activated fires before
         // the first charge is captured (it covers free trials and pending
         // payments), so there's no payment to invoice yet. The webhook will
@@ -365,6 +566,27 @@ Deno.serve(async (req: Request) => {
               vehicleCount,
               pricePerVeh:    pricePerVehicle,
             });
+
+            // Cashback: redeem any unredeemed/unexpired credits FIRST
+            // (these were granted on prior charges), then grant the
+            // first-charge cashback. The order matters — without it, a
+            // first charge would both grant a credit AND immediately
+            // redeem it on the same payment, netting the customer to
+            // zero on month 1.
+            const paymentId       = paymentEntity.id     as string | undefined;
+            const chargeAmountInr = Number(paymentEntity.amount) / 100;
+            if (paymentId && Number.isFinite(chargeAmountInr) && chargeAmountInr > 0) {
+              await maybeRedeemCredits(supabase, {
+                fleetId,
+                paymentId,
+                chargeAmountInr,
+              });
+              await maybeGrantFirstChargeCashback(supabase, {
+                fleetId,
+                paymentId,
+                amountInr: chargeAmountInr,
+              });
+            }
           } else {
             console.warn('[invoice] subscription.charged with no payment entity', sub.id);
           }

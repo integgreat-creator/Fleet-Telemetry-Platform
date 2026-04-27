@@ -72,6 +72,10 @@
       "messageEmailLine": "• Contact email: {{email}}",
       "messageFooter": "(Sent from the FTPGo app.)"
     },
+    "cashback": {
+      "heading": "Cashback available",
+      "body": "Applied automatically as a refund on your next renewal charge. Expires {{date}}."
+    },
     "auth": {
       "appName": "FTPGo",
       "tagline": "Smart fleet management platform",
