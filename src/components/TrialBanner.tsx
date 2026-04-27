@@ -70,6 +70,14 @@ export default function TrialBanner({ onNavigateToAdmin }: Props) {
   const Icon   = iconForKind(state.kind);
 
   const handleCta = () => {
+    // External URL takes priority over in-app nav. Currently only used by
+    // `renewalReminder` to deep-link into Razorpay's hosted subscription
+    // page (Phase 1.6.3). noopener+noreferrer so the new tab can't reach
+    // back via window.opener.
+    if (state.ctaUrl) {
+      window.open(state.ctaUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     // Suspended state → send them to billing details, not the pricing grid.
     // (Until we have a dedicated /billing route, AdminPage is the one place
     // that exposes update-billing-details, so the navigation is the same.)

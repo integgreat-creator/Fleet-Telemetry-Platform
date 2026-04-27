@@ -46,6 +46,12 @@ export interface TrialBannerState {
   /// Plan to pre-select when the user clicks the CTA. Null when we
   /// have no opinion (e.g. expired beyond grace — let them choose).
   recommendedPlan: PlanName | null;
+  /// External URL to open when the customer clicks the CTA, in lieu of the
+  /// in-app navigation path. Currently used by `renewalReminder` to deep-link
+  /// to the Razorpay-hosted card-management page. Null for every other kind
+  /// (and for renewal reminder when Razorpay didn't return a short_url).
+  /// Phase 1.6.3.
+  ctaUrl:         string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -95,6 +101,7 @@ export function useTrialBannerState(): TrialBannerState {
         message:         t('trialBanner.suspendedMessage'),
         ctaLabel:        t('trialBanner.ctaUpdateBilling'),
         recommendedPlan: null,
+        ctaUrl:          null,
       };
     }
 
@@ -109,6 +116,7 @@ export function useTrialBannerState(): TrialBannerState {
         message:         t('trialBanner.expiredMessage'),
         ctaLabel:        t('trialBanner.ctaUpgradeNow'),
         recommendedPlan: null,
+        ctaUrl:          null,
       };
     }
 
@@ -123,6 +131,7 @@ export function useTrialBannerState(): TrialBannerState {
         message:         t('trialBanner.graceMessage'),
         ctaLabel:        t('trialBanner.ctaUpgradeNow'),
         recommendedPlan: null,
+        ctaUrl:          null,
       };
     }
 
@@ -161,6 +170,7 @@ export function useTrialBannerState(): TrialBannerState {
           ? t('trialBanner.ctaUpgradeNow')
           : t('trialBanner.ctaViewPlans'),
         recommendedPlan: TRIAL_DEFAULT_PLAN,
+        ctaUrl:          null,
       };
     }
 
@@ -189,6 +199,10 @@ export function useTrialBannerState(): TrialBannerState {
           message:         t('trialBanner.renewalReminderMessage', { count: daysLeft }),
           ctaLabel:        t('trialBanner.ctaManageBilling'),
           recommendedPlan: null,
+          // Razorpay-hosted card-on-file management. null when Razorpay
+          // hasn't surfaced a short_url yet (dormant mode, or pre-charge
+          // subscription) — TrialBanner falls back to in-app navigation.
+          ctaUrl:          sub.razorpaySubscriptionShortUrl,
         };
       }
     }
@@ -203,6 +217,7 @@ export function useTrialBannerState(): TrialBannerState {
       message:         '',
       ctaLabel:        '',
       recommendedPlan: null,
+      ctaUrl:          null,
     };
   }, [
     t,
@@ -212,5 +227,6 @@ export function useTrialBannerState(): TrialBannerState {
     sub.trialEndsAt,
     sub.billingCycle,
     sub.currentPeriodEnd,
+    sub.razorpaySubscriptionShortUrl,
   ]);
 }

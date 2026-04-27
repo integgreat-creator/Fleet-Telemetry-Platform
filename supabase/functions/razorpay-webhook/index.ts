@@ -515,6 +515,15 @@ Deno.serve(async (req: Request) => {
         if (pricePerVehicle !== null) upsertRow.price_per_vehicle_inr = pricePerVehicle;
         if (maxDrivers      !== null) upsertRow.max_drivers           = maxDrivers;
 
+        // Razorpay-hosted subscription page (Phase 1.6.3). Used by the renewal
+        // reminder banner CTA to deep-link the customer to card-management.
+        // Razorpay populates this on subscription create; we only WRITE if
+        // present so a missing field on a redelivered event doesn't blank a
+        // previously-stored URL.
+        if (typeof sub.short_url === 'string' && sub.short_url) {
+          upsertRow.razorpay_subscription_short_url = sub.short_url;
+        }
+
         // Unlock annual billing once customer completes 3 months on monthly.
         // Only SET the timestamp on charge events — never clear it.
         if (eventType === 'subscription.charged') {
