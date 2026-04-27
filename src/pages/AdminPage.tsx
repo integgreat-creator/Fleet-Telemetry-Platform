@@ -31,6 +31,7 @@ import ApiAccessTab from '../components/ApiAccessTab';
 import PlanCheckoutModal, { type BillingDetails } from '../components/PlanCheckoutModal';
 import InvoicesPanel from '../components/InvoicesPanel';
 import TrialStatusCard from '../components/TrialStatusCard';
+import CashbackCard from '../components/CashbackCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1391,6 +1392,12 @@ export default function AdminPage() {
                   first thing the customer sees on this tab. Returns null when
                   the customer is on a healthy paid plan. */}
               <TrialStatusCard />
+
+              {/* Cashback balance card (Phase 1.6.1) — also conditionally
+                  shown; renders only when there's an unredeemed credit on
+                  file. Sits with the trial card so anything financial is
+                  grouped at the top of the tab. */}
+              <CashbackCard fleetId={effectiveFleetId} />
 
               {/* Current plan overview */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
