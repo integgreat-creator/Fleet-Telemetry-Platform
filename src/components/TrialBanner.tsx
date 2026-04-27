@@ -33,11 +33,13 @@ const SEVERITY_STYLES: Record<TrialBannerSeverity, {
   },
 };
 
-/// Icon to show per banner kind. `suspended` gets the credit-card icon
-/// because the action is "fix billing", not a clock-style countdown.
+/// Icon to show per banner kind. `suspended` and `renewalReminder` get the
+/// credit-card icon because the action is "check your card on file"; trial
+/// gets the clock; the rest fall back to the alert circle.
 function iconForKind(kind: TrialBannerKind) {
-  if (kind === 'suspended')             return CreditCard;
-  if (kind === 'trial')                 return Clock;
+  if (kind === 'suspended')        return CreditCard;
+  if (kind === 'renewalReminder')  return CreditCard;
+  if (kind === 'trial')            return Clock;
   return AlertCircle;                                  // grace, expired
 }
 

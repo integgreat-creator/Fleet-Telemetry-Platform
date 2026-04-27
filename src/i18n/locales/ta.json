@@ -206,7 +206,10 @@
       "trialMessageDays_other": "Your free trial ends in {{count}} days. Upgrade to keep full access.",
       "ctaUpdateBilling": "Update billing",
       "ctaUpgradeNow": "Upgrade now",
-      "ctaViewPlans": "View plans"
+      "ctaViewPlans": "View plans",
+      "ctaManageBilling": "Manage billing",
+      "renewalReminderMessage_one": "Your annual subscription renews tomorrow. Make sure your payment method on file is up to date.",
+      "renewalReminderMessage_other": "Your annual subscription renews in {{count}} days. Make sure your payment method on file is up to date."
     },
     "trialCard": {
       "headingFreeTrial": "Free trial",

@@ -52,6 +52,11 @@ export interface SubscriptionState {
   isExpired:      boolean;
   isInGrace:      boolean;        // expired but within 7-day grace window
 
+  // Paid-subscription cycle
+  // Used by Phase 1.6.2 to compute "renew in N days" reminders. null while
+  // unloaded or on the in-app trial; set once Razorpay's first charge lands.
+  currentPeriodEnd:  Date | null;
+
   // Feature access
   feature: (name: string) => FeatureLevel;
 
@@ -86,6 +91,7 @@ const DEFAULT_STATE: SubscriptionState = {
   trialDaysLeft:   null,
   gracePeriodEnd:  null,
   isExpired:       false,
+  currentPeriodEnd: null,
   isInGrace:       false,
   // While loading, default every feature to 'full' so pages render normally
   // and don't flash the upgrade prompt before data arrives.
@@ -198,6 +204,13 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
         const isExpired      = sub.status === 'expired';
         const isInGrace      = isExpired && gracePeriodEnd != null && gracePeriodEnd > now;
 
+        // ── Paid-cycle timing (Phase 1.6.2) ───────────────────────────────────
+        // Set by razorpay-webhook on subscription.charged. Drives the renewal
+        // reminder banner that fires 14 / 7 / 1 days before the date.
+        const currentPeriodEnd = sub.current_period_end
+          ? new Date(sub.current_period_end as string)
+          : null;
+
         let trialDaysLeft: number | null = null;
         if (sub.status === 'trial' && trialEndsAt) {
           trialDaysLeft = Math.max(0, Math.ceil((trialEndsAt.getTime() - now.getTime()) / 86_400_000));
@@ -256,6 +269,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           gracePeriodEnd,
           isExpired,
           isInGrace,
+          currentPeriodEnd,
           feature,
           loading: false,
           refresh,
