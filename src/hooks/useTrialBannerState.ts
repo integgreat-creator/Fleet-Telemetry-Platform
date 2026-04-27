@@ -19,7 +19,12 @@ export type TrialBannerKind =
   /// from `expired` because the customer typically just needs to retry —
   /// not pick a new plan. Routing the upgrade CTA to "Update billing" is
   /// the caller's job (we just surface the state).
-  | 'suspended';
+  | 'suspended'
+  /// Active annual subscription with a renewal charge approaching. Fires
+  /// 14 / 7 / 1 days before `current_period_end`. Distinct from `trial`
+  /// because the customer is already paying — no upgrade decision, just
+  /// a "make sure your card on file is current" reminder. Phase 1.6.2.
+  | 'renewalReminder';
 
 export type TrialBannerSeverity = 'info' | 'warning' | 'critical';
 
@@ -159,6 +164,35 @@ export function useTrialBannerState(): TrialBannerState {
       };
     }
 
+    // ── Annual renewal reminder (Phase 1.6.2) ─────────────────────────────
+    // Active customer, billing cycle annual, current_period_end within 14 days.
+    // We deliberately skip monthly: monthly auto-charges happen 12× a year
+    // and a banner every 30 days is noise the customer would learn to
+    // ignore. Annual customers commit ~12× more money in one shot, so the
+    // "make sure your card is up to date" nudge has real value.
+    if (sub.status === 'active' && sub.billingCycle === 'annual' && sub.currentPeriodEnd) {
+      const msToRenewal = sub.currentPeriodEnd.getTime() - Date.now();
+      const daysLeft    = Math.ceil(msToRenewal / 86_400_000);
+
+      // Only fire once we're inside the 14-day window. Outside it,
+      // fall through to 'none' — customers don't need a "you renew in 60
+      // days" banner.
+      if (msToRenewal > 0 && daysLeft <= 14) {
+        const severity: TrialBannerSeverity =
+          daysLeft <= 1 ? 'critical' : daysLeft <= 7 ? 'warning' : 'info';
+        return {
+          kind:            'renewalReminder',
+          severity,
+          daysLeft,
+          hoursLeft:       null,
+          pulse:           daysLeft <= 1,
+          message:         t('trialBanner.renewalReminderMessage', { count: daysLeft }),
+          ctaLabel:        t('trialBanner.ctaManageBilling'),
+          recommendedPlan: null,
+        };
+      }
+    }
+
     // ── Default (active paid plan, or unloaded) ───────────────────────────
     return {
       kind:            'none',
@@ -176,5 +210,7 @@ export function useTrialBannerState(): TrialBannerState {
     sub.isExpired,
     sub.isInGrace,
     sub.trialEndsAt,
+    sub.billingCycle,
+    sub.currentPeriodEnd,
   ]);
 }
