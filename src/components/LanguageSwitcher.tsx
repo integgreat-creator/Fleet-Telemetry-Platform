@@ -32,7 +32,7 @@ export default function LanguageSwitcher() {
       <div className="flex items-center gap-2 mb-2 px-1">
         <Globe size={11} className="text-gray-500 flex-shrink-0" />
         <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-          Language
+          {t('layout.languageGroupLabel')}
         </span>
       </div>
       <div
