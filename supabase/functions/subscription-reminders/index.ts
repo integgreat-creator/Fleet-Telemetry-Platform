@@ -41,7 +41,16 @@ type ReminderKind =
   | 'trial_t_minus_1'
   | 'trial_expired'
   | 'renewal_t_minus_7'
-  | 'renewal_t_minus_1';
+  | 'renewal_t_minus_1'
+  /// Fired immediately by razorpay-webhook on payment.failed (Phase 1.7.2),
+  /// not by the cron. The hourly sweep skips this kind — there's no date
+  /// arithmetic that would make it eligible from a regular run.
+  | 'payment_suspended';
+
+/// Whitelist of kinds the body-driven one-shot path will accept. Lets
+/// razorpay-webhook fire payment_suspended without opening up the function
+/// to "send arbitrary kind to arbitrary fleet" abuse.
+const ALLOWED_ONE_SHOT_KINDS: ReadonlySet<string> = new Set(['payment_suspended']);
 
 interface FleetRow {
   id:               string;
@@ -191,6 +200,15 @@ function copyForReminder(kind: ReminderKind, fleetName: string): { subject: stri
           `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews ` +
           `tomorrow. If your payment method needs updating, please do so ` +
           `today to avoid interruption.\n\nManage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+      };
+    case 'payment_suspended':
+      return {
+        subject: `${fleetName}: payment failed — features locked`,
+        body:
+          `Hi,\n\nYour last FTPGo payment for ${fleetName} did not go ` +
+          `through and features have been temporarily locked. Update your ` +
+          `billing details to restore access — your data is safe in the ` +
+          `meantime.\n\nUpdate billing: ${upgradeUrl}\n\n— Team FTPGo`,
       };
   }
 }
@@ -438,10 +456,53 @@ async function runOneKind(
   return { kind, attempts: candidates.length, inserted };
 }
 
+// ─── One-shot mode (Phase 1.7.2) ────────────────────────────────────────────
+
+interface OneShotBody {
+  kind:         string;
+  fleet_id:     string;
+  cycle_anchor: string;
+}
+
+/// Single-fleet send. Used by razorpay-webhook on payment.failed — the cron
+/// can't fire payment_suspended on a regular sweep because there's no date
+/// arithmetic that would make it eligible. Looks up the fleet + manager
+/// email and delegates to sendAndRecord.
+async function handleOneShot(
+  supabase: SupabaseClient,
+  body:     OneShotBody,
+): Promise<{ ok: boolean; sent: boolean; error?: string }> {
+  // Whitelist gate — body-driven path only accepts a known set of kinds.
+  // Stops a misconfigured caller from spamming "Your trial expired" copy
+  // to a paying customer.
+  if (!ALLOWED_ONE_SHOT_KINDS.has(body.kind)) {
+    return { ok: false, sent: false, error: 'kind_not_allowed' };
+  }
+
+  const { data: fleet, error: fleetErr } = await supabase
+    .from('fleets')
+    .select('id, name, whatsapp_number, manager_id')
+    .eq('id', body.fleet_id)
+    .maybeSingle();
+  if (fleetErr || !fleet) {
+    return { ok: false, sent: false, error: 'fleet_not_found' };
+  }
+
+  const emails = await fetchManagerEmails(supabase, [fleet.manager_id]);
+  const sent   = await sendAndRecord(supabase, {
+    fleet:        fleet as FleetRow,
+    managerEmail: emails.get(fleet.manager_id) ?? null,
+    kind:         body.kind as ReminderKind,
+    cycleAnchor:  body.cycle_anchor,
+  });
+  return { ok: true, sent };
+}
+
 Deno.serve(async (req: Request) => {
-  // No auth check beyond the bearer the cron sends — Supabase's edge
-  // function runtime validates the Bearer against the project's anon key
-  // before the handler runs. POST-only to discourage accidental browser hits.
+  // No auth check beyond the bearer the cron / webhook sends — Supabase's
+  // edge function runtime validates the Bearer against the project's anon
+  // key before the handler runs. POST-only to discourage accidental browser
+  // hits.
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
@@ -450,8 +511,31 @@ Deno.serve(async (req: Request) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  // Run all five reminder kinds. Sequential, not parallel — total work is
-  // small (a handful of fleets per kind) and serial keeps the logs readable.
+  // Read the body once; empty body = cron mode, populated body = one-shot.
+  // Robust to a missing body (cron's net.http_post sends `'{}'::jsonb`).
+  let body: Partial<OneShotBody> = {};
+  try {
+    const raw = await req.text();
+    if (raw.trim()) body = JSON.parse(raw);
+  } catch {
+    return new Response(JSON.stringify({ ok: false, error: 'invalid_json' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // ── One-shot mode: fire a single reminder for a single fleet ──────────────
+  if (body.kind && body.fleet_id && body.cycle_anchor) {
+    const result = await handleOneShot(supabase, body as OneShotBody);
+    return new Response(JSON.stringify(result), {
+      status: result.ok ? 200 : 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // ── Cron mode: run all five scheduled kinds ───────────────────────────────
+  // Sequential, not parallel — total work is small (a handful of fleets per
+  // kind) and serial keeps the logs readable.
   const results: RunResult[] = [];
   results.push(await runOneKind(supabase, 'trial_t_minus_7',   7));
   results.push(await runOneKind(supabase, 'trial_t_minus_1',   1));

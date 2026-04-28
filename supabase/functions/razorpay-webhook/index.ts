@@ -625,6 +625,40 @@ Deno.serve(async (req: Request) => {
         await supabase.from('subscriptions')
           .update({ status: 'suspended', updated_at: new Date().toISOString() })
           .eq('fleet_id', fleetId);
+
+        // ── Out-of-app reminder (Phase 1.7.2) ─────────────────────────────
+        // Fire a one-shot WhatsApp/email message via the subscription-reminders
+        // function. The cron path can't deliver this — payment_suspended
+        // doesn't have a date the cron can sweep against — so we invoke
+        // directly with the failed payment's timestamp as the cycle_anchor.
+        // That timestamp guarantees idempotency under webhook redelivery
+        // (same payment_id → same created_at → same anchor → unique-violation
+        // no-op) while letting separate failures fire fresh reminders.
+        //
+        // Best-effort: any failure logs but doesn't block the response.
+        // The in-app banner from Phase 1.4 always surfaces suspended state
+        // visibly inside the dashboard, so a missed out-of-app reminder
+        // isn't a hard failure.
+        const cycleAnchor = payment.created_at
+          ? new Date((payment.created_at as number) * 1000).toISOString()
+          : new Date().toISOString();
+        try {
+          const { error: dispatchErr } = await supabase.functions.invoke(
+            'subscription-reminders',
+            {
+              body: {
+                kind:         'payment_suspended',
+                fleet_id:     fleetId,
+                cycle_anchor: cycleAnchor,
+              },
+            },
+          );
+          if (dispatchErr) {
+            console.error('[payment.failed] reminder dispatch failed', dispatchErr);
+          }
+        } catch (e) {
+          console.error('[payment.failed] reminder dispatch threw', e);
+        }
         break;
       }
       default:
