@@ -59,6 +59,12 @@ export default function Auth() {
                 email:      email.trim().toLowerCase(),
                 password,
                 fleet_name: fleetName.trim(),
+                // Phase 1.8.1 — capture the language the customer chose on
+                // the pre-login switcher (or that browser detection picked)
+                // so the freshly-created fleet row has preferred_language
+                // set from the start. Saves them having to re-toggle inside
+                // the dashboard to "lock in" their reminder language.
+                preferred_language: currentLang,
               }),
             }
           );
