@@ -52,11 +52,15 @@ type ReminderKind =
 /// to "send arbitrary kind to arbitrary fleet" abuse.
 const ALLOWED_ONE_SHOT_KINDS: ReadonlySet<string> = new Set(['payment_suspended']);
 
+type PreferredLanguage = 'en' | 'ta';
+
 interface FleetRow {
-  id:               string;
-  name:             string;
-  whatsapp_number:  string | null;
-  manager_id:       string;
+  id:                  string;
+  name:                string;
+  whatsapp_number:     string | null;
+  manager_id:          string;
+  /// null = no explicit preference → fall back to 'en'. Phase 1.8.
+  preferred_language:  PreferredLanguage | null;
 }
 
 interface SubscriptionRow {
@@ -153,64 +157,131 @@ async function sendEmail(opts: {
 }
 
 // ─── Message bodies ─────────────────────────────────────────────────────────
-// English-only at the function level. Localizing here would require
-// fleets.preferred_language (out of scope for v1.7.1 — ties into Phase 1.5
-// D14b which kept Tamil as English placeholders anyway). Operator can flip
-// these to Tamil once the customer pool warrants it.
+// Localized per fleets.preferred_language (Phase 1.8). The Tamil bundle
+// below ships English copy intentionally — same convention as the React
+// side's ta.json from Phase 1.5 D14(b). A native-Tamil reviewer translates
+// these strings in their own pass; flipping a single bundle to real Tamil
+// doesn't need a code change.
+//
+// Source of truth is `COPY_BUNDLES.en`. Adding a new ReminderKind means:
+//   1. Add the case in the en bundle.
+//   2. Mirror the same case in the ta bundle (English text is fine until
+//      translation lands).
 
-function copyForReminder(kind: ReminderKind, fleetName: string): { subject: string; body: string } {
+interface ReminderCopy {
+  subject: string;
+  body:    string;
+}
+type CopyBuilder = (fleetName: string, upgradeUrl: string) => ReminderCopy;
+
+const COPY_BUNDLES: Record<PreferredLanguage, Record<ReminderKind, CopyBuilder>> = {
+  en: {
+    trial_t_minus_7: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: 7 days left in your FTPGo free trial`,
+      body:
+        `Hi,\n\nYour FTPGo free trial for ${fleetName} ends in 7 days. ` +
+        `Pick a plan now to keep your data, drivers, and alerts running ` +
+        `without interruption.\n\nManage subscription: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    trial_t_minus_1: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: trial ends tomorrow`,
+      body:
+        `Hi,\n\nReminder — your FTPGo free trial for ${fleetName} ends ` +
+        `tomorrow. Activate a plan today to avoid losing access to your ` +
+        `fleet dashboard.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    trial_expired: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: trial expired — features locked`,
+      body:
+        `Hi,\n\nYour FTPGo free trial for ${fleetName} has expired and ` +
+        `features are now locked. Your data is preserved — pick a plan ` +
+        `to restore access.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    renewal_t_minus_7: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: annual subscription renews in 7 days`,
+      body:
+        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews in ` +
+        `7 days. Take a moment to confirm your card on file is current.\n\n` +
+        `Manage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    renewal_t_minus_1: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: annual subscription renews tomorrow`,
+      body:
+        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews ` +
+        `tomorrow. If your payment method needs updating, please do so ` +
+        `today to avoid interruption.\n\nManage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    payment_suspended: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: payment failed — features locked`,
+      body:
+        `Hi,\n\nYour last FTPGo payment for ${fleetName} did not go ` +
+        `through and features have been temporarily locked. Update your ` +
+        `billing details to restore access — your data is safe in the ` +
+        `meantime.\n\nUpdate billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+  },
+
+  // Tamil bundle — placeholder (English) text per Phase 1.5 D14(b).
+  // Native-Tamil reviewer translates these strings before launch. Until
+  // then, ta-preferring customers receive English copy, identical to the
+  // in-app behaviour where ta keys also resolve to English.
+  ta: {
+    trial_t_minus_7: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: 7 days left in your FTPGo free trial`,
+      body:
+        `Hi,\n\nYour FTPGo free trial for ${fleetName} ends in 7 days. ` +
+        `Pick a plan now to keep your data, drivers, and alerts running ` +
+        `without interruption.\n\nManage subscription: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    trial_t_minus_1: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: trial ends tomorrow`,
+      body:
+        `Hi,\n\nReminder — your FTPGo free trial for ${fleetName} ends ` +
+        `tomorrow. Activate a plan today to avoid losing access to your ` +
+        `fleet dashboard.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    trial_expired: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: trial expired — features locked`,
+      body:
+        `Hi,\n\nYour FTPGo free trial for ${fleetName} has expired and ` +
+        `features are now locked. Your data is preserved — pick a plan ` +
+        `to restore access.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    renewal_t_minus_7: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: annual subscription renews in 7 days`,
+      body:
+        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews in ` +
+        `7 days. Take a moment to confirm your card on file is current.\n\n` +
+        `Manage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    renewal_t_minus_1: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: annual subscription renews tomorrow`,
+      body:
+        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews ` +
+        `tomorrow. If your payment method needs updating, please do so ` +
+        `today to avoid interruption.\n\nManage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+    payment_suspended: (fleetName, upgradeUrl) => ({
+      subject: `${fleetName}: payment failed — features locked`,
+      body:
+        `Hi,\n\nYour last FTPGo payment for ${fleetName} did not go ` +
+        `through and features have been temporarily locked. Update your ` +
+        `billing details to restore access — your data is safe in the ` +
+        `meantime.\n\nUpdate billing: ${upgradeUrl}\n\n— Team FTPGo`,
+    }),
+  },
+};
+
+/// Picks the right copy bundle based on the fleet's preferred_language.
+/// Null preference falls back to English.
+function copyForReminder(
+  kind:     ReminderKind,
+  fleetName: string,
+  language:  PreferredLanguage | null,
+): ReminderCopy {
   const upgradeUrl = `${APP_URL}/admin`;
-  switch (kind) {
-    case 'trial_t_minus_7':
-      return {
-        subject: `${fleetName}: 7 days left in your FTPGo free trial`,
-        body:
-          `Hi,\n\nYour FTPGo free trial for ${fleetName} ends in 7 days. ` +
-          `Pick a plan now to keep your data, drivers, and alerts running ` +
-          `without interruption.\n\nManage subscription: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-    case 'trial_t_minus_1':
-      return {
-        subject: `${fleetName}: trial ends tomorrow`,
-        body:
-          `Hi,\n\nReminder — your FTPGo free trial for ${fleetName} ends ` +
-          `tomorrow. Activate a plan today to avoid losing access to your ` +
-          `fleet dashboard.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-    case 'trial_expired':
-      return {
-        subject: `${fleetName}: trial expired — features locked`,
-        body:
-          `Hi,\n\nYour FTPGo free trial for ${fleetName} has expired and ` +
-          `features are now locked. Your data is preserved — pick a plan ` +
-          `to restore access.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-    case 'renewal_t_minus_7':
-      return {
-        subject: `${fleetName}: annual subscription renews in 7 days`,
-        body:
-          `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews in ` +
-          `7 days. Take a moment to confirm your card on file is current.\n\n` +
-          `Manage billing: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-    case 'renewal_t_minus_1':
-      return {
-        subject: `${fleetName}: annual subscription renews tomorrow`,
-        body:
-          `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews ` +
-          `tomorrow. If your payment method needs updating, please do so ` +
-          `today to avoid interruption.\n\nManage billing: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-    case 'payment_suspended':
-      return {
-        subject: `${fleetName}: payment failed — features locked`,
-        body:
-          `Hi,\n\nYour last FTPGo payment for ${fleetName} did not go ` +
-          `through and features have been temporarily locked. Update your ` +
-          `billing details to restore access — your data is safe in the ` +
-          `meantime.\n\nUpdate billing: ${upgradeUrl}\n\n— Team FTPGo`,
-      };
-  }
+  const bundle     = COPY_BUNDLES[language ?? 'en'] ?? COPY_BUNDLES.en;
+  return bundle[kind](fleetName, upgradeUrl);
 }
 
 // Crude HTML escape for the Resend HTML body — we don't render user-typed
@@ -242,7 +313,11 @@ async function sendAndRecord(
     cycleAnchor:  string;
   },
 ): Promise<boolean> {
-  const copy = copyForReminder(opts.kind, opts.fleet.name);
+  const copy = copyForReminder(
+    opts.kind,
+    opts.fleet.name,
+    opts.fleet.preferred_language,
+  );
 
   // Decide channel.
   const useWhatsApp = !!opts.fleet.whatsapp_number && !!WHATSAPP_ACCESS_TOKEN && !!PHONE_NUMBER_ID;
@@ -336,7 +411,7 @@ async function eligibleTrialFleets(
   const fleetIds = subs.map(s => s.fleet_id);
   const { data: fleets, error: fleetErr } = await supabase
     .from('fleets')
-    .select('id, name, whatsapp_number, manager_id')
+    .select('id, name, whatsapp_number, manager_id, preferred_language')
     .in('id', fleetIds);
   if (fleetErr) {
     console.error('[reminder] fleets query failed', fleetErr);
@@ -371,7 +446,7 @@ async function eligibleRenewalFleets(
   const fleetIds = subs.map(s => s.fleet_id);
   const { data: fleets, error: fleetErr } = await supabase
     .from('fleets')
-    .select('id, name, whatsapp_number, manager_id')
+    .select('id, name, whatsapp_number, manager_id, preferred_language')
     .in('id', fleetIds);
   if (fleetErr) {
     console.error('[reminder] fleets query failed', fleetErr);
@@ -481,7 +556,7 @@ async function handleOneShot(
 
   const { data: fleet, error: fleetErr } = await supabase
     .from('fleets')
-    .select('id, name, whatsapp_number, manager_id')
+    .select('id, name, whatsapp_number, manager_id, preferred_language')
     .eq('id', body.fleet_id)
     .maybeSingle();
   if (fleetErr || !fleet) {
