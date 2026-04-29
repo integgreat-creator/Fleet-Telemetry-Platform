@@ -48,8 +48,13 @@ serve(async (req) => {
   if (req.method !== "POST") return err("Method not allowed", 405);
 
   let email: string, password: string, fleet_name: string;
+  // Optional. The Auth screen reads i18n.language at submit time and passes
+  // it through so first-time customers don't have to re-toggle the
+  // LanguageSwitcher post-login to "lock in" their reminder language.
+  // Phase 1.8.1.
+  let preferred_language: string | null | undefined;
   try {
-    ({ email, password, fleet_name } = await req.json());
+    ({ email, password, fleet_name, preferred_language } = await req.json());
   } catch {
     return err("Invalid JSON body");
   }
@@ -57,6 +62,17 @@ serve(async (req) => {
   if (!email || !password || !fleet_name) {
     return err("email, password, and fleet_name are required");
   }
+
+  // Whitelist the language value before it lands in the DB. Anything outside
+  // the supported set falls back to NULL (= "no opinion expressed", same as
+  // the existing-fleet default). Defensive against a malformed client header
+  // or a future locale we haven't added yet.
+  const SUPPORTED_LANGUAGES = ['en', 'ta'] as const;
+  const normalizedLanguage =
+    typeof preferred_language === 'string' &&
+    (SUPPORTED_LANGUAGES as readonly string[]).includes(preferred_language)
+      ? preferred_language
+      : null;
 
   // Service-role client — bypasses RLS for admin operations
   const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -74,9 +90,10 @@ serve(async (req) => {
     const { data: newFleet, error: fleetError } = await adminClient
       .from("fleets")
       .insert({
-        name:         fleet_name.trim(),
-        organization: fleet_name.trim(),
-        manager_id:   userId,
+        name:                fleet_name.trim(),
+        organization:        fleet_name.trim(),
+        manager_id:          userId,
+        preferred_language:  normalizedLanguage,
       })
       .select("id")
       .single();

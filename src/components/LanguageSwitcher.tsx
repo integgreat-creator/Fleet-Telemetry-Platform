@@ -1,6 +1,7 @@
 import { Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '../i18n';
+import { supabase } from '../lib/supabase';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -11,9 +12,12 @@ import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '../i18n';
 /// the other is muted — same idiom as the Monthly/Annual toggle in
 /// PlanCheckoutModal so customers don't learn a new pattern.
 ///
-/// Persistence: i18next-browser-languagedetector caches the choice in
-/// localStorage('i18nextLng') automatically. We don't need to do anything
-/// here beyond `i18n.changeLanguage()`.
+/// Persistence:
+///   1. i18next-browser-languagedetector caches the choice in
+///      localStorage('i18nextLng') automatically — drives the in-app UI.
+///   2. Phase 1.8 also writes the choice through to fleets.preferred_language
+///      via admin-api so server-side reminders (subscription-reminders) can
+///      send WhatsApp / email copy in the right language.
 export default function LanguageSwitcher() {
   const { i18n, t } = useTranslation();
 
@@ -22,9 +26,30 @@ export default function LanguageSwitcher() {
   const current: SupportedLanguage =
     SUPPORTED_LANGUAGES.find(l => i18n.language?.startsWith(l)) ?? 'en';
 
+  /// Best-effort write-through to fleets.preferred_language. We don't gate
+  /// the in-app language change on this — the user expects the click to
+  /// flip the UI immediately, and a flaky network shouldn't leave them
+  /// staring at the wrong language. localStorage stays the source of truth
+  /// for the client; the DB is purely for server-side reminder copy.
+  const persistToFleet = async (lng: SupportedLanguage) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) return;       // pre-login switcher — no fleet to update
+      await supabase.functions.invoke('admin-api', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body:    { action: 'update-language-preference', language: lng },
+      });
+    } catch (e) {
+      // Non-blocking. The next toggle (or signup-time backfill) will reconcile.
+      console.warn('[language] persist failed', e);
+    }
+  };
+
   const handleSelect = (lng: SupportedLanguage) => {
     if (lng === current) return;
     void i18n.changeLanguage(lng);
+    void persistToFleet(lng);
   };
 
   return (

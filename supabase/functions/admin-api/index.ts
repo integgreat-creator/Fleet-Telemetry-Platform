@@ -383,6 +383,63 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // ── POST { action: 'update-language-preference', language: 'en' | 'ta' }
+    // Persists the customer's language choice to fleets.preferred_language
+    // (Phase 1.8). Called by LanguageSwitcher on every toggle so server-side
+    // reminders (WhatsApp, email) localize to match the in-app preference.
+    //
+    // Pass `null` (or omit `language`) to clear — useful if we ever want a
+    // "follow browser" reset path. Validation:
+    //   - language must be 'en' | 'ta' | null. Any other value rejected.
+    if (action === 'update-language-preference') {
+      const SUPPORTED = ['en', 'ta'] as const;
+      const raw = body.language;
+
+      // Allow explicit null (clear preference) and the supported set.
+      const isClear   = raw === null;
+      const language  = typeof raw === 'string' ? raw.trim() : '';
+      const isValid   = isClear || (SUPPORTED as readonly string[]).includes(language);
+      if (!isValid) {
+        return err(`language must be one of: ${SUPPORTED.join(', ')}, or null to clear`);
+      }
+
+      const newValue = isClear ? null : language;
+
+      const { data: current } = await adminClient
+        .from('fleets')
+        .select('preferred_language')
+        .eq('id', fleet.id)
+        .single();
+
+      // No-op if the value isn't actually changing — saves a write + an
+      // audit row. The LanguageSwitcher fires on every click so this
+      // skips the noisy case of toggling back to the existing language.
+      if (current?.preferred_language === newValue) {
+        return json({ success: true, language: newValue, unchanged: true });
+      }
+
+      const { error: updErr } = await adminClient
+        .from('fleets')
+        .update({
+          preferred_language: newValue,
+          updated_at:         new Date().toISOString(),
+        })
+        .eq('id', fleet.id);
+      if (updErr) return err(updErr.message, 500);
+
+      await adminClient.from('audit_logs').insert({
+        fleet_id:      fleet.id,
+        user_id:       user.id,
+        action:        'fleet.language_preference_updated',
+        resource_type: 'fleet',
+        resource_id:   fleet.id,
+        old_values: { preferred_language: current?.preferred_language ?? null },
+        new_values: { preferred_language: newValue },
+      });
+
+      return json({ success: true, language: newValue });
+    }
+
     // ── POST { action: 'log-action', resource_type, action_name, ... } ────────
     if (action === 'log-action') {
       const resourceType = body.resource_type as string | undefined;
