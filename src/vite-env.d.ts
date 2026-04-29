@@ -13,6 +13,10 @@ interface ImportMetaEnv {
   /// "Contact Sales" CTA falls back to an email alert. See AdminPage
   /// handleEnterpriseContact (Phase 1.2.5).
   readonly VITE_SALES_WHATSAPP_NUMBER?: string;
+  /// Comma-separated list of operator email addresses. When the logged-in
+  /// user's email matches, the "Insights" link is shown in the sidebar.
+  /// Phase 2.1.
+  readonly VITE_OPERATOR_EMAILS?: string;
 }
 
 interface ImportMeta {
