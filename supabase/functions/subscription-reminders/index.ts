@@ -221,53 +221,61 @@ const COPY_BUNDLES: Record<PreferredLanguage, Record<ReminderKind, CopyBuilder>>
     }),
   },
 
-  // Tamil bundle — placeholder (English) text per Phase 1.5 D14(b).
-  // Native-Tamil reviewer translates these strings before launch. Until
-  // then, ta-preferring customers receive English copy, identical to the
-  // in-app behaviour where ta keys also resolve to English.
+  // Tamil bundle — AI-translated by Claude (Phase 1.9). Functional but not
+  // native-reviewed; flag awkward phrasing in PR review or hand to a native
+  // Tamil reviewer before customer launch. Conventions match ta.json:
+  // formal register (நீங்கள்), Western numerals + ₹, brand names (FTPGo,
+  // VehicleSense) and product terms (subscription, plan) kept anglicised
+  // where established TN B2B usage prefers it.
   ta: {
     trial_t_minus_7: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: 7 days left in your FTPGo free trial`,
+      subject: `${fleetName}: உங்கள் FTPGo இலவச சோதனையில் 7 நாட்கள் மீதம்`,
       body:
-        `Hi,\n\nYour FTPGo free trial for ${fleetName} ends in 7 days. ` +
-        `Pick a plan now to keep your data, drivers, and alerts running ` +
-        `without interruption.\n\nManage subscription: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\n${fleetName}-க்கான உங்கள் FTPGo இலவச சோதனை 7 நாட்களில் ` +
+        `முடிகிறது. உங்கள் தரவு, ஓட்டுநர்கள் மற்றும் எச்சரிக்கைகள் தடையின்றி ` +
+        `செயல்பட இப்போதே ஒரு திட்டத்தைத் தேர்ந்தெடுக்கவும்.\n\n` +
+        `சந்தாவை நிர்வகி: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
     trial_t_minus_1: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: trial ends tomorrow`,
+      subject: `${fleetName}: சோதனை நாளை முடிகிறது`,
       body:
-        `Hi,\n\nReminder — your FTPGo free trial for ${fleetName} ends ` +
-        `tomorrow. Activate a plan today to avoid losing access to your ` +
-        `fleet dashboard.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\nநினைவூட்டல் — ${fleetName}-க்கான உங்கள் FTPGo இலவச ` +
+        `சோதனை நாளை முடிகிறது. உங்கள் வாகனத் தொகுதி டாஷ்போர்டின் அணுகலை ` +
+        `இழக்காமல் இருக்க இன்றே ஒரு திட்டத்தை செயல்படுத்தவும்.\n\n` +
+        `இப்போதே மேம்படுத்து: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
     trial_expired: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: trial expired — features locked`,
+      subject: `${fleetName}: சோதனை காலாவதியானது — அம்சங்கள் பூட்டப்பட்டன`,
       body:
-        `Hi,\n\nYour FTPGo free trial for ${fleetName} has expired and ` +
-        `features are now locked. Your data is preserved — pick a plan ` +
-        `to restore access.\n\nUpgrade now: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\n${fleetName}-க்கான உங்கள் FTPGo இலவச சோதனை காலாவதியாகி, ` +
+        `அம்சங்கள் இப்போது பூட்டப்பட்டுள்ளன. உங்கள் தரவு பாதுகாக்கப்பட்டுள்ளது — ` +
+        `அணுகலை மீட்க ஒரு திட்டத்தைத் தேர்ந்தெடுக்கவும்.\n\n` +
+        `இப்போதே மேம்படுத்து: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
     renewal_t_minus_7: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: annual subscription renews in 7 days`,
+      subject: `${fleetName}: வருடாந்திர சந்தா 7 நாட்களில் புதுப்பிக்கப்படும்`,
       body:
-        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews in ` +
-        `7 days. Take a moment to confirm your card on file is current.\n\n` +
-        `Manage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\n${fleetName}-க்கான உங்கள் FTPGo வருடாந்திர சந்தா 7 ` +
+        `நாட்களில் புதுப்பிக்கப்படும். உங்கள் கோப்பில் உள்ள கார்டு தற்போதையதாக ` +
+        `உள்ளதா என்பதை உறுதி செய்ய ஒரு கணம் எடுங்கள்.\n\n` +
+        `கட்டணத்தை நிர்வகி: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
     renewal_t_minus_1: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: annual subscription renews tomorrow`,
+      subject: `${fleetName}: வருடாந்திர சந்தா நாளை புதுப்பிக்கப்படும்`,
       body:
-        `Hi,\n\nYour FTPGo annual subscription for ${fleetName} renews ` +
-        `tomorrow. If your payment method needs updating, please do so ` +
-        `today to avoid interruption.\n\nManage billing: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\n${fleetName}-க்கான உங்கள் FTPGo வருடாந்திர சந்தா நாளை ` +
+        `புதுப்பிக்கப்படும். உங்கள் கட்டண முறையை புதுப்பிக்க வேண்டியிருந்தால், ` +
+        `தடையைத் தவிர்க்க இன்றே செய்யவும்.\n\n` +
+        `கட்டணத்தை நிர்வகி: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
     payment_suspended: (fleetName, upgradeUrl) => ({
-      subject: `${fleetName}: payment failed — features locked`,
+      subject: `${fleetName}: கட்டணம் தோல்வியடைந்தது — அம்சங்கள் பூட்டப்பட்டன`,
       body:
-        `Hi,\n\nYour last FTPGo payment for ${fleetName} did not go ` +
-        `through and features have been temporarily locked. Update your ` +
-        `billing details to restore access — your data is safe in the ` +
-        `meantime.\n\nUpdate billing: ${upgradeUrl}\n\n— Team FTPGo`,
+        `வணக்கம்,\n\n${fleetName}-க்கான உங்கள் கடந்த FTPGo கட்டணம் ` +
+        `வெற்றிகரமாக செயலாக்கப்படவில்லை, மற்றும் அம்சங்கள் தற்காலிகமாக ` +
+        `பூட்டப்பட்டுள்ளன. அணுகலை மீட்க உங்கள் கட்டண விவரங்களை ` +
+        `புதுப்பிக்கவும் — இதற்கிடையில் உங்கள் தரவு பாதுகாப்பாக உள்ளது.\n\n` +
+        `கட்டணம் புதுப்பி: ${upgradeUrl}\n\n— FTPGo குழு`,
     }),
   },
 };
