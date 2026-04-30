@@ -28,6 +28,7 @@
       "navAnomalies": "Anomaly Feed",
       "navReports": "Reports",
       "navAdmin": "Admin",
+      "navInsights": "Insights",
       "navDebug": "Debug Tools",
       "logout": "Logout",
       "lockTooltip": "Upgrade to unlock {{label}}",
