@@ -1,8 +1,8 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import {
   Car, Activity, AlertTriangle, BarChart3, LogOut,
   Route, Fuel, Users, DollarSign, Wrench, Zap,
-  Settings, Bug, Map, MapPin, Lock, FileText,
+  Settings, Bug, Map, MapPin, Lock, FileText, TrendingUp,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
@@ -10,6 +10,18 @@ import { useSubscription } from '../hooks/useSubscription';
 import TrialBanner from './TrialBanner';
 import LanguageSwitcher from './LanguageSwitcher';
 import type { Page } from '../App';
+
+/// Comma-separated list of operator email addresses — when the logged-in
+/// user matches, the Insights nav item appears in the System group.
+/// Cosmetic gate only; the analytics-api endpoint is admin-secret-protected
+/// server-side, so a missing email check doesn't expose data.
+/// Phase 2.1.
+const OPERATOR_EMAILS: ReadonlySet<string> = new Set(
+  (import.meta.env.VITE_OPERATOR_EMAILS ?? '')
+    .split(',')
+    .map((s: string) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 interface LayoutProps {
   children: ReactNode;
@@ -65,6 +77,22 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
   const { t } = useTranslation();
   const { feature, trialDaysLeft, planDisplayName, plan, status } =
     useSubscription();
+
+  // Phase 2.1 — show the Insights nav item only when the logged-in user's
+  // email is in VITE_OPERATOR_EMAILS. Refreshes once on mount; the auth
+  // listener that already exists in App.tsx triggers a remount via state
+  // changes, so we don't need to subscribe here.
+  const [isOperator, setIsOperator] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (cancelled) return;
+      const email = user?.email?.toLowerCase() ?? '';
+      setIsOperator(!!email && OPERATOR_EMAILS.has(email));
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -158,10 +186,21 @@ export default function Layout({ children, currentPage, onNavigate }: LayoutProp
           </div>
           <div>
             <p className={`px-3 mb-2 text-[10px] font-semibold uppercase tracking-widest transition-colors ${
-              systemNavItems.some(i => i.id === currentPage) ? 'text-blue-400' : 'text-gray-500'
+              (systemNavItems.some(i => i.id === currentPage) || currentPage === 'insights')
+                ? 'text-blue-400' : 'text-gray-500'
             }`}>{t('layout.navGroupSystem')}</p>
             <div className="space-y-1">
               <NavItem item={systemNavItems[0]} />
+              {/* Operator-only Insights link. Hidden for non-operator
+                  users — the page itself is admin-secret-gated server-side
+                  so visibility here is purely UX. */}
+              {isOperator && (
+                <NavItem item={{
+                  id:       'insights',
+                  labelKey: 'layout.navInsights',
+                  icon:     TrendingUp,
+                }} />
+              )}
               <NavItem item={systemNavItems[1]} muted />
             </div>
           </div>

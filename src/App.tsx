@@ -27,6 +27,9 @@ const ReportsPage       = lazy(() => import('./pages/ReportsPage'));
 const DebugToolsPage    = lazy(() => import('./pages/DebugToolsPage'));
 const FleetMapPage      = lazy(() => import('./pages/FleetMapPage'));
 const GeofencesPage     = lazy(() => import('./pages/GeofencesPage'));
+// Operator-only — admin-secret gated server-side, hidden from the sidebar
+// for non-operator users (Phase 2.1).
+const InsightsPage      = lazy(() => import('./pages/InsightsPage'));
 
 // Shown while a lazy page chunk is downloading (first visit to that page only)
 function PageLoader() {
@@ -52,6 +55,7 @@ export type Page =
   | 'reports'
   | 'geofences'
   | 'admin'
+  | 'insights'
   | 'debug';
 
 function DriverBlockedScreen() {
@@ -302,8 +306,9 @@ function AppInner() {
 
             {currentPage === 'geofences' && <GeofencesPage />}
 
-            {currentPage === 'admin' && <AdminPage />}
-            {currentPage === 'debug' && <DebugToolsPage />}
+            {currentPage === 'admin'    && <AdminPage />}
+            {currentPage === 'insights' && <InsightsPage />}
+            {currentPage === 'debug'    && <DebugToolsPage />}
           </>
         )}
       </Suspense>
