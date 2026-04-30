@@ -13,14 +13,23 @@
  * Routes:
  *   GET ?action=summary
  *     {
+ *       // Phase 2.1 (#74)
  *       mrr_inr, arr_inr,                             // global topline
  *       paid_active_subs, trial_active_subs, total_subs,
- *       plan_distribution: [{plan, active_count, trial_count, mrr_inr}, ...],
- *       new_paid_subs_daily: [{day, new_paid_subs}, ...],   // 30 days, zero-filled
- *       generated_at: ISO timestamp
+ *       plan_distribution:    [{plan, active_count, trial_count, mrr_inr}, ...],
+ *       new_paid_subs_daily:  [{day, new_paid_subs}, ...],   // 30 days, zero-filled
+ *
+ *       // Phase 2.2 (this PR)
+ *       conversion_funnel:    [{plan, signed_up, trial_completed, paid_ever, paid_now}, ...],
+ *       paid_cohorts:         [{cohort_month, cohort_size, retained_now, retention_pct}, ...],
+ *       cashback_roi:         {granted_count, granted_inr, redeemed_count, redeemed_inr,
+ *                              expired_count, expired_inr, pending_count, pending_inr,
+ *                              redemption_pct},
+ *
+ *       generated_at:         ISO timestamp
  *     }
  *
- * Future routes (Phase 2.2): conversion funnel, churn cohorts, cashback ROI.
+ * Future (Phase 2.3): historical retention curves via a snapshots table.
  *
  * Environment:
  *   ADMIN_SECRET                            — operator-only auth secret
@@ -65,27 +74,37 @@ Deno.serve(async (req: Request) => {
 
   // ── GET ?action=summary ───────────────────────────────────────────────────
   if (action === 'summary') {
-    // Three views queried in parallel — they're independent and the round
-    // trip dominates the cost.
-    const [globalRes, planRes, dailyRes] = await Promise.all([
+    // Six views queried in parallel — independent reads, round trip dominates.
+    // Phase 2.1 added the first three; Phase 2.2 adds the funnel + cohorts +
+    // cashback. Folding them all into one response keeps the dashboard a
+    // single fetch.
+    const [
+      globalRes, planRes, dailyRes,
+      funnelRes, cohortsRes, cashbackRes,
+    ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
       supabase.from('analytics_new_paid_subs_daily').select('*'),
+      supabase.from('analytics_conversion_funnel').select('*'),
+      supabase.from('analytics_paid_cohorts').select('*'),
+      supabase.from('analytics_cashback_roi').select('*').single(),
     ]);
 
-    if (globalRes.error) return json({ error: globalRes.error.message }, 500);
-    if (planRes.error)   return json({ error: planRes.error.message },   500);
-    if (dailyRes.error)  return json({ error: dailyRes.error.message },  500);
+    if (globalRes.error)   return json({ error: globalRes.error.message },   500);
+    if (planRes.error)     return json({ error: planRes.error.message },     500);
+    if (dailyRes.error)    return json({ error: dailyRes.error.message },    500);
+    if (funnelRes.error)   return json({ error: funnelRes.error.message },   500);
+    if (cohortsRes.error)  return json({ error: cohortsRes.error.message },  500);
+    if (cashbackRes.error) return json({ error: cashbackRes.error.message }, 500);
 
     return json({
-      // Global topline.
+      // ── Global topline (Phase 2.1) ──────────────────────────────────────
       mrr_inr:           Number(globalRes.data?.mrr_inr           ?? 0),
       arr_inr:           Number(globalRes.data?.arr_inr           ?? 0),
       paid_active_subs:  Number(globalRes.data?.paid_active_subs  ?? 0),
       trial_active_subs: Number(globalRes.data?.trial_active_subs ?? 0),
       total_subs:        Number(globalRes.data?.total_subs        ?? 0),
 
-      // Per-plan breakdown.
       plan_distribution: (planRes.data ?? []).map(r => ({
         plan:         r.plan,
         active_count: Number(r.active_count ?? 0),
@@ -93,11 +112,45 @@ Deno.serve(async (req: Request) => {
         mrr_inr:      Number(r.mrr_inr      ?? 0),
       })),
 
-      // 30-day rolling series, zero-filled by the view.
       new_paid_subs_daily: (dailyRes.data ?? []).map(r => ({
         day:           r.day,
         new_paid_subs: Number(r.new_paid_subs ?? 0),
       })),
+
+      // ── Conversion funnel, last 90 days (Phase 2.2) ─────────────────────
+      // Includes a synthetic '__overall__' row plus per-plan rows. The
+      // dashboard splits on plan === '__overall__' to pull the topline.
+      conversion_funnel: (funnelRes.data ?? []).map(r => ({
+        plan:            r.plan,
+        signed_up:       Number(r.signed_up       ?? 0),
+        trial_completed: Number(r.trial_completed ?? 0),
+        paid_ever:       Number(r.paid_ever       ?? 0),
+        paid_now:        Number(r.paid_now        ?? 0),
+      })),
+
+      // ── Paid cohort retention, last 12 months (Phase 2.2) ──────────────
+      // Single retention point per cohort (not a curve — that needs daily
+      // snapshots, deferred to Phase 2.3). Sorted DESC by month so the
+      // table reads newest-first.
+      paid_cohorts: (cohortsRes.data ?? []).map(r => ({
+        cohort_month:   r.cohort_month,
+        cohort_size:    Number(r.cohort_size    ?? 0),
+        retained_now:   Number(r.retained_now   ?? 0),
+        retention_pct:  Number(r.retention_pct  ?? 0),
+      })),
+
+      // ── Cashback ROI (Phase 2.2) ────────────────────────────────────────
+      cashback_roi: {
+        granted_count:   Number(cashbackRes.data?.granted_count   ?? 0),
+        granted_inr:     Number(cashbackRes.data?.granted_inr     ?? 0),
+        redeemed_count:  Number(cashbackRes.data?.redeemed_count  ?? 0),
+        redeemed_inr:    Number(cashbackRes.data?.redeemed_inr    ?? 0),
+        expired_count:   Number(cashbackRes.data?.expired_count   ?? 0),
+        expired_inr:     Number(cashbackRes.data?.expired_inr     ?? 0),
+        pending_count:   Number(cashbackRes.data?.pending_count   ?? 0),
+        pending_inr:     Number(cashbackRes.data?.pending_inr     ?? 0),
+        redemption_pct:  Number(cashbackRes.data?.redemption_pct  ?? 0),
+      },
 
       // Stamp the response so the dashboard can show "as of X" — these
       // views are computed live, so it's effectively the wall-clock at
