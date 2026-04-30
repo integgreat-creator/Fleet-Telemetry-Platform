@@ -19,17 +19,19 @@
  *       plan_distribution:    [{plan, active_count, trial_count, mrr_inr}, ...],
  *       new_paid_subs_daily:  [{day, new_paid_subs}, ...],   // 30 days, zero-filled
  *
- *       // Phase 2.2 (this PR)
+ *       // Phase 2.2
  *       conversion_funnel:    [{plan, signed_up, trial_completed, paid_ever, paid_now}, ...],
  *       paid_cohorts:         [{cohort_month, cohort_size, retained_now, retention_pct}, ...],
  *       cashback_roi:         {granted_count, granted_inr, redeemed_count, redeemed_inr,
  *                              expired_count, expired_inr, pending_count, pending_inr,
  *                              redemption_pct},
  *
+ *       // Phase 2.3 (this PR)
+ *       cohort_retention_curves: [{cohort_month, offset_months, cohort_size,
+ *                                  active_count, retention_pct}, ...],
+ *
  *       generated_at:         ISO timestamp
  *     }
- *
- * Future (Phase 2.3): historical retention curves via a snapshots table.
  *
  * Environment:
  *   ADMIN_SECRET                            — operator-only auth secret
@@ -81,6 +83,7 @@ Deno.serve(async (req: Request) => {
     const [
       globalRes, planRes, dailyRes,
       funnelRes, cohortsRes, cashbackRes,
+      curvesRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -88,6 +91,7 @@ Deno.serve(async (req: Request) => {
       supabase.from('analytics_conversion_funnel').select('*'),
       supabase.from('analytics_paid_cohorts').select('*'),
       supabase.from('analytics_cashback_roi').select('*').single(),
+      supabase.from('analytics_cohort_retention_curves').select('*'),
     ]);
 
     if (globalRes.error)   return json({ error: globalRes.error.message },   500);
@@ -96,6 +100,7 @@ Deno.serve(async (req: Request) => {
     if (funnelRes.error)   return json({ error: funnelRes.error.message },   500);
     if (cohortsRes.error)  return json({ error: cohortsRes.error.message },  500);
     if (cashbackRes.error) return json({ error: cashbackRes.error.message }, 500);
+    if (curvesRes.error)   return json({ error: curvesRes.error.message },   500);
 
     return json({
       // ── Global topline (Phase 2.1) ──────────────────────────────────────
@@ -136,6 +141,19 @@ Deno.serve(async (req: Request) => {
         cohort_month:   r.cohort_month,
         cohort_size:    Number(r.cohort_size    ?? 0),
         retained_now:   Number(r.retained_now   ?? 0),
+        retention_pct:  Number(r.retention_pct  ?? 0),
+      })),
+
+      // ── Cohort retention curves (Phase 2.3) ─────────────────────────────
+      // Reads subscription_snapshots, so curves fill in over TIME — at the
+      // 2.3 migration's apply moment only M0 has data; each subsequent day
+      // adds one column of fidelity. The dashboard renders missing cells
+      // as empty rather than zero, so the operator sees the gap honestly.
+      cohort_retention_curves: (curvesRes.data ?? []).map(r => ({
+        cohort_month:   r.cohort_month,
+        offset_months:  Number(r.offset_months  ?? 0),
+        cohort_size:    Number(r.cohort_size    ?? 0),
+        active_count:   Number(r.active_count   ?? 0),
         retention_pct:  Number(r.retention_pct  ?? 0),
       })),
 
