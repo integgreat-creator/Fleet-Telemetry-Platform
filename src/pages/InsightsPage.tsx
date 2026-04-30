@@ -20,6 +20,33 @@ interface DailyRow {
   new_paid_subs: number;
 }
 
+interface FunnelRow {
+  plan:            string;     // '__overall__' for the topline aggregate
+  signed_up:       number;
+  trial_completed: number;
+  paid_ever:       number;
+  paid_now:        number;
+}
+
+interface CohortRow {
+  cohort_month:  string;       // YYYY-MM-DD (first of month)
+  cohort_size:   number;
+  retained_now:  number;
+  retention_pct: number;
+}
+
+interface CashbackRoi {
+  granted_count:   number;
+  granted_inr:     number;
+  redeemed_count:  number;
+  redeemed_inr:    number;
+  expired_count:   number;
+  expired_inr:     number;
+  pending_count:   number;
+  pending_inr:     number;
+  redemption_pct:  number;
+}
+
 interface SummaryResponse {
   mrr_inr:               number;
   arr_inr:               number;
@@ -28,6 +55,9 @@ interface SummaryResponse {
   total_subs:            number;
   plan_distribution:     PlanDistRow[];
   new_paid_subs_daily:   DailyRow[];
+  conversion_funnel:     FunnelRow[];
+  paid_cohorts:          CohortRow[];
+  cashback_roi:          CashbackRoi;
   generated_at:          string;
 }
 
@@ -52,6 +82,19 @@ function formatDayShort(iso: string): string {
   return new Date(iso).toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short',
   });
+}
+
+function formatMonthShort(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-IN', {
+    month: 'short', year: 'numeric',
+  });
+}
+
+/// "X% (numerator/denominator)" — used for inline funnel-stage labels.
+/// numerator can be 0; denominator must not be (callers guard).
+function formatPctOf(num: number, denom: number): string {
+  if (denom === 0) return '—';
+  return `${Math.round((num / denom) * 1000) / 10}%`;
 }
 
 // ─── API call ────────────────────────────────────────────────────────────────
@@ -327,6 +370,250 @@ function InsightsBody() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* ── Conversion funnel (Phase 2.2) ────────────────────────────────── */}
+      <ConversionFunnelSection rows={data.conversion_funnel} />
+
+      {/* ── Paid cohort retention (Phase 2.2) ────────────────────────────── */}
+      <CohortRetentionSection rows={data.paid_cohorts} />
+
+      {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
+      <CashbackRoiSection roi={data.cashback_roi} />
+    </div>
+  );
+}
+
+// ─── Conversion funnel section ──────────────────────────────────────────────
+
+/// Renders the topline 4-stage funnel as a horizontal bar series, plus a
+/// per-plan numbers table beneath. Splits the synthetic '__overall__' row
+/// from per-plan rows server-side so the chart never double-counts.
+function ConversionFunnelSection({ rows }: { rows: FunnelRow[] }) {
+  const overall  = rows.find(r => r.plan === '__overall__');
+  const perPlan  = rows.filter(r => r.plan !== '__overall__');
+
+  // Bar chart input — one bar per stage.
+  const stages = overall ? [
+    { stage: 'Signed up',       count: overall.signed_up },
+    { stage: 'Trial completed', count: overall.trial_completed },
+    { stage: 'Paid (ever)',     count: overall.paid_ever },
+    { stage: 'Active now',      count: overall.paid_now },
+  ] : [];
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Conversion funnel</h2>
+        <span className="text-xs text-gray-500">Last 90 days</span>
+      </div>
+
+      {!overall || overall.signed_up === 0 ? (
+        <p className="text-sm text-gray-500 text-center py-8">No signups in the last 90 days.</p>
+      ) : (
+        <>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={stages}
+                layout="vertical"
+                margin={{ top: 4, right: 16, bottom: 4, left: 24 }}
+              >
+                <CartesianGrid stroke="#1f2937" horizontal={false} />
+                <XAxis type="number" stroke="#6b7280" fontSize={11} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="stage"
+                  stroke="#9ca3af"
+                  fontSize={12}
+                  width={120}
+                />
+                <Tooltip
+                  cursor={{ fill: '#1f2937' }}
+                  contentStyle={{
+                    backgroundColor: '#0b0f19',
+                    border:          '1px solid #1f2937',
+                    borderRadius:    '0.5rem',
+                    fontSize:        12,
+                  }}
+                  formatter={(value: number) => [value, 'Fleets']}
+                />
+                {/* Funnel colour darkens slightly per stage as a visual cue
+                    that we're descending toward the conversion event — a
+                    proper funnel shape would need a custom shape, not worth
+                    the complexity at v1. */}
+                <Bar dataKey="count" fill="#3b82f6" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Per-plan numbers table — chart shows the topline shape; this
+              gives the plan-by-plan accuracy the chart can't. */}
+          {perPlan.length > 0 && (
+            <div className="mt-4 border-t border-gray-800 pt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-gray-500">
+                    <th className="py-1.5 font-medium">Plan</th>
+                    <th className="py-1.5 font-medium text-right">Signed up</th>
+                    <th className="py-1.5 font-medium text-right">Paid ever</th>
+                    <th className="py-1.5 font-medium text-right">Active now</th>
+                    <th className="py-1.5 font-medium text-right">Conv.</th>
+                  </tr>
+                </thead>
+                <tbody className="text-gray-300">
+                  {perPlan.map(row => (
+                    <tr key={row.plan} className="border-t border-gray-800/60">
+                      <td className="py-1.5 font-medium capitalize">{row.plan}</td>
+                      <td className="py-1.5 text-right tabular-nums">{row.signed_up}</td>
+                      <td className="py-1.5 text-right tabular-nums">{row.paid_ever}</td>
+                      <td className="py-1.5 text-right tabular-nums">{row.paid_now}</td>
+                      <td className="py-1.5 text-right tabular-nums text-blue-400">
+                        {formatPctOf(row.paid_ever, row.signed_up)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Cohort retention section ───────────────────────────────────────────────
+
+/// Single retention point per cohort (not a curve — that needs daily
+/// snapshots, deferred to Phase 2.3). Table because cohorts are best read
+/// as a list; a chart would over-promise on the data we actually have.
+function CohortRetentionSection({ rows }: { rows: CohortRow[] }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Paid cohort retention</h2>
+        <span className="text-xs text-gray-500">Last 12 months · single retention point per cohort</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="text-sm text-gray-500 text-center py-8">No paid cohorts yet.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-gray-500">
+                <th className="py-1.5 font-medium">Cohort (first paid charge)</th>
+                <th className="py-1.5 font-medium text-right">Cohort size</th>
+                <th className="py-1.5 font-medium text-right">Retained now</th>
+                <th className="py-1.5 font-medium text-right">Retention</th>
+              </tr>
+            </thead>
+            <tbody className="text-gray-300">
+              {rows.map(row => (
+                <tr key={row.cohort_month} className="border-t border-gray-800/60">
+                  <td className="py-1.5 font-medium">{formatMonthShort(row.cohort_month)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{row.cohort_size}</td>
+                  <td className="py-1.5 text-right tabular-nums">{row.retained_now}</td>
+                  <td className={`py-1.5 text-right tabular-nums ${
+                    row.retention_pct >= 80 ? 'text-green-400'
+                    : row.retention_pct >= 50 ? 'text-yellow-400'
+                    : 'text-red-400'
+                  }`}>
+                    {row.retention_pct}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="mt-3 text-[11px] text-gray-500 leading-relaxed">
+        Retention here is a single point: of cohort members at the time of
+        first charge, how many are still active today. Full retention curves
+        (M1/M2/M3 from cohort start) need a daily subscription_snapshots
+        table, deferred to Phase 2.3.
+      </p>
+    </div>
+  );
+}
+
+// ─── Cashback ROI section ───────────────────────────────────────────────────
+
+/// Tiles + a small breakdown for the cashback program. Redemption rate is
+/// INR-weighted (not count-weighted) because cashback amounts vary by plan
+/// — a count rate would treat a ₹30 grant the same as a ₹500 one.
+function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
+  const noActivity = roi.granted_count === 0;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Cashback ROI</h2>
+        <span className="text-xs text-gray-500">All-time, INR-weighted redemption</span>
+      </div>
+
+      {noActivity ? (
+        <p className="text-sm text-gray-500 text-center py-8">No cashback grants yet.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <Tile
+              label="Granted"
+              value={formatInrCompact(roi.granted_inr)}
+              hint={`${roi.granted_count} grants`}
+              accent="gray"
+            />
+            <Tile
+              label="Redeemed"
+              value={formatInrCompact(roi.redeemed_inr)}
+              hint={`${roi.redeemed_count} grants`}
+              accent="green"
+            />
+            <Tile
+              label="Pending"
+              value={formatInrCompact(roi.pending_inr)}
+              hint={`${roi.pending_count} grants`}
+              accent="blue"
+            />
+            <Tile
+              label="Expired"
+              value={formatInrCompact(roi.expired_inr)}
+              hint={`${roi.expired_count} grants`}
+              accent="gray"
+            />
+          </div>
+
+          {/* Redemption rate as a horizontal stacked bar. Visual cue beats
+              digits for "what fraction of granted INR actually got
+              redeemed". Three segments: redeemed (green), pending (blue),
+              expired (gray). */}
+          <div>
+            <div className="flex items-baseline justify-between mb-1.5">
+              <span className="text-xs text-gray-400">Redemption rate (INR-weighted)</span>
+              <span className="text-xs font-semibold text-white tabular-nums">{roi.redemption_pct}%</span>
+            </div>
+            <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+              {(() => {
+                const total = Math.max(1, roi.granted_inr);
+                const seg = (n: number) => `${Math.max(0, Math.min(100, (n / total) * 100))}%`;
+                return (
+                  <>
+                    <div className="bg-green-500" style={{ width: seg(roi.redeemed_inr) }} />
+                    <div className="bg-blue-500"  style={{ width: seg(roi.pending_inr)  }} />
+                    <div className="bg-gray-600"  style={{ width: seg(roi.expired_inr)  }} />
+                  </>
+                );
+              })()}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-gray-500">
+              <span><span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />Redeemed</span>
+              <span><span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1"  />Pending</span>
+              <span><span className="inline-block w-2 h-2 rounded-full bg-gray-600 mr-1"  />Expired</span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
