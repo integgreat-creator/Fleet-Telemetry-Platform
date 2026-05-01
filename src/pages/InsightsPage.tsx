@@ -28,13 +28,6 @@ interface FunnelRow {
   paid_now:        number;
 }
 
-interface CohortRow {
-  cohort_month:  string;       // YYYY-MM-DD (first of month)
-  cohort_size:   number;
-  retained_now:  number;
-  retention_pct: number;
-}
-
 /// One cell in the retention heatmap: cohort × month-offset.
 /// Phase 2.3.
 interface CurvePoint {
@@ -66,7 +59,6 @@ interface SummaryResponse {
   plan_distribution:     PlanDistRow[];
   new_paid_subs_daily:   DailyRow[];
   conversion_funnel:        FunnelRow[];
-  paid_cohorts:             CohortRow[];
   cashback_roi:             CashbackRoi;
   cohort_retention_curves:  CurvePoint[];
   generated_at:             string;

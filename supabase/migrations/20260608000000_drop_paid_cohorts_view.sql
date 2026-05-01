@@ -1,0 +1,25 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- Migration: drop analytics_paid_cohorts view (cleanup)
+-- ════════════════════════════════════════════════════════════════════════════
+--
+-- Phase 2.2 shipped `analytics_paid_cohorts` — a single-retention-point
+-- view (one row per cohort, "% still active today"). Phase 2.3 superseded
+-- it with `analytics_cohort_retention_curves`, which gives the same
+-- single-point answer as M11 of any sufficiently old cohort plus the full
+-- M0–M11 curve.
+--
+-- The dashboard has already migrated to the curves view. The old view stayed
+-- in the API response with a deprecation note for one PR cycle so any
+-- external consumer (psql sessions, ad-hoc scripts) had time to switch. We
+-- drop it now.
+--
+-- Companion change in this PR:
+--   - analytics-api removes `paid_cohorts` from the summary response.
+--   - InsightsPage drops the unused CohortRow interface + paid_cohorts field
+--     from SummaryResponse.
+--
+-- Depends on:
+--   - 20260606000000_analytics_funnel_cohorts_cashback.sql (created the view)
+-- ════════════════════════════════════════════════════════════════════════════
+
+DROP VIEW IF EXISTS analytics_paid_cohorts;
