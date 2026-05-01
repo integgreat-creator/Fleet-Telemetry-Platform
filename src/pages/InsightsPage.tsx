@@ -3,8 +3,9 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid,
 } from 'recharts';
-import { TrendingUp, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { TrendingUp, Loader2, AlertCircle, RefreshCw, Download } from 'lucide-react';
 import AdminSecretGate, { useAdminSecret } from '../components/AdminSecretGate';
+import { toCsv, downloadCsv, dateStampForCsv } from '../lib/csv';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,36 @@ function formatMonthShort(iso: string): string {
 function formatPctOf(num: number, denom: number): string {
   if (denom === 0) return '—';
   return `${Math.round((num / denom) * 1000) / 10}%`;
+}
+
+// ─── CSV export button ──────────────────────────────────────────────────────
+
+interface CsvButtonProps {
+  /// Pre-built CSV string. Computed lazily by the caller (small data —
+  /// no need for a builder thunk).
+  csv:      string;
+  filename: string;
+  /// Hide when the source data is empty so the operator doesn't get a
+  /// download with just a header row.
+  disabled?: boolean;
+}
+
+/// Small "Download CSV" button rendered next to dashboard table headings.
+/// Visually muted by default — the dashboard is a primary surface, the
+/// download is a secondary affordance for ops handing data to finance /
+/// putting in a deck. Phase 2.x cleanup.
+function CsvButton({ csv, filename, disabled }: CsvButtonProps) {
+  return (
+    <button
+      onClick={() => downloadCsv(filename, csv)}
+      disabled={disabled || csv.length === 0}
+      title={disabled || csv.length === 0 ? 'No data to export' : `Download ${filename}`}
+      className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed border border-gray-800 rounded-md hover:border-gray-700 transition-colors"
+    >
+      <Download size={11} />
+      CSV
+    </button>
+  );
 }
 
 // ─── API call ────────────────────────────────────────────────────────────────
@@ -262,9 +293,24 @@ function InsightsBody() {
 
       {/* Plan distribution */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <div className="flex items-baseline justify-between mb-4">
+        <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
           <h2 className="text-sm font-semibold text-white">Plan distribution</h2>
-          <span className="text-xs text-gray-500">Active subscriptions per plan</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">Active subscriptions per plan</span>
+            <CsvButton
+              csv={toCsv(
+                data.plan_distribution.map(r => ({
+                  plan:         r.plan,
+                  active_count: r.active_count,
+                  trial_count:  r.trial_count,
+                  mrr_inr:      r.mrr_inr,
+                })),
+                ['plan', 'active_count', 'trial_count', 'mrr_inr'],
+              )}
+              filename={`plan-distribution-${dateStampForCsv(data.generated_at)}.csv`}
+              disabled={data.plan_distribution.length === 0}
+            />
+          </div>
         </div>
         {data.plan_distribution.length === 0 ? (
           <p className="text-sm text-gray-500 text-center py-8">No plan data yet.</p>
@@ -375,7 +421,10 @@ function InsightsBody() {
       </div>
 
       {/* ── Conversion funnel (Phase 2.2) ────────────────────────────────── */}
-      <ConversionFunnelSection rows={data.conversion_funnel} />
+      <ConversionFunnelSection
+        rows={data.conversion_funnel}
+        generatedAt={data.generated_at}
+      />
 
       {/* ── Cohort retention heatmap (Phase 2.3) ─────────────────────────── */}
       {/* Replaces the Phase 2.2 single-point cohort table. The new view
@@ -383,7 +432,10 @@ function InsightsBody() {
           retention rather than just "active right now". Curves fill in
           over time — older cohorts have more columns populated, newer
           cohorts only have M0 for now. */}
-      <CohortHeatmapSection points={data.cohort_retention_curves} />
+      <CohortHeatmapSection
+        points={data.cohort_retention_curves}
+        generatedAt={data.generated_at}
+      />
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
@@ -396,7 +448,7 @@ function InsightsBody() {
 /// Renders the topline 4-stage funnel as a horizontal bar series, plus a
 /// per-plan numbers table beneath. Splits the synthetic '__overall__' row
 /// from per-plan rows server-side so the chart never double-counts.
-function ConversionFunnelSection({ rows }: { rows: FunnelRow[] }) {
+function ConversionFunnelSection({ rows, generatedAt }: { rows: FunnelRow[]; generatedAt: string }) {
   const overall  = rows.find(r => r.plan === '__overall__');
   const perPlan  = rows.filter(r => r.plan !== '__overall__');
 
@@ -408,11 +460,36 @@ function ConversionFunnelSection({ rows }: { rows: FunnelRow[] }) {
     { stage: 'Active now',      count: overall.paid_now },
   ] : [];
 
+  // Long-format CSV: one row per (plan, stage). The synthetic '__overall__'
+  // row is included verbatim so the export and the on-screen chart match
+  // exactly — a flat consumer of the CSV gets the topline by filtering for
+  // plan='__overall__'.
+  const funnelCsv = toCsv(
+    rows.map(r => ({
+      plan:            r.plan,
+      signed_up:       r.signed_up,
+      trial_completed: r.trial_completed,
+      paid_ever:       r.paid_ever,
+      paid_now:        r.paid_now,
+      conversion_pct:  r.signed_up > 0
+        ? Math.round((r.paid_ever / r.signed_up) * 1000) / 10
+        : 0,
+    })),
+    ['plan', 'signed_up', 'trial_completed', 'paid_ever', 'paid_now', 'conversion_pct'],
+  );
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <div className="flex items-baseline justify-between mb-4">
+      <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
         <h2 className="text-sm font-semibold text-white">Conversion funnel</h2>
-        <span className="text-xs text-gray-500">Last 90 days</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">Last 90 days</span>
+          <CsvButton
+            csv={funnelCsv}
+            filename={`conversion-funnel-${dateStampForCsv(generatedAt)}.csv`}
+            disabled={rows.length === 0}
+          />
+        </div>
       </div>
 
       {!overall || overall.signed_up === 0 ? (
@@ -510,7 +587,7 @@ function bucketColour(pct: number): string {
 /// missing cells (offset hasn't elapsed yet OR snapshots table is younger
 /// than the cohort + offset) render as a gray dash so the operator can see
 /// the data gap honestly.
-function CohortHeatmapSection({ points }: { points: CurvePoint[] }) {
+function CohortHeatmapSection({ points, generatedAt }: { points: CurvePoint[]; generatedAt: string }) {
   if (points.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -538,11 +615,36 @@ function CohortHeatmapSection({ points }: { points: CurvePoint[] }) {
 
   const offsets = Array.from({ length: 12 }, (_, i) => i);
 
+  // Wide-format CSV: one row per cohort with M0..M11 columns. Mirrors
+  // what the operator sees on screen — easier to drop into a deck or
+  // Excel pivot than the long format. Empty cells become empty strings,
+  // not '0', so the data gap is preserved on export.
+  const cohortCsv = toCsv(
+    cohortMonths.map(cm => {
+      const row: Record<string, unknown> = {
+        cohort: cm.slice(0, 7),               // YYYY-MM
+        size:   cohortSize.get(cm) ?? 0,
+      };
+      for (const o of offsets) {
+        const p = cell.get(`${cm}|${o}`);
+        row[`M${o}`] = p ? p.retention_pct : '';
+      }
+      return row;
+    }),
+    ['cohort', 'size', ...offsets.map(o => `M${o}`)],
+  );
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <div className="flex items-baseline justify-between mb-4">
+      <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
         <h2 className="text-sm font-semibold text-white">Paid cohort retention</h2>
-        <span className="text-xs text-gray-500">Last 12 months · M0–M11 from snapshots</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">Last 12 months · M0–M11 from snapshots</span>
+          <CsvButton
+            csv={cohortCsv}
+            filename={`cohort-retention-${dateStampForCsv(generatedAt)}.csv`}
+          />
+        </div>
       </div>
 
       <div className="overflow-x-auto">
