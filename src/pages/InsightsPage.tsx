@@ -35,6 +35,16 @@ interface CohortRow {
   retention_pct: number;
 }
 
+/// One cell in the retention heatmap: cohort × month-offset.
+/// Phase 2.3.
+interface CurvePoint {
+  cohort_month:   string;      // YYYY-MM-DD (first of cohort month)
+  offset_months:  number;      // 0..11
+  cohort_size:    number;
+  active_count:   number;
+  retention_pct:  number;
+}
+
 interface CashbackRoi {
   granted_count:   number;
   granted_inr:     number;
@@ -55,10 +65,11 @@ interface SummaryResponse {
   total_subs:            number;
   plan_distribution:     PlanDistRow[];
   new_paid_subs_daily:   DailyRow[];
-  conversion_funnel:     FunnelRow[];
-  paid_cohorts:          CohortRow[];
-  cashback_roi:          CashbackRoi;
-  generated_at:          string;
+  conversion_funnel:        FunnelRow[];
+  paid_cohorts:             CohortRow[];
+  cashback_roi:             CashbackRoi;
+  cohort_retention_curves:  CurvePoint[];
+  generated_at:             string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -374,8 +385,13 @@ function InsightsBody() {
       {/* ── Conversion funnel (Phase 2.2) ────────────────────────────────── */}
       <ConversionFunnelSection rows={data.conversion_funnel} />
 
-      {/* ── Paid cohort retention (Phase 2.2) ────────────────────────────── */}
-      <CohortRetentionSection rows={data.paid_cohorts} />
+      {/* ── Cohort retention heatmap (Phase 2.3) ─────────────────────────── */}
+      {/* Replaces the Phase 2.2 single-point cohort table. The new view
+          reads from subscription_snapshots so we get historical M0/M1/...
+          retention rather than just "active right now". Curves fill in
+          over time — older cohorts have more columns populated, newer
+          cohorts only have M0 for now. */}
+      <CohortHeatmapSection points={data.cohort_retention_curves} />
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
@@ -482,57 +498,121 @@ function ConversionFunnelSection({ rows }: { rows: FunnelRow[] }) {
   );
 }
 
-// ─── Cohort retention section ───────────────────────────────────────────────
+// ─── Cohort retention heatmap (Phase 2.3) ──────────────────────────────────
 
-/// Single retention point per cohort (not a curve — that needs daily
-/// snapshots, deferred to Phase 2.3). Table because cohorts are best read
-/// as a list; a chart would over-promise on the data we actually have.
-function CohortRetentionSection({ rows }: { rows: CohortRow[] }) {
+/// Bucket retention percentage into a tailwind background colour. Wide
+/// gradient because the eye reads "retention shape" by colour, not number —
+/// the operator scans down columns to spot a cohort that fell off a cliff
+/// at M3, vs sustained.
+function bucketColour(pct: number): string {
+  if (pct >= 95) return 'bg-emerald-500';
+  if (pct >= 80) return 'bg-emerald-600';
+  if (pct >= 65) return 'bg-yellow-600';
+  if (pct >= 50) return 'bg-orange-600';
+  if (pct >= 25) return 'bg-red-600';
+  return 'bg-red-700';
+}
+
+/// Cohort retention heatmap. Rows = cohort months (newest at top), columns
+/// = month-offset 0..11. Cells show retention % colour-coded by bucket;
+/// missing cells (offset hasn't elapsed yet OR snapshots table is younger
+/// than the cohort + offset) render as a gray dash so the operator can see
+/// the data gap honestly.
+function CohortHeatmapSection({ points }: { points: CurvePoint[] }) {
+  if (points.length === 0) {
+    return (
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+        <div className="flex items-baseline justify-between mb-4">
+          <h2 className="text-sm font-semibold text-white">Paid cohort retention</h2>
+          <span className="text-xs text-gray-500">Last 12 months · M0–M11 from snapshots</span>
+        </div>
+        <p className="text-sm text-gray-500 text-center py-8">No paid cohorts yet.</p>
+      </div>
+    );
+  }
+
+  // Reshape into a {cohortMonth: {offset: retention_pct, _size}} map for
+  // O(1) cell lookup during render.
+  const cohortMonths = Array.from(new Set(points.map(p => p.cohort_month)));
+  // Newest cohort first.
+  cohortMonths.sort((a, b) => b.localeCompare(a));
+
+  const cohortSize = new Map<string, number>();
+  const cell       = new Map<string, CurvePoint>();
+  for (const p of points) {
+    cohortSize.set(p.cohort_month, p.cohort_size);
+    cell.set(`${p.cohort_month}|${p.offset_months}`, p);
+  }
+
+  const offsets = Array.from({ length: 12 }, (_, i) => i);
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
       <div className="flex items-baseline justify-between mb-4">
         <h2 className="text-sm font-semibold text-white">Paid cohort retention</h2>
-        <span className="text-xs text-gray-500">Last 12 months · single retention point per cohort</span>
+        <span className="text-xs text-gray-500">Last 12 months · M0–M11 from snapshots</span>
       </div>
 
-      {rows.length === 0 ? (
-        <p className="text-sm text-gray-500 text-center py-8">No paid cohorts yet.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-gray-500">
-                <th className="py-1.5 font-medium">Cohort (first paid charge)</th>
-                <th className="py-1.5 font-medium text-right">Cohort size</th>
-                <th className="py-1.5 font-medium text-right">Retained now</th>
-                <th className="py-1.5 font-medium text-right">Retention</th>
-              </tr>
-            </thead>
-            <tbody className="text-gray-300">
-              {rows.map(row => (
-                <tr key={row.cohort_month} className="border-t border-gray-800/60">
-                  <td className="py-1.5 font-medium">{formatMonthShort(row.cohort_month)}</td>
-                  <td className="py-1.5 text-right tabular-nums">{row.cohort_size}</td>
-                  <td className="py-1.5 text-right tabular-nums">{row.retained_now}</td>
-                  <td className={`py-1.5 text-right tabular-nums ${
-                    row.retention_pct >= 80 ? 'text-green-400'
-                    : row.retention_pct >= 50 ? 'text-yellow-400'
-                    : 'text-red-400'
-                  }`}>
-                    {row.retention_pct}%
-                  </td>
-                </tr>
+      <div className="overflow-x-auto">
+        <table className="text-xs">
+          <thead>
+            <tr className="text-gray-500">
+              <th className="py-1.5 px-2 text-left font-medium sticky left-0 bg-gray-900 z-10">
+                Cohort
+              </th>
+              <th className="py-1.5 px-2 text-right font-medium">Size</th>
+              {offsets.map(o => (
+                <th key={o} className="py-1.5 px-2 text-center font-medium tabular-nums w-12">
+                  M{o}
+                </th>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </tr>
+          </thead>
+          <tbody>
+            {cohortMonths.map(cm => (
+              <tr key={cm}>
+                <td className="py-1 px-2 font-medium text-gray-300 sticky left-0 bg-gray-900 z-10 whitespace-nowrap">
+                  {formatMonthShort(cm)}
+                </td>
+                <td className="py-1 px-2 text-right tabular-nums text-gray-400">
+                  {cohortSize.get(cm)}
+                </td>
+                {offsets.map(o => {
+                  const p = cell.get(`${cm}|${o}`);
+                  if (!p) {
+                    // Cell not in the data — either the offset is in the
+                    // future or snapshots predate the cohort+offset point.
+                    return (
+                      <td key={o} className="py-1 px-1">
+                        <div className="h-7 rounded bg-gray-800/60 flex items-center justify-center text-gray-600">
+                          —
+                        </div>
+                      </td>
+                    );
+                  }
+                  return (
+                    <td key={o} className="py-1 px-1">
+                      <div
+                        className={`h-7 rounded flex items-center justify-center text-white font-semibold tabular-nums ${bucketColour(p.retention_pct)}`}
+                        title={`${p.active_count}/${p.cohort_size} retained`}
+                      >
+                        {p.retention_pct}%
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       <p className="mt-3 text-[11px] text-gray-500 leading-relaxed">
-        Retention here is a single point: of cohort members at the time of
-        first charge, how many are still active today. Full retention curves
-        (M1/M2/M3 from cohort start) need a daily subscription_snapshots
-        table, deferred to Phase 2.3.
+        Reads from the daily <code className="font-mono text-gray-400">subscription_snapshots</code> table.
+        Curves fill in over time — at first the snapshots-based view only
+        has M0; each subsequent day adds one column of fidelity to all live
+        cohorts. Empty cells mean either the offset hasn&rsquo;t elapsed yet,
+        or snapshots predate the cohort+offset point.
       </p>
     </div>
   );
