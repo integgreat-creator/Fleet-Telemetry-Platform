@@ -21,12 +21,11 @@
  *
  *       // Phase 2.2
  *       conversion_funnel:    [{plan, signed_up, trial_completed, paid_ever, paid_now}, ...],
- *       paid_cohorts:         [{cohort_month, cohort_size, retained_now, retention_pct}, ...],
  *       cashback_roi:         {granted_count, granted_inr, redeemed_count, redeemed_inr,
  *                              expired_count, expired_inr, pending_count, pending_inr,
  *                              redemption_pct},
  *
- *       // Phase 2.3 (this PR)
+ *       // Phase 2.3
  *       cohort_retention_curves: [{cohort_month, offset_months, cohort_size,
  *                                  active_count, retention_pct}, ...],
  *
@@ -82,14 +81,13 @@ Deno.serve(async (req: Request) => {
     // single fetch.
     const [
       globalRes, planRes, dailyRes,
-      funnelRes, cohortsRes, cashbackRes,
+      funnelRes, cashbackRes,
       curvesRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
       supabase.from('analytics_new_paid_subs_daily').select('*'),
       supabase.from('analytics_conversion_funnel').select('*'),
-      supabase.from('analytics_paid_cohorts').select('*'),
       supabase.from('analytics_cashback_roi').select('*').single(),
       supabase.from('analytics_cohort_retention_curves').select('*'),
     ]);
@@ -98,7 +96,6 @@ Deno.serve(async (req: Request) => {
     if (planRes.error)     return json({ error: planRes.error.message },     500);
     if (dailyRes.error)    return json({ error: dailyRes.error.message },    500);
     if (funnelRes.error)   return json({ error: funnelRes.error.message },   500);
-    if (cohortsRes.error)  return json({ error: cohortsRes.error.message },  500);
     if (cashbackRes.error) return json({ error: cashbackRes.error.message }, 500);
     if (curvesRes.error)   return json({ error: curvesRes.error.message },   500);
 
@@ -133,18 +130,10 @@ Deno.serve(async (req: Request) => {
         paid_now:        Number(r.paid_now        ?? 0),
       })),
 
-      // ── Paid cohort retention, last 12 months (Phase 2.2) ──────────────
-      // Single retention point per cohort (not a curve — that needs daily
-      // snapshots, deferred to Phase 2.3). Sorted DESC by month so the
-      // table reads newest-first.
-      paid_cohorts: (cohortsRes.data ?? []).map(r => ({
-        cohort_month:   r.cohort_month,
-        cohort_size:    Number(r.cohort_size    ?? 0),
-        retained_now:   Number(r.retained_now   ?? 0),
-        retention_pct:  Number(r.retention_pct  ?? 0),
-      })),
-
       // ── Cohort retention curves (Phase 2.3) ─────────────────────────────
+      // Replaces the Phase 2.2 single-point `paid_cohorts` field, which
+      // was dropped in cleanup migration 20260608000000 along with its
+      // backing view. Old consumers had one PR cycle of overlap.
       // Reads subscription_snapshots, so curves fill in over TIME — at the
       // 2.3 migration's apply moment only M0 has data; each subsequent day
       // adds one column of fidelity. The dashboard renders missing cells
