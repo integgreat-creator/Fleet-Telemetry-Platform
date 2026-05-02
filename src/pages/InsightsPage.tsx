@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid,
+  AreaChart, Area, Legend,
 } from 'recharts';
 import { TrendingUp, Loader2, AlertCircle, RefreshCw, Download } from 'lucide-react';
 import AdminSecretGate, { useAdminSecret } from '../components/AdminSecretGate';
@@ -27,6 +28,16 @@ interface MrrHistoryRow {
   mrr_inr:            number;
   paid_active_subs:   number;
   trial_active_subs:  number;
+}
+
+/// One day × plan slice of the MRR history. Phase 2.5. Long format on
+/// the wire; the dashboard pivots wide for the stacked area chart so the
+/// plan list stays dynamic.
+interface MrrByPlanRow {
+  day:               string;      // YYYY-MM-DD
+  plan:              string;
+  mrr_inr:           number;
+  paid_active_subs:  number;
 }
 
 interface FunnelRow {
@@ -82,6 +93,10 @@ interface SummaryResponse {
   /// from cohort_data_materialized_at — the two MVs refresh on different
   /// crons (00:30 and 00:35 UTC).
   mrr_history_materialized_at: string | null;
+  /// Phase 2.5 — per-plan daily MRR slices for the stacked area chart.
+  /// Long format; the dashboard pivots wide.
+  mrr_history_by_plan:         MrrByPlanRow[];
+  mrr_history_by_plan_materialized_at: string | null;
   generated_at:                string;
 }
 
@@ -316,6 +331,13 @@ function InsightsBody() {
         rows={data.mrr_history}
         generatedAt={data.generated_at}
         materializedAt={data.mrr_history_materialized_at}
+      />
+
+      {/* ── MRR composition over time (Phase 2.5) ─────────────────────── */}
+      <MrrCompositionSection
+        rows={data.mrr_history_by_plan}
+        generatedAt={data.generated_at}
+        materializedAt={data.mrr_history_by_plan_materialized_at}
       />
 
       {/* Plan distribution */}
@@ -587,6 +609,182 @@ function MrrHistorySection({
                 activeDot={{ r: 4 }}
               />
             </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MRR composition over time section (Phase 2.5) ──────────────────────────
+
+/// Per-plan colour bands for the stacked area chart. Mirrors the pricing-grid
+/// + StatusBadge palette from AdminPage so an operator scanning the chart
+/// reads "blue = essential" with no key-lookup gymnastics. Falls back to a
+/// neutral gray for unrecognised plan names (legacy rows, future plans
+/// added before the dashboard learns about them).
+const PLAN_COLOUR: Record<string, string> = {
+  trial:        '#6b7280', // gray-500
+  essential:    '#3b82f6', // blue-500
+  professional: '#14b8a6', // teal-500
+  business:     '#a855f7', // purple-500
+  enterprise:   '#eab308', // yellow-500
+};
+const PLAN_COLOUR_FALLBACK = '#4b5563'; // gray-600
+
+/// Stacked area chart showing per-plan MRR over the last 90 days. Pivots
+/// long-format API rows into wide format for Recharts (one row per day,
+/// one column per plan). Plan list is derived from the data so adding a
+/// new plan_definitions row doesn't need a code change.
+function MrrCompositionSection({
+  rows,
+  generatedAt,
+  materializedAt,
+}: {
+  rows:           MrrByPlanRow[];
+  generatedAt:    string;
+  materializedAt: string | null;
+}) {
+  // Pivot long → wide. Keys are plan names; values are MRR contributions
+  // for that day. Recharts reads this directly; one <Area> per plan.
+  type WideRow = { day: string; [plan: string]: number | string };
+  const dayMap = new Map<string, WideRow>();
+  const planSet = new Set<string>();
+  for (const r of rows) {
+    planSet.add(r.plan);
+    let day = dayMap.get(r.day);
+    if (!day) {
+      day = { day: r.day };
+      dayMap.set(r.day, day);
+    }
+    day[r.plan] = r.mrr_inr;
+  }
+
+  // Stable plan ordering for stacked bands. Largest contributor at the
+  // bottom → keeps the dominant band visually anchored as the chart
+  // shifts. Ties broken alphabetically for determinism.
+  const totalsByPlan = new Map<string, number>();
+  for (const r of rows) {
+    totalsByPlan.set(r.plan, (totalsByPlan.get(r.plan) ?? 0) + r.mrr_inr);
+  }
+  const plans = Array.from(planSet).sort((a, b) => {
+    const diff = (totalsByPlan.get(b) ?? 0) - (totalsByPlan.get(a) ?? 0);
+    return diff !== 0 ? diff : a.localeCompare(b);
+  });
+
+  // Recharts wants the days sorted ascending.
+  const wideRows: WideRow[] = Array.from(dayMap.values()).sort((a, b) =>
+    String(a.day).localeCompare(String(b.day)),
+  );
+
+  // Fill missing plan-cells with 0 so the stack doesn't jitter when a
+  // plan goes from "had MRR" to "no MRR" mid-window.
+  for (const row of wideRows) {
+    for (const plan of plans) {
+      if (typeof row[plan] !== 'number') row[plan] = 0;
+    }
+  }
+
+  // CSV export uses the long format from the API directly — natural
+  // shape for a finance pivot, doesn't lock the consumer into the wide
+  // schema we picked for the chart.
+  const csv = toCsv(
+    rows.map(r => ({
+      day:              r.day,
+      plan:             r.plan,
+      mrr_inr:          r.mrr_inr,
+      paid_active_subs: r.paid_active_subs,
+    })),
+    ['day', 'plan', 'mrr_inr', 'paid_active_subs'],
+  );
+
+  const asOf = materializedAt
+    ? new Date(materializedAt).toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
+  const hasData = wideRows.length > 0 && plans.length > 0;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">MRR composition</h2>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">
+            Last 90 days · per-plan, stacked
+            {asOf && (
+              <>
+                {' · '}
+                <span title="When the materialized view was last refreshed (daily by cron)">
+                  data as of {asOf}
+                </span>
+              </>
+            )}
+          </span>
+          <CsvButton
+            csv={csv}
+            filename={`mrr-composition-${dateStampForCsv(generatedAt)}.csv`}
+            disabled={!hasData}
+          />
+        </div>
+      </div>
+
+      {!hasData ? (
+        <p className="text-sm text-gray-500 text-center py-8">
+          No per-plan MRR history yet — snapshots are still being collected.
+        </p>
+      ) : (
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart
+              data={wideRows}
+              margin={{ top: 4, right: 16, bottom: 4, left: 0 }}
+            >
+              <CartesianGrid stroke="#1f2937" />
+              <XAxis
+                dataKey="day"
+                tickFormatter={formatDayShort}
+                stroke="#6b7280"
+                fontSize={11}
+                interval="preserveStartEnd"
+                minTickGap={32}
+              />
+              <YAxis
+                stroke="#6b7280"
+                fontSize={11}
+                tickFormatter={(v: number) => formatInrCompact(v)}
+                width={60}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#0b0f19',
+                  border:          '1px solid #1f2937',
+                  borderRadius:    '0.5rem',
+                  fontSize:        12,
+                }}
+                labelFormatter={formatDayShort}
+                formatter={(value: number, name: string) => [formatInr(value), name]}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: '#9ca3af' }}
+                iconType="square"
+              />
+              {plans.map(plan => (
+                <Area
+                  key={plan}
+                  type="monotone"
+                  dataKey={plan}
+                  stackId="mrr"
+                  // 0.85 alpha mixes adjacent bands enough that overlapping
+                  // values stay readable; pure 1.0 looks like a hard
+                  // billboard.
+                  fillOpacity={0.85}
+                  stroke={PLAN_COLOUR[plan] ?? PLAN_COLOUR_FALLBACK}
+                  fill={PLAN_COLOUR[plan]   ?? PLAN_COLOUR_FALLBACK}
+                />
+              ))}
+            </AreaChart>
           </ResponsiveContainer>
         </div>
       )}

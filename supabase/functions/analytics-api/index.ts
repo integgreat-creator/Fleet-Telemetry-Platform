@@ -34,6 +34,10 @@
  *       mrr_history:                 [{day, mrr_inr, paid_active_subs, trial_active_subs}, ...],
  *       mrr_history_materialized_at: ISO timestamp
  *
+ *       // Phase 2.5
+ *       mrr_history_by_plan:                 [{day, plan, mrr_inr, paid_active_subs}, ...],
+ *       mrr_history_by_plan_materialized_at: ISO timestamp
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -80,15 +84,17 @@ Deno.serve(async (req: Request) => {
 
   // ── GET ?action=summary ───────────────────────────────────────────────────
   if (action === 'summary') {
-    // Seven views queried in parallel — independent reads, round trip
+    // Eight views queried in parallel — independent reads, round trip
     // dominates. Phase 2.1 added the first three; 2.2 the funnel + cohorts
-    // + cashback; 2.3 the cohort curves; 2.4 the MRR history. Folding
-    // them all into one response keeps the dashboard a single fetch.
+    // + cashback; 2.3 the cohort curves; 2.4 the MRR history; 2.5 the
+    // per-plan MRR history. Folding them all into one response keeps the
+    // dashboard a single fetch.
     const [
       globalRes, planRes, dailyRes,
       funnelRes, cashbackRes,
       curvesRes,
       mrrHistoryRes,
+      mrrByPlanRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -97,6 +103,7 @@ Deno.serve(async (req: Request) => {
       supabase.from('analytics_cashback_roi').select('*').single(),
       supabase.from('analytics_cohort_retention_curves').select('*'),
       supabase.from('analytics_mrr_history').select('*'),
+      supabase.from('analytics_mrr_history_by_plan').select('*'),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -106,6 +113,7 @@ Deno.serve(async (req: Request) => {
     if (cashbackRes.error)   return json({ error: cashbackRes.error.message },   500);
     if (curvesRes.error)     return json({ error: curvesRes.error.message },     500);
     if (mrrHistoryRes.error) return json({ error: mrrHistoryRes.error.message }, 500);
+    if (mrrByPlanRes.error)  return json({ error: mrrByPlanRes.error.message },  500);
 
     return json({
       // ── Global topline (Phase 2.1) ──────────────────────────────────────
@@ -170,6 +178,20 @@ Deno.serve(async (req: Request) => {
       })),
       mrr_history_materialized_at:
         (mrrHistoryRes.data?.[0]?.materialized_at as string | undefined) ?? null,
+
+      // ── Per-plan MRR history (Phase 2.5) ────────────────────────────────
+      // Long format (one row per day × plan). Dashboard pivots client-side
+      // for the stacked area chart so the plan list stays dynamic — adding
+      // a new plan to plan_definitions doesn't need an API change.
+      // Materialized + nightly-refreshed (00:40 UTC).
+      mrr_history_by_plan: (mrrByPlanRes.data ?? []).map(r => ({
+        day:              r.day,
+        plan:             r.plan,
+        mrr_inr:          Number(r.mrr_inr          ?? 0),
+        paid_active_subs: Number(r.paid_active_subs ?? 0),
+      })),
+      mrr_history_by_plan_materialized_at:
+        (mrrByPlanRes.data?.[0]?.materialized_at as string | undefined) ?? null,
 
       // ── Cashback ROI (Phase 2.2) ────────────────────────────────────────
       cashback_roi: {
