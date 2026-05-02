@@ -30,6 +30,10 @@
  *                                  active_count, retention_pct}, ...],
  *       cohort_data_materialized_at: ISO timestamp     // when the materialized view was last refreshed
  *
+ *       // Phase 2.4
+ *       mrr_history:                 [{day, mrr_inr, paid_active_subs, trial_active_subs}, ...],
+ *       mrr_history_materialized_at: ISO timestamp
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -76,14 +80,15 @@ Deno.serve(async (req: Request) => {
 
   // ── GET ?action=summary ───────────────────────────────────────────────────
   if (action === 'summary') {
-    // Six views queried in parallel — independent reads, round trip dominates.
-    // Phase 2.1 added the first three; Phase 2.2 adds the funnel + cohorts +
-    // cashback. Folding them all into one response keeps the dashboard a
-    // single fetch.
+    // Seven views queried in parallel — independent reads, round trip
+    // dominates. Phase 2.1 added the first three; 2.2 the funnel + cohorts
+    // + cashback; 2.3 the cohort curves; 2.4 the MRR history. Folding
+    // them all into one response keeps the dashboard a single fetch.
     const [
       globalRes, planRes, dailyRes,
       funnelRes, cashbackRes,
       curvesRes,
+      mrrHistoryRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -91,14 +96,16 @@ Deno.serve(async (req: Request) => {
       supabase.from('analytics_conversion_funnel').select('*'),
       supabase.from('analytics_cashback_roi').select('*').single(),
       supabase.from('analytics_cohort_retention_curves').select('*'),
+      supabase.from('analytics_mrr_history').select('*'),
     ]);
 
-    if (globalRes.error)   return json({ error: globalRes.error.message },   500);
-    if (planRes.error)     return json({ error: planRes.error.message },     500);
-    if (dailyRes.error)    return json({ error: dailyRes.error.message },    500);
-    if (funnelRes.error)   return json({ error: funnelRes.error.message },   500);
-    if (cashbackRes.error) return json({ error: cashbackRes.error.message }, 500);
-    if (curvesRes.error)   return json({ error: curvesRes.error.message },   500);
+    if (globalRes.error)     return json({ error: globalRes.error.message },     500);
+    if (planRes.error)       return json({ error: planRes.error.message },       500);
+    if (dailyRes.error)      return json({ error: dailyRes.error.message },      500);
+    if (funnelRes.error)     return json({ error: funnelRes.error.message },     500);
+    if (cashbackRes.error)   return json({ error: cashbackRes.error.message },   500);
+    if (curvesRes.error)     return json({ error: curvesRes.error.message },     500);
+    if (mrrHistoryRes.error) return json({ error: mrrHistoryRes.error.message }, 500);
 
     return json({
       // ── Global topline (Phase 2.1) ──────────────────────────────────────
@@ -150,6 +157,19 @@ Deno.serve(async (req: Request) => {
       })),
       cohort_data_materialized_at:
         (curvesRes.data?.[0]?.materialized_at as string | undefined) ?? null,
+
+      // ── MRR history (Phase 2.4) ─────────────────────────────────────────
+      // 90-day daily series reconstructed from `subscription_snapshots ×
+      // plan_definitions`. Materialized + nightly-refreshed (00:35 UTC).
+      // `materialized_at` is per-row identical, read off the first row.
+      mrr_history: (mrrHistoryRes.data ?? []).map(r => ({
+        day:               r.day,
+        mrr_inr:           Number(r.mrr_inr           ?? 0),
+        paid_active_subs:  Number(r.paid_active_subs  ?? 0),
+        trial_active_subs: Number(r.trial_active_subs ?? 0),
+      })),
+      mrr_history_materialized_at:
+        (mrrHistoryRes.data?.[0]?.materialized_at as string | undefined) ?? null,
 
       // ── Cashback ROI (Phase 2.2) ────────────────────────────────────────
       cashback_roi: {

@@ -21,6 +21,14 @@ interface DailyRow {
   new_paid_subs: number;
 }
 
+/// One day's reconstructed MRR + sub counts. Phase 2.4.
+interface MrrHistoryRow {
+  day:                string;     // YYYY-MM-DD
+  mrr_inr:            number;
+  paid_active_subs:   number;
+  trial_active_subs:  number;
+}
+
 interface FunnelRow {
   plan:            string;     // '__overall__' for the topline aggregate
   signed_up:       number;
@@ -67,6 +75,13 @@ interface SummaryResponse {
   /// subtitle on the heatmap so the operator sees freshness honestly,
   /// distinct from `generated_at` (wall-clock of the API call).
   cohort_data_materialized_at: string | null;
+  /// Phase 2.4 — daily MRR series (90 days), reconstructed from the
+  /// snapshot trail. See MrrHistorySection below.
+  mrr_history:                 MrrHistoryRow[];
+  /// REFRESH timestamp for the MRR-history materialized view. Distinct
+  /// from cohort_data_materialized_at — the two MVs refresh on different
+  /// crons (00:30 and 00:35 UTC).
+  mrr_history_materialized_at: string | null;
   generated_at:                string;
 }
 
@@ -296,6 +311,13 @@ function InsightsBody() {
         />
       </div>
 
+      {/* ── MRR over time (Phase 2.4) ─────────────────────────────────── */}
+      <MrrHistorySection
+        rows={data.mrr_history}
+        generatedAt={data.generated_at}
+        materializedAt={data.mrr_history_materialized_at}
+      />
+
       {/* Plan distribution */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
@@ -445,6 +467,129 @@ function InsightsBody() {
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
+    </div>
+  );
+}
+
+// ─── MRR over time section (Phase 2.4) ──────────────────────────────────────
+
+/// 90-day MRR line chart. Reads from the `analytics_mrr_history` materialized
+/// view (refreshed nightly), so the operator sees a "data as of X" stamp
+/// alongside the API call's `generated_at` — same honesty pattern as the
+/// cohort heatmap.
+///
+/// CSV export uses the standard `<CsvButton />`. Wide format isn't useful
+/// here (single time-series), so the natural shape is one row per day.
+function MrrHistorySection({
+  rows,
+  generatedAt,
+  materializedAt,
+}: {
+  rows:           MrrHistoryRow[];
+  generatedAt:    string;
+  /// REFRESH time of the materialized view. null when the view is empty.
+  materializedAt: string | null;
+}) {
+  const csv = toCsv(
+    rows.map(r => ({
+      day:                r.day,
+      mrr_inr:            r.mrr_inr,
+      paid_active_subs:   r.paid_active_subs,
+      trial_active_subs:  r.trial_active_subs,
+    })),
+    ['day', 'mrr_inr', 'paid_active_subs', 'trial_active_subs'],
+  );
+
+  // Honest data-freshness stamp on the subtitle. Same pattern as the
+  // cohort heatmap (see CohortHeatmapSection).
+  const asOf = materializedAt
+    ? new Date(materializedAt).toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
+  // Has-any-MRR check: rows can exist (zero-filled days from the view) but
+  // all be 0. We render the chart even then — a flat-zero line is the
+  // honest answer "no paid subs yet" — but skip the chart entirely when
+  // the array itself is empty (very fresh DB, no snapshots).
+  const hasData = rows.length > 0;
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">MRR over time</h2>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">
+            Last 90 days · daily series from snapshots
+            {asOf && (
+              <>
+                {' · '}
+                <span title="When the materialized view was last refreshed (daily by cron)">
+                  data as of {asOf}
+                </span>
+              </>
+            )}
+          </span>
+          <CsvButton
+            csv={csv}
+            filename={`mrr-history-${dateStampForCsv(generatedAt)}.csv`}
+            disabled={!hasData}
+          />
+        </div>
+      </div>
+
+      {!hasData ? (
+        <p className="text-sm text-gray-500 text-center py-8">
+          No MRR history yet — snapshots are still being collected.
+        </p>
+      ) : (
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={rows}
+              margin={{ top: 4, right: 16, bottom: 4, left: 0 }}
+            >
+              <CartesianGrid stroke="#1f2937" />
+              <XAxis
+                dataKey="day"
+                tickFormatter={formatDayShort}
+                stroke="#6b7280"
+                fontSize={11}
+                interval="preserveStartEnd"
+                minTickGap={32}
+              />
+              <YAxis
+                stroke="#6b7280"
+                fontSize={11}
+                tickFormatter={(v: number) => formatInrCompact(v)}
+                width={60}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#0b0f19',
+                  border:          '1px solid #1f2937',
+                  borderRadius:    '0.5rem',
+                  fontSize:        12,
+                }}
+                labelFormatter={formatDayShort}
+                formatter={(value: number, name: string) => {
+                  if (name === 'mrr_inr')          return [formatInr(value), 'MRR'];
+                  if (name === 'paid_active_subs') return [value, 'Paid subs'];
+                  return [value, name];
+                }}
+              />
+              <Line
+                type="monotone"
+                dataKey="mrr_inr"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }
