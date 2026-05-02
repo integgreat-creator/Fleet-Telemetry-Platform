@@ -28,6 +28,7 @@
  *       // Phase 2.3
  *       cohort_retention_curves: [{cohort_month, offset_months, cohort_size,
  *                                  active_count, retention_pct}, ...],
+ *       cohort_data_materialized_at: ISO timestamp     // when the materialized view was last refreshed
  *
  *       generated_at:         ISO timestamp
  *     }
@@ -130,14 +131,16 @@ Deno.serve(async (req: Request) => {
         paid_now:        Number(r.paid_now        ?? 0),
       })),
 
-      // ── Cohort retention curves (Phase 2.3) ─────────────────────────────
-      // Replaces the Phase 2.2 single-point `paid_cohorts` field, which
-      // was dropped in cleanup migration 20260608000000 along with its
-      // backing view. Old consumers had one PR cycle of overlap.
-      // Reads subscription_snapshots, so curves fill in over TIME — at the
-      // 2.3 migration's apply moment only M0 has data; each subsequent day
-      // adds one column of fidelity. The dashboard renders missing cells
-      // as empty rather than zero, so the operator sees the gap honestly.
+      // ── Cohort retention curves (Phase 2.3, materialized in 20260609) ──
+      // The view was promoted to MATERIALIZED — it cross-joins cohorts ×
+      // 12 offsets and DISTINCT-ONs over snapshots, so its runtime grows
+      // linearly with the snapshots table. Refreshed daily at 00:30 UTC
+      // by pg_cron. Plain views in this surface remain plain — they
+      // aggregate over `subscriptions` (small), sub-ms even at scale.
+      //
+      // `materialized_at` is `now()` frozen at REFRESH time, identical
+      // across every row. Read it off the first row; falls back to null
+      // when the view is empty (dashboard handles both).
       cohort_retention_curves: (curvesRes.data ?? []).map(r => ({
         cohort_month:   r.cohort_month,
         offset_months:  Number(r.offset_months  ?? 0),
@@ -145,6 +148,8 @@ Deno.serve(async (req: Request) => {
         active_count:   Number(r.active_count   ?? 0),
         retention_pct:  Number(r.retention_pct  ?? 0),
       })),
+      cohort_data_materialized_at:
+        (curvesRes.data?.[0]?.materialized_at as string | undefined) ?? null,
 
       // ── Cashback ROI (Phase 2.2) ────────────────────────────────────────
       cashback_roi: {
