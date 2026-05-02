@@ -59,10 +59,15 @@ interface SummaryResponse {
   total_subs:            number;
   plan_distribution:     PlanDistRow[];
   new_paid_subs_daily:   DailyRow[];
-  conversion_funnel:        FunnelRow[];
-  cashback_roi:             CashbackRoi;
-  cohort_retention_curves:  CurvePoint[];
-  generated_at:             string;
+  conversion_funnel:           FunnelRow[];
+  cashback_roi:                CashbackRoi;
+  cohort_retention_curves:     CurvePoint[];
+  /// ISO timestamp of the last `REFRESH MATERIALIZED VIEW`. null when the
+  /// materialized view has no rows yet. Surfaced as a "Cohort data as of X"
+  /// subtitle on the heatmap so the operator sees freshness honestly,
+  /// distinct from `generated_at` (wall-clock of the API call).
+  cohort_data_materialized_at: string | null;
+  generated_at:                string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -435,6 +440,7 @@ function InsightsBody() {
       <CohortHeatmapSection
         points={data.cohort_retention_curves}
         generatedAt={data.generated_at}
+        materializedAt={data.cohort_data_materialized_at}
       />
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
@@ -587,7 +593,17 @@ function bucketColour(pct: number): string {
 /// missing cells (offset hasn't elapsed yet OR snapshots table is younger
 /// than the cohort + offset) render as a gray dash so the operator can see
 /// the data gap honestly.
-function CohortHeatmapSection({ points, generatedAt }: { points: CurvePoint[]; generatedAt: string }) {
+function CohortHeatmapSection({
+  points,
+  generatedAt,
+  materializedAt,
+}: {
+  points:         CurvePoint[];
+  generatedAt:    string;
+  /// When the materialized view was last refreshed by the daily cron.
+  /// Null while the view is empty (no paid cohorts yet).
+  materializedAt: string | null;
+}) {
   if (points.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -634,12 +650,32 @@ function CohortHeatmapSection({ points, generatedAt }: { points: CurvePoint[]; g
     ['cohort', 'size', ...offsets.map(o => `M${o}`)],
   );
 
+  // Honest freshness label. The view is materialized + refreshed daily by
+  // pg_cron, so the data the operator's looking at can be up to ~24h stale —
+  // distinct from the API call's `generated_at`. Format locally so an
+  // operator in a non-IST timezone reads it in their own.
+  const cohortAsOf = materializedAt
+    ? new Date(materializedAt).toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
       <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
         <h2 className="text-sm font-semibold text-white">Paid cohort retention</h2>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">Last 12 months · M0–M11 from snapshots</span>
+          <span className="text-xs text-gray-500">
+            Last 12 months · M0–M11 from snapshots
+            {cohortAsOf && (
+              <>
+                {' · '}
+                <span title="When the materialized view was last refreshed (daily by cron)">
+                  data as of {cohortAsOf}
+                </span>
+              </>
+            )}
+          </span>
           <CsvButton
             csv={cohortCsv}
             filename={`cohort-retention-${dateStampForCsv(generatedAt)}.csv`}
@@ -702,11 +738,11 @@ function CohortHeatmapSection({ points, generatedAt }: { points: CurvePoint[]; g
       </div>
 
       <p className="mt-3 text-[11px] text-gray-500 leading-relaxed">
-        Reads from the daily <code className="font-mono text-gray-400">subscription_snapshots</code> table.
-        Curves fill in over time — at first the snapshots-based view only
-        has M0; each subsequent day adds one column of fidelity to all live
-        cohorts. Empty cells mean either the offset hasn&rsquo;t elapsed yet,
-        or snapshots predate the cohort+offset point.
+        Reads from the daily <code className="font-mono text-gray-400">subscription_snapshots</code> table
+        via a materialized view refreshed nightly. Curves fill in over time —
+        at first only M0 has data; each subsequent day adds one column of
+        fidelity to all live cohorts. Empty cells mean either the offset
+        hasn&rsquo;t elapsed yet, or snapshots predate the cohort+offset point.
       </p>
     </div>
   );
