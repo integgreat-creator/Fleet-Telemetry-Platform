@@ -32,6 +32,7 @@ import PlanCheckoutModal, { type BillingDetails } from '../components/PlanChecko
 import InvoicesPanel from '../components/InvoicesPanel';
 import TrialStatusCard from '../components/TrialStatusCard';
 import CashbackCard from '../components/CashbackCard';
+import AnnualUnlockCard from '../components/AnnualUnlockCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1398,6 +1399,15 @@ export default function AdminPage() {
                   file. Sits with the trial card so anything financial is
                   grouped at the top of the tab. */}
               <CashbackCard fleetId={effectiveFleetId} />
+
+              {/* Annual-unlock countdown (Phase 3.1) — conditional on the
+                  monthly customer being inside the 3-month qualification
+                  window with the flag not yet flipped. Renders null
+                  otherwise; the card is silent for the steady state of
+                  every other customer. */}
+              <AnnualUnlockCard
+                subscriptionCreatedAt={subscription?.created_at ?? null}
+              />
 
               {/* Current plan overview */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
