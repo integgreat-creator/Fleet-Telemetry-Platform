@@ -76,6 +76,12 @@
       "heading": "Cashback available",
       "body": "Applied automatically as a refund on your next renewal charge. Expires {{date}}."
     },
+    "annualUnlock": {
+      "heading": "Annual billing — coming up",
+      "bodyCountdown_one": "Annual billing unlocks in {{count}} day ({{date}}). Save {{pct}}% per year when you switch.",
+      "bodyCountdown_other": "Annual billing unlocks in {{count}} days ({{date}}). Save {{pct}}% per year when you switch.",
+      "bodyPending": "Annual billing unlocks on your next monthly renewal. Save {{pct}}% per year when you switch."
+    },
     "auth": {
       "appName": "FTPGo",
       "tagline": "Smart fleet management platform",
