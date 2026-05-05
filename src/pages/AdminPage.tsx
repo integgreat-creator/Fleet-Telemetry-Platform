@@ -34,6 +34,7 @@ import TrialStatusCard from '../components/TrialStatusCard';
 import CashbackCard from '../components/CashbackCard';
 import AnnualUnlockCard from '../components/AnnualUnlockCard';
 import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
+import SubscriptionHistoryCard from '../components/SubscriptionHistoryCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1490,6 +1491,12 @@ export default function AdminPage() {
                   <p className="text-gray-500 text-sm">No subscription found for this fleet.</p>
                 )}
               </div>
+
+              {/* Subscription history timeline (Phase 3.3). Reads recent
+                  audit_logs scoped to this fleet, filters to billing-
+                  relevant actions. Hides itself when there's nothing to
+                  show — fresh fleets see no empty state. */}
+              <SubscriptionHistoryCard hasFleet={!!fleetId} />
 
               {/* WhatsApp Notification Number */}
               <div className="bg-gray-800 rounded-xl p-5">
