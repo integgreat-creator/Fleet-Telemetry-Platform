@@ -76,6 +76,28 @@
       "heading": "Cashback available",
       "body": "Applied automatically as a refund on your next renewal charge. Expires {{date}}."
     },
+    "subscriptionHistory": {
+      "heading": "Subscription history",
+      "subtitle_one":   "{{count}} event",
+      "subtitle_other": "{{count}} events",
+      "showAll_one":    "Show all 1 event",
+      "showAll_other":  "Show all {{count}} events",
+      "showFewer":      "Show fewer",
+      "errorAuth":      "Please sign in again to view your history.",
+      "event": {
+        "subscription_activated":                  "Subscription activated",
+        "subscription_charged":                    "Payment succeeded",
+        "subscription_cancelled":                  "Subscription cancelled",
+        "subscription_cancellation_requested":     "Cancellation requested",
+        "subscription_checkout_initiated":         "Checkout started",
+        "subscription_expired":                    "Subscription expired",
+        "subscription_enterprise_contact_initiated": "Enterprise sales contact",
+        "extend_trial":                            "Trial extended",
+        "fleet_billing_details_updated":           "Billing details updated",
+        "fleet_language_preference_updated":       "Language preference changed",
+        "cashback_redeemed":                       "Cashback redeemed"
+      }
+    },
     "cancelSubscription": {
       "title": "Cancel subscription?",
       "subtitle": "We'll cancel at the end of your current billing cycle.",

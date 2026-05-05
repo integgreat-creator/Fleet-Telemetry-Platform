@@ -77,6 +77,28 @@
       "heading": "Cashback கிடைக்கிறது",
       "body": "உங்கள் அடுத்த புதுப்பிப்புக் கட்டணத்தில் தானாகவே ஒரு பணத்திருப்பமாக பயன்படுத்தப்படும். {{date}} அன்று காலாவதியாகும்."
     },
+    "subscriptionHistory": {
+      "heading": "சந்தா வரலாறு",
+      "subtitle_one":   "{{count}} நிகழ்வு",
+      "subtitle_other": "{{count}} நிகழ்வுகள்",
+      "showAll_one":    "1 நிகழ்வையும் காட்டு",
+      "showAll_other":  "அனைத்து {{count}} நிகழ்வுகளையும் காட்டு",
+      "showFewer":      "குறைவாகக் காட்டு",
+      "errorAuth":      "உங்கள் வரலாற்றைக் காண மீண்டும் உள்நுழையவும்.",
+      "event": {
+        "subscription_activated":                  "சந்தா செயல்படுத்தப்பட்டது",
+        "subscription_charged":                    "பணம் செலுத்துதல் வெற்றி",
+        "subscription_cancelled":                  "சந்தா ரத்து செய்யப்பட்டது",
+        "subscription_cancellation_requested":     "ரத்து கோரிக்கை வைக்கப்பட்டது",
+        "subscription_checkout_initiated":         "செக்அவுட் தொடங்கப்பட்டது",
+        "subscription_expired":                    "சந்தா காலாவதியானது",
+        "subscription_enterprise_contact_initiated": "Enterprise விற்பனைத் தொடர்பு",
+        "extend_trial":                            "சோதனை நீட்டிக்கப்பட்டது",
+        "fleet_billing_details_updated":           "கட்டண விவரங்கள் புதுப்பிக்கப்பட்டன",
+        "fleet_language_preference_updated":       "மொழி முன்னுரிமை மாற்றப்பட்டது",
+        "cashback_redeemed":                       "Cashback மீட்டெடுக்கப்பட்டது"
+      }
+    },
     "cancelSubscription": {
       "title": "சந்தாவை ரத்து செய்யவா?",
       "subtitle": "உங்கள் தற்போதைய கட்டண சுழற்சியின் முடிவில் நாங்கள் ரத்து செய்வோம்.",
