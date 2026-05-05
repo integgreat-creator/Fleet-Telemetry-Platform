@@ -76,6 +76,31 @@
       "heading": "Cashback available",
       "body": "Applied automatically as a refund on your next renewal charge. Expires {{date}}."
     },
+    "cancelSubscription": {
+      "title": "Cancel subscription?",
+      "subtitle": "We'll cancel at the end of your current billing cycle.",
+      "explainCycleEnd": "Your subscription stays active until the end of the current paid period. You won't be charged again, and you keep access through that date.",
+      "explainDataRetention": "Fleet data, drivers, and trip history are kept on file. You can resubscribe anytime; nothing is deleted just because billing stopped.",
+      "reasonLabel": "What's the main reason?",
+      "reasons": {
+        "too_expensive":         "Too expensive",
+        "missing_features":      "Missing features I need",
+        "switching_competitor":  "Switching to a competitor",
+        "temporary_pause":       "Temporary pause — will return",
+        "just_exploring":        "Just exploring, not ready",
+        "other":                 "Other"
+      },
+      "commentLabel": "Anything else you'd like us to know?",
+      "commentOptional": "(optional)",
+      "commentPlaceholder": "Optional — what would have made you stay?",
+      "keepSubscription": "Keep subscription",
+      "confirmCancel": "Confirm cancellation",
+      "submitting": "Cancelling…",
+      "titleDone": "Cancellation submitted",
+      "doneBody": "We've recorded your request. You'll keep access until the end of your current billing cycle, then your subscription will become inactive automatically. Thank you for being a customer.",
+      "errorAuth": "Please sign in again to cancel your subscription.",
+      "footerTrigger": "Cancel subscription"
+    },
     "annualUnlock": {
       "heading": "Annual billing — coming up",
       "bodyCountdown_one": "Annual billing unlocks in {{count}} day ({{date}}). Save {{pct}}% per year when you switch.",

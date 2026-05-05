@@ -33,6 +33,7 @@ import InvoicesPanel from '../components/InvoicesPanel';
 import TrialStatusCard from '../components/TrialStatusCard';
 import CashbackCard from '../components/CashbackCard';
 import AnnualUnlockCard from '../components/AnnualUnlockCard';
+import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -517,6 +518,13 @@ export default function AdminPage() {
   // and refreshed after each save. Pre-fills the GSTIN form in the checkout
   // modal so returning customers don't retype. Phase 1.3.1.
   const [billingDetails, setBillingDetails] = useState<BillingDetails | null>(null);
+
+  // Self-serve cancellation modal (Phase 3.2). Open by clicking the
+  // "Cancel subscription" link in the current-plan card footer; only
+  // visible when the subscription is currently active. Closing the modal
+  // doesn't refresh — the realtime channel on subscriptions picks up the
+  // status flip when Razorpay's webhook fires at cycle end.
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
@@ -1462,6 +1470,21 @@ export default function AdminPage() {
                         </div>
                       </div>
                     )}
+                    {/* Cancel-subscription footer link (Phase 3.2). Only
+                        visible when the sub is currently active — no point
+                        offering cancel for trial / expired / suspended
+                        states. Muted styling on purpose; this isn't a
+                        primary action. */}
+                    {subscription.status === 'active' && subscription.razorpay_subscription_id && (
+                      <div className="pt-3 border-t border-gray-800">
+                        <button
+                          onClick={() => setShowCancelModal(true)}
+                          className="text-xs text-gray-500 hover:text-red-400 transition-colors underline-offset-2 hover:underline"
+                        >
+                          {t('cancelSubscription.footerTrigger')}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-gray-500 text-sm">No subscription found for this fleet.</p>
@@ -2247,6 +2270,11 @@ export default function AdminPage() {
           onSaveBilling={handleSaveBillingDetails}
           onContinue={handleCheckoutContinue}
         />
+      )}
+
+      {/* ── Cancel-subscription modal (Phase 3.2) ─────────────────────────── */}
+      {showCancelModal && (
+        <CancelSubscriptionModal onClose={() => setShowCancelModal(false)} />
       )}
     </div>
   );
