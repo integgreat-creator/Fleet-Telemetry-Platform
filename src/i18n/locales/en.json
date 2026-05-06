@@ -57,7 +57,8 @@
         "statusTrial": "trial",
         "statusSuspended": "suspended",
         "statusInactive": "inactive",
-        "statusExpired": "expired"
+        "statusExpired": "expired",
+        "statusPaused": "paused"
       }
     },
     "enterpriseContact": {
@@ -92,11 +93,43 @@
         "subscription_checkout_initiated":         "Checkout started",
         "subscription_expired":                    "Subscription expired",
         "subscription_enterprise_contact_initiated": "Enterprise sales contact",
+        "subscription_pause_requested":            "Pause requested",
+        "subscription_paused":                     "Subscription paused",
+        "subscription_resume_requested":           "Resume requested",
+        "subscription_resumed":                    "Subscription resumed",
         "extend_trial":                            "Trial extended",
         "fleet_billing_details_updated":           "Billing details updated",
         "fleet_language_preference_updated":       "Language preference changed",
         "cashback_redeemed":                       "Cashback redeemed"
       }
+    },
+    "pauseSubscription": {
+      "title": "Pause subscription?",
+      "subtitle": "We'll pause at the end of your current billing cycle.",
+      "explainTiming": "Your subscription stays active until the end of the current paid period. After that, billing pauses and your status changes to Paused.",
+      "explainBilling": "While paused you keep your data and settings, but features are restricted just like an inactive subscription. You can resume any time to restart billing immediately.",
+      "cancelLabel": "Keep active",
+      "confirm": "Pause at cycle end",
+      "submitting": "Pausing…",
+      "titleDone": "Pause scheduled",
+      "doneBody": "We've recorded your request. You'll keep access until the end of your current billing cycle, then your subscription will pause automatically. Resume anytime from this tab.",
+      "errorAuth": "Please sign in again to pause your subscription.",
+      "footerTrigger": "Pause subscription"
+    },
+    "resumeSubscription": {
+      "title": "Resume subscription?",
+      "subtitle": "Resume billing now and restore full access.",
+      "explainTiming": "Your subscription will restart immediately on your existing plan. The next charge happens at your original billing cadence.",
+      "explainBilling": "Your card on file will be used for the next charge. Update billing details first if anything has changed since you paused.",
+      "cancelLabel": "Stay paused",
+      "confirm": "Resume now",
+      "submitting": "Resuming…",
+      "titleDone": "Subscription resumed",
+      "doneBody": "Welcome back. Your subscription is now active and your next charge will land on the regular billing cadence.",
+      "errorAuth": "Please sign in again to resume your subscription.",
+      "pausedHeading": "Subscription paused",
+      "pausedBody": "Your subscription is paused. No charges are happening; your data and settings are preserved. Resume any time to restart billing.",
+      "footerTrigger": "Resume subscription"
     },
     "cancelSubscription": {
       "title": "Cancel subscription?",

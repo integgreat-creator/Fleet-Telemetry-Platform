@@ -16,7 +16,7 @@ export type PlanName =
   | 'essential' | 'professional' | 'business' | 'enterprise'   // active
   | 'starter'   | 'growth'       | 'pro';                       // legacy (hidden)
 
-export type PlanStatus   = 'trial' | 'active' | 'expired' | 'suspended' | 'inactive';
+export type PlanStatus   = 'trial' | 'active' | 'expired' | 'suspended' | 'inactive' | 'paused';
 export type FeatureLevel = 'full'  | 'limited' | 'none';
 export type BillingModel = 'flat'  | 'per_vehicle' | 'custom';
 export type BillingCycle = 'monthly' | 'annual';

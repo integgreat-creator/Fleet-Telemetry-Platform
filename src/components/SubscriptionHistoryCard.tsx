@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   History, CheckCircle, XCircle, AlertCircle, Clock,
-  CreditCard, Gift, Users,
+  CreditCard, Gift, Users, PauseCircle, PlayCircle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
@@ -40,6 +40,10 @@ const RELEVANT_ACTIONS: ReadonlySet<string> = new Set([
   'subscription.checkout_initiated',
   'subscription.expired',
   'subscription.enterprise_contact_initiated',
+  'subscription.pause_requested',
+  'subscription.paused',
+  'subscription.resume_requested',
+  'subscription.resumed',
   'extend-trial',
   'fleet.billing_details_updated',
   'fleet.language_preference_updated',
@@ -58,6 +62,10 @@ const ACTION_ICON: Record<string, typeof CheckCircle> = {
   'subscription.checkout_initiated':         CreditCard,
   'subscription.expired':                    AlertCircle,
   'subscription.enterprise_contact_initiated': Users,
+  'subscription.pause_requested':            PauseCircle,
+  'subscription.paused':                     PauseCircle,
+  'subscription.resume_requested':           PlayCircle,
+  'subscription.resumed':                    PlayCircle,
   'extend-trial':                            Clock,
   'fleet.billing_details_updated':           CreditCard,
   'fleet.language_preference_updated':       History,
@@ -72,6 +80,10 @@ const ACTION_SEVERITY: Record<string, Severity> = {
   'subscription.checkout_initiated':         'neutral',
   'subscription.expired':                    'critical',
   'subscription.enterprise_contact_initiated': 'neutral',
+  'subscription.pause_requested':            'warning',
+  'subscription.paused':                     'warning',
+  'subscription.resume_requested':           'good',
+  'subscription.resumed':                    'good',
   'extend-trial':                            'good',
   'fleet.billing_details_updated':           'neutral',
   'fleet.language_preference_updated':       'neutral',
