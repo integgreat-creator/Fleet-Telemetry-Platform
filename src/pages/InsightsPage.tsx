@@ -489,6 +489,11 @@ function InsightsBody() {
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
+
+      {/* ── Operator manual cashback grant (Phase 3.6) ───────────────────── */}
+      {/* Lowest-priority section — utility for support, not insight. Sits
+          at the bottom so analytics still anchors the page. */}
+      <ManualCashbackGrantSection onGranted={refresh} />
     </div>
   );
 }
@@ -1167,6 +1172,185 @@ function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Manual cashback grant section (Phase 3.6) ─────────────────────────────
+
+/// Operator-only utility for issuing a cashback credit to a specific fleet —
+/// support compensation, makegood, etc. Calls admin-grant-cashback (which
+/// validates + audit-logs + inserts into fleet_credits).
+///
+/// Visible at the bottom of the dashboard because it's a tool, not insight.
+/// AdminSecretGate has already authenticated the operator; we read the
+/// secret from sessionStorage via useAdminSecret to attach to the API call.
+function ManualCashbackGrantSection({ onGranted }: { onGranted: () => void }) {
+  const adminSecret = useAdminSecret();
+  const [fleetId,        setFleetId]        = useState('');
+  const [amountInr,      setAmountInr]      = useState('');
+  const [reason,         setReason]         = useState('manual_makegood');
+  const [expiresInDays,  setExpiresInDays]  = useState('90');
+  const [comment,        setComment]        = useState('');
+  const [submitting,     setSubmitting]     = useState(false);
+  const [result,         setResult]         = useState<{ kind: 'ok'; amount: number; expires_at: string } | { kind: 'err'; msg: string } | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting || !adminSecret) return;
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-grant-cashback`;
+      const res = await fetch(url, {
+        method:  'POST',
+        headers: {
+          'X-Admin-Secret': adminSecret,
+          'apikey':         import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Authorization':  `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Content-Type':   'application/json',
+        },
+        body: JSON.stringify({
+          fleet_id:        fleetId.trim(),
+          amount_inr:      Number(amountInr),
+          reason:          reason.trim(),
+          expires_in_days: Number(expiresInDays),
+          comment:         comment.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const body = await res.json();
+      setResult({
+        kind:       'ok',
+        amount:     Number(body.amount_inr),
+        expires_at: String(body.expires_at),
+      });
+      // Reset the form on success so the operator doesn't accidentally
+      // re-submit the same grant. Keep the reason field — it's likely
+      // the same across consecutive grants in a support session.
+      setFleetId('');
+      setAmountInr('');
+      setExpiresInDays('90');
+      setComment('');
+      // Refresh the dashboard so the granted credit shows up in the
+      // cashback ROI tiles immediately.
+      onGranted();
+    } catch (e) {
+      setResult({ kind: 'err', msg: (e as Error).message });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">Manual cashback grant</h2>
+        <span className="text-xs text-gray-500">Operator utility · audit-logged</span>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Fleet ID (UUID)</label>
+            <input
+              type="text"
+              value={fleetId}
+              onChange={e => setFleetId(e.target.value)}
+              required
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="00000000-0000-0000-0000-000000000000"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Amount (₹)</label>
+            <input
+              type="number"
+              value={amountInr}
+              onChange={e => setAmountInr(e.target.value)}
+              required
+              min="1"
+              max="10000"
+              placeholder="200"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Reason (≤ 64 chars)</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              required
+              maxLength={64}
+              placeholder="manual_makegood"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Expires in (days)</label>
+            <input
+              type="number"
+              value={expiresInDays}
+              onChange={e => setExpiresInDays(e.target.value)}
+              required
+              min="1"
+              max="365"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">
+            Comment <span className="text-gray-600">(optional, ≤ 500 chars)</span>
+          </label>
+          <textarea
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            rows={2}
+            maxLength={500}
+            placeholder="What ticket / incident is this against?"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 resize-none"
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] text-gray-500">
+            The credit is auto-redeemed against the fleet's next paid charge.
+            Manual grants don't replace the first-charge cashback — they stack.
+          </p>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex-shrink-0"
+          >
+            {submitting ? 'Granting…' : 'Grant credit'}
+          </button>
+        </div>
+
+        {result?.kind === 'ok' && (
+          <div className="flex gap-3 p-3 bg-emerald-950/40 border border-emerald-900/60 rounded-lg">
+            <div className="text-xs text-emerald-200 leading-relaxed">
+              ₹{result.amount.toLocaleString('en-IN')} credit granted, expires{' '}
+              {new Date(result.expires_at).toLocaleDateString('en-IN', {
+                day: '2-digit', month: 'short', year: 'numeric',
+              })}.
+            </div>
+          </div>
+        )}
+        {result?.kind === 'err' && (
+          <div className="flex gap-3 p-3 bg-red-950/40 border border-red-900/60 rounded-lg">
+            <AlertCircle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-red-200 leading-relaxed">{result.msg}</div>
+          </div>
+        )}
+      </form>
     </div>
   );
 }
