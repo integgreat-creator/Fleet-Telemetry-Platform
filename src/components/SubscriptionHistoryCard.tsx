@@ -45,6 +45,7 @@ const RELEVANT_ACTIONS: ReadonlySet<string> = new Set([
   'subscription.resume_requested',
   'subscription.resumed',
   'extend-trial',
+  'trial.self_extended',
   'fleet.billing_details_updated',
   'fleet.language_preference_updated',
   'cashback.redeemed',
@@ -67,6 +68,7 @@ const ACTION_ICON: Record<string, typeof CheckCircle> = {
   'subscription.resume_requested':           PlayCircle,
   'subscription.resumed':                    PlayCircle,
   'extend-trial':                            Clock,
+  'trial.self_extended':                     Clock,
   'fleet.billing_details_updated':           CreditCard,
   'fleet.language_preference_updated':       History,
   'cashback.redeemed':                       Gift,
@@ -85,6 +87,7 @@ const ACTION_SEVERITY: Record<string, Severity> = {
   'subscription.resume_requested':           'good',
   'subscription.resumed':                    'good',
   'extend-trial':                            'good',
+  'trial.self_extended':                     'good',
   'fleet.billing_details_updated':           'neutral',
   'fleet.language_preference_updated':       'neutral',
   'cashback.redeemed':                       'good',
@@ -122,6 +125,10 @@ function detailFor(row: AuditLogRow): string {
     }
     case 'extend-trial': {
       const days = (nv.days_extended as number | undefined);
+      return typeof days === 'number' ? `+${days} days` : '';
+    }
+    case 'trial.self_extended': {
+      const days = (nv.days_added as number | undefined);
       return typeof days === 'number' ? `+${days} days` : '';
     }
     case 'cashback.redeemed': {

@@ -46,8 +46,12 @@ export interface SubscriptionState {
   canAddVehicle: boolean;
 
   // Trial timing
-  trialEndsAt:    Date | null;
-  trialDaysLeft:  number | null;  // null when not on trial
+  trialEndsAt:           Date | null;
+  trialDaysLeft:         number | null;  // null when not on trial
+  /// Set when the customer used their one-time self-serve trial extension
+  /// (Phase 3.5). null = haven't used it; the dashboard offers the
+  /// "Need more time?" link only when this is null AND status='trial'.
+  trialSelfExtendedAt:   Date | null;
   gracePeriodEnd: Date | null;
   isExpired:      boolean;
   isInGrace:      boolean;        // expired but within 7-day grace window
@@ -93,8 +97,9 @@ const DEFAULT_STATE: SubscriptionState = {
   vehiclesUsed:    0,
   driversUsed:     0,
   canAddVehicle:   true,
-  trialEndsAt:     null,
-  trialDaysLeft:   null,
+  trialEndsAt:          null,
+  trialDaysLeft:        null,
+  trialSelfExtendedAt:  null,
   gracePeriodEnd:  null,
   isExpired:       false,
   currentPeriodEnd: null,
@@ -206,6 +211,9 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
         // ── Trial timing ──────────────────────────────────────────────────────
         const trialEndsAt    = sub.trial_ends_at    ? new Date(sub.trial_ends_at    as string) : null;
+        const trialSelfExtendedAt = sub.trial_self_extended_at
+          ? new Date(sub.trial_self_extended_at as string)
+          : null;
         const gracePeriodEnd = sub.grace_period_end ? new Date(sub.grace_period_end as string) : null;
         const now            = new Date();
         const isExpired      = sub.status === 'expired';
@@ -279,6 +287,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
           canAddVehicle,
           trialEndsAt,
           trialDaysLeft,
+          trialSelfExtendedAt,
           gracePeriodEnd,
           isExpired,
           isInGrace,
