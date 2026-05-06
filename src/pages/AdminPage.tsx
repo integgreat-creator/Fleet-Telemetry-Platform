@@ -21,6 +21,7 @@ import {
   Bell,
   Copy,
   Link2,
+  PauseCircle,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
@@ -35,6 +36,7 @@ import CashbackCard from '../components/CashbackCard';
 import AnnualUnlockCard from '../components/AnnualUnlockCard';
 import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
 import SubscriptionHistoryCard from '../components/SubscriptionHistoryCard';
+import PauseSubscriptionModal from '../components/PauseSubscriptionModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +49,7 @@ interface Subscription {
     | 'trial'
     | 'essential' | 'professional' | 'business' | 'enterprise'
     | 'starter'   | 'growth'       | 'pro';
-  status: 'active' | 'inactive' | 'suspended' | 'trial' | 'expired';
+  status: 'active' | 'inactive' | 'suspended' | 'trial' | 'expired' | 'paused';
   max_vehicles: number;
   max_drivers: number;
   features: Record<string, unknown>;
@@ -286,6 +288,7 @@ function StatusBadge({ status }: { status: Subscription['status'] }) {
     suspended: { cls: 'bg-red-900 text-red-300',       icon: <XCircle size={11} />,        labelKey: 'admin.subscription.statusSuspended' },
     inactive:  { cls: 'bg-gray-700 text-gray-400',     icon: <XCircle size={11} />,        labelKey: 'admin.subscription.statusInactive' },
     expired:   { cls: 'bg-orange-900 text-orange-300', icon: <AlertTriangle size={11} />,  labelKey: 'admin.subscription.statusExpired' },
+    paused:    { cls: 'bg-blue-900 text-blue-300',     icon: <PauseCircle size={11} />,    labelKey: 'admin.subscription.statusPaused' },
   };
   const { cls, icon, labelKey } = cfg[status] ?? cfg.inactive;
   return (
@@ -526,6 +529,12 @@ export default function AdminPage() {
   // doesn't refresh — the realtime channel on subscriptions picks up the
   // status flip when Razorpay's webhook fires at cycle end.
   const [showCancelModal, setShowCancelModal] = useState(false);
+
+  // Self-serve pause / resume modal (Phase 3.4). Single state, two actions —
+  // null = closed, 'pause' / 'resume' = open with the matching copy. The
+  // action is bound at click time so the trigger sites pick the right
+  // mode based on subscription.status.
+  const [pauseModalAction, setPauseModalAction] = useState<'pause' | 'resume' | null>(null);
 
   const [activeTab, setActiveTab] = useState<Tab>('subscription');
 
@@ -1471,19 +1480,57 @@ export default function AdminPage() {
                         </div>
                       </div>
                     )}
-                    {/* Cancel-subscription footer link (Phase 3.2). Only
-                        visible when the sub is currently active — no point
-                        offering cancel for trial / expired / suspended
-                        states. Muted styling on purpose; this isn't a
-                        primary action. */}
+                    {/* Pause + Cancel footer links. Visible when sub is
+                        currently active (Phase 3.2 cancel + Phase 3.4 pause).
+                        Muted styling — these aren't primary actions. */}
                     {subscription.status === 'active' && subscription.razorpay_subscription_id && (
-                      <div className="pt-3 border-t border-gray-800">
+                      <div className="pt-3 border-t border-gray-800 flex items-center gap-4">
+                        <button
+                          onClick={() => setPauseModalAction('pause')}
+                          className="text-xs text-gray-500 hover:text-blue-400 transition-colors underline-offset-2 hover:underline"
+                        >
+                          {t('pauseSubscription.footerTrigger')}
+                        </button>
                         <button
                           onClick={() => setShowCancelModal(true)}
                           className="text-xs text-gray-500 hover:text-red-400 transition-colors underline-offset-2 hover:underline"
                         >
                           {t('cancelSubscription.footerTrigger')}
                         </button>
+                      </div>
+                    )}
+
+                    {/* Paused-state banner (Phase 3.4). Replaces the
+                        action footer when the sub is paused — primary
+                        offer is "resume", cancel is folded in for
+                        completeness. */}
+                    {subscription.status === 'paused' && subscription.razorpay_subscription_id && (
+                      <div className="pt-3 border-t border-gray-800">
+                        <div className="bg-blue-950/30 border border-blue-900/60 rounded-lg p-4 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <PauseCircle size={14} className="text-blue-300" />
+                            <span className="text-sm font-semibold text-white">
+                              {t('resumeSubscription.pausedHeading')}
+                            </span>
+                          </div>
+                          <p className="text-xs text-blue-200/90 leading-relaxed">
+                            {t('resumeSubscription.pausedBody')}
+                          </p>
+                          <div className="flex items-center gap-3 pt-1">
+                            <button
+                              onClick={() => setPauseModalAction('resume')}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors"
+                            >
+                              {t('resumeSubscription.footerTrigger')}
+                            </button>
+                            <button
+                              onClick={() => setShowCancelModal(true)}
+                              className="text-xs text-gray-500 hover:text-red-400 transition-colors underline-offset-2 hover:underline"
+                            >
+                              {t('cancelSubscription.footerTrigger')}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2282,6 +2329,14 @@ export default function AdminPage() {
       {/* ── Cancel-subscription modal (Phase 3.2) ─────────────────────────── */}
       {showCancelModal && (
         <CancelSubscriptionModal onClose={() => setShowCancelModal(false)} />
+      )}
+
+      {/* ── Pause / resume modal (Phase 3.4) ─────────────────────────────── */}
+      {pauseModalAction && (
+        <PauseSubscriptionModal
+          action={pauseModalAction}
+          onClose={() => setPauseModalAction(null)}
+        />
       )}
     </div>
   );

@@ -181,7 +181,11 @@ Deno.serve(async (req: Request) => {
   if (!sub.razorpay_subscription_id) {
     return err('No active Razorpay subscription to cancel', 404);
   }
-  if (sub.status !== 'active') {
+  // Allow cancel from active OR paused — a customer who paused and
+  // decided to leave shouldn't have to resume just to cancel.
+  // Phase 3.4 added paused; everything else (trial / expired / inactive
+  // / suspended) is rejected.
+  if (sub.status !== 'active' && sub.status !== 'paused') {
     return err(
       `Cannot cancel a ${sub.status} subscription`,
       400,

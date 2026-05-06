@@ -618,6 +618,42 @@ Deno.serve(async (req: Request) => {
         });
         break;
       }
+      // Phase 3.4 — customer-initiated pause/resume. Razorpay fires these
+      // at the actual cycle-end pause time (not at the API-call moment),
+      // so the row's `status` flips honestly when billing actually stops.
+      // The pause edge function already wrote a `pause_requested` audit
+      // row at the time of the click; this one records the actual state
+      // change so the history timeline shows both events.
+      case 'subscription.paused': {
+        const sub = payload.subscription?.entity ?? {};
+        const fleetId = sub.notes?.fleet_id;
+        if (!fleetId) break;
+        await supabase.from('subscriptions')
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
+          .eq('fleet_id', fleetId);
+        await supabase.from('audit_logs').insert({
+          fleet_id: fleetId,
+          action: eventType,
+          resource_type: 'subscription',
+          new_values: { status: 'paused' },
+        });
+        break;
+      }
+      case 'subscription.resumed': {
+        const sub = payload.subscription?.entity ?? {};
+        const fleetId = sub.notes?.fleet_id;
+        if (!fleetId) break;
+        await supabase.from('subscriptions')
+          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .eq('fleet_id', fleetId);
+        await supabase.from('audit_logs').insert({
+          fleet_id: fleetId,
+          action: eventType,
+          resource_type: 'subscription',
+          new_values: { status: 'active' },
+        });
+        break;
+      }
       case 'payment.failed': {
         const payment = payload.payment?.entity ?? {};
         const fleetId = payment.notes?.fleet_id;
