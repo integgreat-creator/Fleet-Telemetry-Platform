@@ -98,10 +98,35 @@
         "subscription_resume_requested":           "Resume requested",
         "subscription_resumed":                    "Subscription resumed",
         "extend_trial":                            "Trial extended",
+        "trial_self_extended":                     "Trial self-extended",
         "fleet_billing_details_updated":           "Billing details updated",
         "fleet_language_preference_updated":       "Language preference changed",
         "cashback_redeemed":                       "Cashback redeemed"
       }
+    },
+    "trialExtension": {
+      "title": "Need more time?",
+      "subtitle": "One-time, up to 7 extra days.",
+      "explainOnetime": "We'll add up to 7 days to your trial. This is a one-time courtesy — after this you'll need to pick a plan to keep using FTPGo.",
+      "daysLabel": "Days to add",
+      "reasonLabel": "What's holding you back?",
+      "reasons": {
+        "still_evaluating":          "Still evaluating",
+        "waiting_on_team_decision":  "Waiting on a team decision",
+        "havent_set_up_yet":         "Haven't set up everything yet",
+        "need_more_time_to_test":    "Need more time to test",
+        "other":                     "Other"
+      },
+      "commentLabel": "Anything else you'd like us to know?",
+      "commentOptional": "(optional)",
+      "commentPlaceholder": "Optional — what would help you decide?",
+      "confirm": "Extend my trial",
+      "submitting": "Extending…",
+      "titleDone": "Trial extended",
+      "doneBody_one":   "Added 1 day to your trial. New end date: {{date}}.",
+      "doneBody_other": "Added {{count}} days to your trial. New end date: {{date}}.",
+      "errorAuth": "Please sign in again to extend your trial.",
+      "trigger": "Need more time?"
     },
     "pauseSubscription": {
       "title": "Pause subscription?",

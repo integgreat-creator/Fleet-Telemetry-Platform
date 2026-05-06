@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Clock, ArrowRight, AlertCircle, CreditCard } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useSubscription } from '../hooks/useSubscription';
 import { useTrialBannerState } from '../hooks/useTrialBannerState';
 import { usePendingCheckout } from '../hooks/usePendingCheckout';
+import TrialExtensionModal from './TrialExtensionModal';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -35,9 +37,15 @@ interface Props {
 /// to scroll past the trial card to find the right banner.
 export default function TrialStatusCard({ onUpgradeClick }: Props) {
   const { t, i18n }               = useTranslation();
-  const { trialEndsAt, status }   = useSubscription();
+  const { trialEndsAt, status, trialSelfExtendedAt } = useSubscription();
   const banner                    = useTrialBannerState();
   const pendingCheckout           = usePendingCheckout();
+
+  // Phase 3.5 — one-time self-serve trial extension modal. Triggered by
+  // a small "Need more time?" link in the trial card; gate is "on trial
+  // AND not yet self-extended".
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const canSelfExtend = status === 'trial' && trialSelfExtendedAt == null;
 
   // Centralized "X hours left" / "X days left" copy. Lives inside the
   // component so it can use the same `t` instance as the rest of the JSX —
@@ -139,6 +147,18 @@ export default function TrialStatusCard({ onUpgradeClick }: Props) {
                 }),
               })}
             </p>
+            {/* Self-serve extension link (Phase 3.5). Hidden once used —
+                trialSelfExtendedAt becomes non-null. Muted on purpose:
+                the primary CTA is still "Choose plan"; this is the
+                escape hatch for customers who need a beat. */}
+            {canSelfExtend && (
+              <button
+                onClick={() => setShowExtendModal(true)}
+                className="mt-2 text-[11px] text-yellow-400 hover:text-yellow-300 underline-offset-2 hover:underline transition-colors"
+              >
+                {t('trialExtension.trigger')}
+              </button>
+            )}
           </div>
           <button
             onClick={handleUpgrade}
@@ -148,6 +168,10 @@ export default function TrialStatusCard({ onUpgradeClick }: Props) {
             <ArrowRight size={12} />
           </button>
         </div>
+
+        {showExtendModal && (
+          <TrialExtensionModal onClose={() => setShowExtendModal(false)} />
+        )}
       </div>
     );
   }
