@@ -129,6 +129,19 @@
       "errorAuth": "உங்கள் சோதனையை நீட்டிக்க மீண்டும் உள்நுழையவும்.",
       "trigger": "மேலும் நேரம் வேண்டுமா?"
     },
+    "billingDetailsCard": {
+      "heading": "இரசீது விவரங்கள்",
+      "subheading": "நாங்கள் வழங்கும் ஒவ்வொரு இரசீது மற்றும் வரி இரசீதிலும் இவை அச்சிடப்படும்.",
+      "editButton": "திருத்து",
+      "saveButton": "சேமி",
+      "savingButton": "சேமிக்கிறது…",
+      "cancelButton": "ரத்துசெய்",
+      "fieldGstin": "GSTIN",
+      "fieldBillingAddress": "கட்டண முகவரி",
+      "fieldStateCode": "மாநிலக் குறியீடு",
+      "fieldBillingEmail": "இரசீது மின்னஞ்சல்",
+      "notSet": "அமைக்கப்படவில்லை"
+    },
     "pauseSubscription": {
       "title": "சந்தாவை இடைநிறுத்தவா?",
       "subtitle": "உங்கள் தற்போதைய கட்டண சுழற்சியின் முடிவில் இடைநிறுத்துவோம்.",
