@@ -1,8 +1,39 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Car } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '../i18n';
+
+// ─── Acquisition capture (Phase 4.1) ────────────────────────────────────────
+
+/// URL params we capture for acquisition attribution. Reads happen ONCE on
+/// component mount so a user who navigates inside the auth screen (toggling
+/// login/signup) doesn't lose the attribution if we later do client-side
+/// route changes that drop the query string.
+///
+/// We deliberately don't strip the params from the URL — leaving them lets
+/// the user share their post-signup link with attribution intact, and also
+/// makes the capture easier to debug (the params are visible in the URL
+/// while developing). The server-side classifier is the source of truth.
+function readAcquisitionFromUrl(): Record<string, string> | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const out: Record<string, string> = {};
+    for (const k of ['ref', 'utm_source', 'utm_medium', 'utm_campaign',
+                     'utm_content', 'utm_term'] as const) {
+      const v = params.get(k);
+      if (v) out[k] = v.slice(0, 200);   // hard cap; server caps too, belt+braces
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    // URL parsing should never throw on a real browser, but if it does
+    // (e.g. a quirky embedded webview), failing closed is the right call:
+    // the worst case is acquisition=direct, which the migration backfill
+    // already does for older rows.
+    return null;
+  }
+}
 
 export default function Auth() {
   const { t, i18n } = useTranslation();
@@ -22,6 +53,14 @@ export default function Auth() {
   const [fleetName, setFleetName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Snapshot URL params at first render — capture on mount, hold across
+  // re-renders. useRef instead of useState because we don't want a render
+  // when these change (they don't change after mount). Phase 4.1.
+  const acquisitionRef = useRef<Record<string, string> | null>(null);
+  if (acquisitionRef.current === null) {
+    acquisitionRef.current = readAcquisitionFromUrl();
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,6 +104,11 @@ export default function Auth() {
                 // set from the start. Saves them having to re-toggle inside
                 // the dashboard to "lock in" their reminder language.
                 preferred_language: currentLang,
+                // Phase 4.1 — pass any URL params captured at signup so the
+                // server-side classifier can bucket the acquisition source.
+                // null when nothing relevant was in the URL — server falls
+                // back to source='direct' in that case.
+                acquisition: acquisitionRef.current ?? undefined,
               }),
             }
           );
