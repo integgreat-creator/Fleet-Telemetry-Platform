@@ -70,6 +70,31 @@ interface CashbackRoi {
   redemption_pct:  number;
 }
 
+/// One failed-payment row for the operator dunning surface. Phase 3.9.
+/// The audit log is the source of truth — analytics-api decorates each
+/// row with the joined fleet name, manager email, current sub status,
+/// and a derived days_since_failed for at-a-glance triage.
+interface FailedPaymentRow {
+  audit_id:           string;
+  fleet_id:           string | null;
+  fleet_name:         string | null;
+  /// May be null if the manager_id is missing or auth.users lookup fails.
+  manager_email:      string | null;
+  amount_inr:         number;
+  currency:           string;
+  error_code:         string | null;
+  error_description:  string | null;
+  error_reason:       string | null;
+  payment_id:         string | null;
+  failed_at:          string;
+  /// Subscription status NOW. 'suspended' = still dunning. 'active' =
+  /// recovered after a retry. Other values are corner cases (the customer
+  /// cancelled / paused while dunning) — the dashboard styles them as
+  /// "resolved" so ops don't waste outreach on them.
+  current_status:     string | null;
+  days_since_failed:  number;
+}
+
 interface SummaryResponse {
   mrr_inr:               number;
   arr_inr:               number;
@@ -97,6 +122,9 @@ interface SummaryResponse {
   /// Long format; the dashboard pivots wide.
   mrr_history_by_plan:         MrrByPlanRow[];
   mrr_history_by_plan_materialized_at: string | null;
+  /// Phase 3.9 — last 30 days of payment.failed audit rows enriched with
+  /// fleet + manager info + current sub status. Sorted newest-first.
+  failed_payments:             FailedPaymentRow[];
   generated_at:                string;
 }
 
@@ -489,6 +517,14 @@ function InsightsBody() {
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
+
+      {/* ── Failed-payment dunning surface (Phase 3.9) ───────────────────── */}
+      {/* Sits below the analytics views but above operator utilities — it's
+          actionable insight rather than passive metrics, so it deserves
+          prime placement. Hidden when there are zero failures in the
+          window so a healthy steady state shows nothing rather than an
+          empty table. */}
+      <FailedPaymentsSection rows={data.failed_payments} generatedAt={data.generated_at} />
 
       {/* ── Operator manual cashback grant (Phase 3.6) ───────────────────── */}
       {/* Lowest-priority section — utility for support, not insight. Sits
@@ -1173,6 +1209,169 @@ function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Failed-payment dunning section (Phase 3.9) ───────────────────────────
+
+/// Operator triage view: a table of every payment.failed event in the last
+/// 30 days, joined with fleet name, manager email, error reason, and the
+/// current subscription status.
+///
+/// `current_status === 'suspended'` is the actionable cohort — those are
+/// fleets where the card failed and we haven't recovered yet. Rows where
+/// status flipped back to 'active' (Razorpay's auto-retry succeeded, or the
+/// customer updated their card) are styled muted as "Recovered" so ops
+/// don't waste outreach. Other statuses (paused/inactive/cancelled) mean
+/// the customer moved on under their own steam — also muted.
+///
+/// CSV export uses the same toCsv/CsvButton primitives as the other
+/// sections — operators routinely paste these into a Google Sheet to
+/// distribute outreach across the support team.
+function FailedPaymentsSection({
+  rows,
+  generatedAt,
+}: {
+  rows:        FailedPaymentRow[];
+  generatedAt: string;
+}) {
+  // Empty-state: no failures in the lookback window. Hide the whole card —
+  // a healthy steady state should not push noise onto the dashboard.
+  if (rows.length === 0) return null;
+
+  const stillSuspended = rows.filter(r => r.current_status === 'suspended').length;
+  const recovered      = rows.length - stillSuspended;
+
+  // toCsv takes plain row objects keyed by column names — flatten the
+  // FailedPaymentRow into a CSV-friendly shape with stable, human-readable
+  // headers. Operators paste these into a Google Sheet to divvy up
+  // outreach, so column order matters: time + fleet + contact first,
+  // amount + reason next, status + payment_id at the end.
+  const csv = toCsv(
+    rows.map(r => ({
+      failed_at:          r.failed_at,
+      days_since:         r.days_since_failed,
+      fleet:              r.fleet_name ?? r.fleet_id ?? '',
+      manager_email:      r.manager_email ?? '',
+      amount_inr:         r.amount_inr,
+      error_code:         r.error_code        ?? '',
+      error_description:  r.error_description ?? '',
+      current_status:     r.current_status    ?? '',
+      payment_id:         r.payment_id        ?? '',
+    })),
+    [
+      'failed_at', 'days_since', 'fleet', 'manager_email', 'amount_inr',
+      'error_code', 'error_description', 'current_status', 'payment_id',
+    ],
+  );
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <AlertCircle size={14} className="text-red-400" />
+            Recent payment failures
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Last 30 days · {stillSuspended} still suspended · {recovered} recovered
+          </p>
+        </div>
+        <CsvButton
+          csv={csv}
+          filename={`failed-payments-${dateStampForCsv(generatedAt)}.csv`}
+        />
+      </div>
+
+      <div className="overflow-x-auto -mx-5 px-5">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+              <th className="font-medium pb-2 pr-3">Failed</th>
+              <th className="font-medium pb-2 pr-3">Fleet</th>
+              <th className="font-medium pb-2 pr-3">Contact</th>
+              <th className="font-medium pb-2 pr-3 text-right">Amount</th>
+              <th className="font-medium pb-2 pr-3">Reason</th>
+              <th className="font-medium pb-2">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800">
+            {rows.map(r => {
+              const muted = r.current_status !== 'suspended';
+              return (
+                <tr key={r.audit_id} className={muted ? 'opacity-60' : ''}>
+                  <td className="py-2.5 pr-3 text-gray-300 whitespace-nowrap">
+                    <div>{formatDayShort(r.failed_at)}</div>
+                    <div className="text-[11px] text-gray-500">
+                      {r.days_since_failed === 0
+                        ? 'today'
+                        : r.days_since_failed === 1
+                          ? '1 day ago'
+                          : `${r.days_since_failed} days ago`}
+                    </div>
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-200">
+                    {r.fleet_name || <span className="text-gray-500 font-mono text-xs">{r.fleet_id ?? '—'}</span>}
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-300">
+                    {r.manager_email ? (
+                      <a
+                        href={`mailto:${r.manager_email}?subject=Payment%20failure%20on%20your%20FTPGo%20subscription`}
+                        className="text-blue-400 hover:text-blue-300 hover:underline"
+                      >
+                        {r.manager_email}
+                      </a>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-200 text-right font-mono whitespace-nowrap">
+                    {formatInr(r.amount_inr)}
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-300">
+                    <div className="font-medium">{r.error_code ?? <span className="text-gray-600">—</span>}</div>
+                    {r.error_description && (
+                      <div className="text-[11px] text-gray-500 max-w-[24ch] truncate" title={r.error_description}>
+                        {r.error_description}
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2.5">
+                    <FailureStatusBadge status={r.current_status} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/// Tiny status pill. Suspended is the only "act now" state — everything
+/// else is informational, so we mute the colors. Trial isn't reachable
+/// from a payment.failed event but we render it gracefully if it ever
+/// shows up (e.g. customer downgraded back to trial after a failure).
+function FailureStatusBadge({ status }: { status: string | null }) {
+  if (status === 'suspended') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-900/50 text-red-300 text-[10px] font-semibold uppercase tracking-wide">
+        Suspended
+      </span>
+    );
+  }
+  if (status === 'active') {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-green-900/40 text-green-400 text-[10px] font-semibold uppercase tracking-wide">
+        Recovered
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 text-[10px] font-semibold uppercase tracking-wide">
+      {status ?? '—'}
+    </span>
   );
 }
 

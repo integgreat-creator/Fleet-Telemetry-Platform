@@ -44,6 +44,7 @@ const RELEVANT_ACTIONS: ReadonlySet<string> = new Set([
   'subscription.paused',
   'subscription.resume_requested',
   'subscription.resumed',
+  'subscription.payment_failed',
   'extend-trial',
   'trial.self_extended',
   'fleet.billing_details_updated',
@@ -67,6 +68,7 @@ const ACTION_ICON: Record<string, typeof CheckCircle> = {
   'subscription.paused':                     PauseCircle,
   'subscription.resume_requested':           PlayCircle,
   'subscription.resumed':                    PlayCircle,
+  'subscription.payment_failed':             AlertCircle,
   'extend-trial':                            Clock,
   'trial.self_extended':                     Clock,
   'fleet.billing_details_updated':           CreditCard,
@@ -86,6 +88,7 @@ const ACTION_SEVERITY: Record<string, Severity> = {
   'subscription.paused':                     'warning',
   'subscription.resume_requested':           'good',
   'subscription.resumed':                    'good',
+  'subscription.payment_failed':             'critical',
   'extend-trial':                            'good',
   'trial.self_extended':                     'good',
   'fleet.billing_details_updated':           'neutral',
@@ -134,6 +137,17 @@ function detailFor(row: AuditLogRow): string {
     case 'cashback.redeemed': {
       const amount = (nv.amount_inr as number | undefined);
       return typeof amount === 'number' ? `₹${amount.toLocaleString('en-IN')}` : '';
+    }
+    case 'subscription.payment_failed': {
+      // Customer's view of why their card failed. Razorpay's
+      // error_description is human-readable enough to show as-is; the
+      // amount adds context. Fall back to amount-only when the gateway
+      // didn't supply a description.
+      const amount = (nv.amount_inr as number | undefined);
+      const desc   = (nv.error_description as string | undefined);
+      if (typeof amount === 'number' && desc) return `₹${amount.toLocaleString('en-IN')} · ${desc}`;
+      if (typeof amount === 'number')         return `₹${amount.toLocaleString('en-IN')}`;
+      return desc ?? '';
     }
     case 'fleet.language_preference_updated': {
       const lang = (nv.preferred_language as string | undefined);

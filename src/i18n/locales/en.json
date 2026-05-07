@@ -97,6 +97,7 @@
         "subscription_paused":                     "Subscription paused",
         "subscription_resume_requested":           "Resume requested",
         "subscription_resumed":                    "Subscription resumed",
+        "subscription_payment_failed":             "Payment failed",
         "extend_trial":                            "Trial extended",
         "trial_self_extended":                     "Trial self-extended",
         "fleet_billing_details_updated":           "Billing details updated",

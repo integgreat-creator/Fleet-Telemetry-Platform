@@ -98,6 +98,7 @@
         "subscription_paused":                     "சந்தா இடைநிறுத்தப்பட்டது",
         "subscription_resume_requested":           "மீள்தொடக்கம் கோரப்பட்டது",
         "subscription_resumed":                    "சந்தா மீண்டும் தொடங்கப்பட்டது",
+        "subscription_payment_failed":             "பணம் செலுத்துதல் தோல்வி",
         "extend_trial":                            "சோதனை நீட்டிக்கப்பட்டது",
         "trial_self_extended":                     "சோதனை சுய-நீட்டிப்பு",
         "fleet_billing_details_updated":           "கட்டண விவரங்கள் புதுப்பிக்கப்பட்டன",
