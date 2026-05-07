@@ -38,6 +38,7 @@ import AnnualUpgradeTeaser from '../components/AnnualUpgradeTeaser';
 import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
 import SubscriptionHistoryCard from '../components/SubscriptionHistoryCard';
 import BillingDetailsCard from '../components/BillingDetailsCard';
+import ReferralCard from '../components/ReferralCard';
 import PauseSubscriptionModal from '../components/PauseSubscriptionModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1580,6 +1581,13 @@ export default function AdminPage() {
                 details={billingDetails}
                 onSave={handleSaveBillingDetails}
               />
+
+              {/* Referral program (Phase 4.7) — share link + summary +
+                  recent referrals list. Self-loading; renders for any
+                  fleet (the empty state pitches the program to first-
+                  time users). RLS gates the referrals query so a
+                  customer only ever sees their own referrer history. */}
+              <ReferralCard fleetId={fleetId} />
 
               {/* WhatsApp Notification Number */}
               <div className="bg-gray-800 rounded-xl p-5">

@@ -142,6 +142,22 @@
       "fieldBillingEmail": "Invoice email",
       "notSet": "Not set"
     },
+    "referralCard": {
+      "heading": "Refer a fleet, earn {{amount}}",
+      "body": "Share your link below. When a friend signs up using it and pays for their first month, we'll credit your account with {{amount}}. Credits apply automatically on your next renewal.",
+      "copyLabel": "Copy link",
+      "copiedLabel": "Copied!",
+      "summaryReferrals": "Referrals",
+      "summaryEarned": "Earned",
+      "summaryPending": "Pending",
+      "summaryRedeemedHint_one": "{{count}} redeemed",
+      "summaryRedeemedHint_other": "{{count}} redeemed",
+      "recentHeading": "Recent referrals",
+      "statusRedeemed": "Redeemed",
+      "statusPending": "Pending",
+      "statusExpired": "Expired",
+      "errorClipboard": "Couldn't copy automatically — select the link and use Ctrl+C / ⌘C."
+    },
     "pauseSubscription": {
       "title": "Pause subscription?",
       "subtitle": "We'll pause at the end of your current billing cycle.",
