@@ -261,27 +261,114 @@ async function fetchSummary(adminSecret: string): Promise<SummaryResponse> {
   return await res.json();
 }
 
+// ─── MoM delta computation (Phase 3.13) ────────────────────────────────────
+
+/// Compute month-over-month deltas for the topline tiles from the daily
+/// MRR-history series. Returns `null` when the dataset is too thin or
+/// has insufficient signal for a meaningful baseline; callers render a
+/// muted placeholder in that case.
+///
+/// We compare the last row (today) with the 31st-from-last row (~30 days
+/// ago). The series is materialized + zero-filled, so when there's any
+/// data at all the row count == days-since-MRR-history-began. We require
+/// at least 30 rows to even attempt the comparison; below that, the
+/// "month ago" baseline isn't a full month behind.
+///
+/// Prior-zero baselines deliberately resolve to null, not Infinity. A
+/// jump from ₹0 → ₹50,000 is real but "+∞%" tells nobody anything; the
+/// raw value is already on the tile for that signal.
+function computeMomDeltas(
+  rows: ReadonlyArray<MrrHistoryRow>,
+): { mrr: TileDelta | null; paidSubs: TileDelta | null } | null {
+  if (rows.length < 30) return null;
+  const last  = rows[rows.length - 1];
+  const prior = rows[rows.length - 31];
+  if (!last || !prior) return null;
+
+  const mrrDelta: TileDelta | null = prior.mrr_inr > 0
+    ? { pct: ((last.mrr_inr - prior.mrr_inr) / prior.mrr_inr) * 100 }
+    : null;
+
+  const paidDelta: TileDelta | null = prior.paid_active_subs > 0
+    ? { pct: ((last.paid_active_subs - prior.paid_active_subs) / prior.paid_active_subs) * 100 }
+    : null;
+
+  return { mrr: mrrDelta, paidSubs: paidDelta };
+}
+
 // ─── Tiles ───────────────────────────────────────────────────────────────────
+
+/// MoM delta payload for a tile. `null` means "no baseline" — typically the
+/// dataset doesn't have ≥30 days of history yet (fresh install) or the
+/// prior value was zero (first paying customer just landed). The Tile
+/// renders nothing in that case rather than printing a misleading "+∞%".
+///
+/// `positiveIsGood` controls colour direction. All current topline metrics
+/// are positive=good; the prop exists for future tiles where it isn't
+/// (e.g. churn rate, where +X% is bad). Default true.
+interface TileDelta {
+  pct:             number;
+  positiveIsGood?: boolean;
+}
 
 interface TileProps {
   label:    string;
   value:    string;
   hint?:    string;
   accent?:  'blue' | 'green' | 'gray';
+  /// Phase 3.13. Optional MoM delta line under the value. `undefined`
+  /// hides the line entirely (used for tiles where MoM isn't meaningful);
+  /// `null` reserves the slot but renders a muted "—" placeholder so tiles
+  /// in the same row stay vertically aligned.
+  delta?:   TileDelta | null;
 }
 
-function Tile({ label, value, hint, accent = 'gray' }: TileProps) {
+/// Format a MoM percentage to two-significant-digit precision with a sign.
+/// Numbers above 1000% are clamped to "+999%"-style display — past that
+/// point the actual value is misleading anyway (usually growth from a
+/// near-zero baseline) and the unbounded number wrecks the tile width.
+function formatMomPct(pct: number): string {
+  const sign = pct > 0 ? '+' : pct < 0 ? '−' : '';
+  const mag  = Math.abs(pct);
+  if (mag >= 999) return `${sign}999%`;
+  if (mag >= 10)  return `${sign}${mag.toFixed(0)}%`;
+  return `${sign}${mag.toFixed(1)}%`;
+}
+
+function Tile({ label, value, hint, accent = 'gray', delta }: TileProps) {
   const accentClasses = {
     blue:  'border-blue-900/60  bg-blue-950/20',
     green: 'border-green-900/60 bg-green-950/20',
     gray:  'border-gray-800     bg-gray-900',
   }[accent];
 
+  // Resolve delta colour. We treat ≤ 0.5% changes as "flat" because
+  // everything inside that band is noise from rounding / cron timing
+  // rather than a genuine MoM trend signal.
+  let deltaNode: React.ReactNode = null;
+  if (delta === null) {
+    deltaNode = <span className="text-gray-600">— vs last month</span>;
+  } else if (delta && Number.isFinite(delta.pct)) {
+    const positiveIsGood = delta.positiveIsGood !== false;
+    const flat   = Math.abs(delta.pct) < 0.5;
+    const colour = flat
+      ? 'text-gray-500'
+      : (delta.pct > 0) === positiveIsGood
+        ? 'text-emerald-400'
+        : 'text-red-400';
+    deltaNode = (
+      <span className={`${colour} font-medium`}>
+        {formatMomPct(delta.pct)} <span className="text-gray-500 font-normal">vs last month</span>
+      </span>
+    );
+  }
+
   return (
     <div className={`rounded-xl border ${accentClasses} p-5 space-y-1`}>
       <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">{label}</p>
       <p className="text-2xl font-bold text-white tabular-nums">{value}</p>
       {hint && <p className="text-xs text-gray-500">{hint}</p>}
+      {deltaNode !== null && <p className="text-[11px]">{deltaNode}</p>}
     </div>
   );
 }
@@ -346,6 +433,20 @@ function InsightsBody() {
   const generatedAt = new Date(data.generated_at).toLocaleString('en-IN');
   const totalNewSubs30d = data.new_paid_subs_daily.reduce((s, d) => s + d.new_paid_subs, 0);
 
+  // ── MoM deltas (Phase 3.13) ────────────────────────────────────────────
+  // mrr_history is sorted ascending by day and zero-filled by the
+  // materialized view, so a 90-day series always has 90 rows once the MV
+  // has been refreshed at least once after the system has been live for
+  // 90 days. Before that, we may have <30 rows of meaningful data —
+  // computeMomDelta returns null for that case and the tiles render a
+  // muted placeholder so the layout stays stable.
+  //
+  // We compare today (last row) vs ~30 days ago (31st-from-last row).
+  // Using calendar months would mean different denominators (28 vs 31
+  // days) and a cohort split — over a 90-day moving window, fixed-30-day
+  // MoM is the conventional SaaS metric.
+  const momDeltas = computeMomDeltas(data.mrr_history);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -379,22 +480,32 @@ function InsightsBody() {
           value={formatInrCompact(data.mrr_inr)}
           hint={formatInr(data.mrr_inr)}
           accent="green"
+          delta={momDeltas?.mrr ?? null}
         />
         <Tile
           label="ARR"
           value={formatInrCompact(data.arr_inr)}
           hint={formatInr(data.arr_inr)}
           accent="blue"
+          /* ARR = MRR × 12 → identical pct delta. Showing it on both
+             tiles makes the row consistent rather than printing a
+             baffling "—" on the tile that's algebraically the same. */
+          delta={momDeltas?.mrr ?? null}
         />
         <Tile
           label="Paid active subs"
           value={String(data.paid_active_subs)}
           hint={`${data.trial_active_subs} on trial`}
+          delta={momDeltas?.paidSubs ?? null}
         />
         <Tile
           label="New paid (30d)"
           value={String(totalNewSubs30d)}
           hint="status flipped to active"
+          /* Deliberately no delta: the tile is itself a 30-day window,
+             a MoM-vs-prior-30-day comparison would need 60 days of
+             daily data which isn't in the API response. Skipping
+             beats fabricating. */
         />
       </div>
 
