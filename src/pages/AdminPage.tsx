@@ -34,6 +34,7 @@ import InvoicesPanel from '../components/InvoicesPanel';
 import TrialStatusCard from '../components/TrialStatusCard';
 import CashbackCard from '../components/CashbackCard';
 import AnnualUnlockCard from '../components/AnnualUnlockCard';
+import AnnualUpgradeTeaser from '../components/AnnualUpgradeTeaser';
 import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
 import SubscriptionHistoryCard from '../components/SubscriptionHistoryCard';
 import BillingDetailsCard from '../components/BillingDetailsCard';
@@ -518,6 +519,13 @@ export default function AdminPage() {
   // Currently-open checkout modal (null = closed). Holds the full catalog
   // entry so the modal has prices, min_vehicles, and (later) Razorpay plan IDs.
   const [checkoutPlan, setCheckoutPlan] = useState<PlanCatalogEntry | null>(null);
+  // Which billing cycle should be pre-selected when the modal opens. The
+  // grid's plan-card buttons leave this null (default 'monthly' inside the
+  // modal); the post-unlock annual teaser (Phase 3.12) sets it to 'annual'
+  // so an unlocked customer who clicks "Switch to annual" lands on the
+  // right tab without an extra click.
+  const [checkoutInitialCycle, setCheckoutInitialCycle] =
+    useState<'monthly' | 'annual'>('monthly');
 
   // Customer billing identity (GSTIN + address + state code), fetched once
   // and refreshed after each save. Pre-fills the GSTIN form in the checkout
@@ -1430,6 +1438,22 @@ export default function AdminPage() {
                 subscriptionCreatedAt={subscription?.created_at ?? null}
               />
 
+              {/* Post-unlock annual upgrade teaser (Phase 3.12) — shown
+                  the moment the previous countdown card hides itself, so
+                  the customer never has a blank moment between "you'll
+                  qualify soon" and "here's the savings if you switch".
+                  Self-gating, dismissable, localStorage-cooled-down. */}
+              <AnnualUpgradeTeaser
+                fleetId={fleetId}
+                onUpgrade={() => {
+                  if (!subscription) return;
+                  const entry = catalogPlans.find(p => p.planName === subscription.plan);
+                  if (!entry) return;
+                  setCheckoutInitialCycle('annual');
+                  setCheckoutPlan(entry);
+                }}
+              />
+
               {/* Current plan overview */}
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-4">{t('admin.subscription.currentPlanHeading')}</h2>
@@ -2332,7 +2356,13 @@ export default function AdminPage() {
           vehiclesUsed={vehiclesUsed}
           annualUnlocked={annualUnlockedAt != null}
           initialBilling={billingDetails ?? undefined}
-          onClose={() => setCheckoutPlan(null)}
+          initialBillingCycle={checkoutInitialCycle}
+          onClose={() => {
+            setCheckoutPlan(null);
+            // Reset to default so the next plan-card click doesn't
+            // unintentionally inherit 'annual' from a previous teaser open.
+            setCheckoutInitialCycle('monthly');
+          }}
           onSaveBilling={handleSaveBillingDetails}
           onContinue={handleCheckoutContinue}
         />

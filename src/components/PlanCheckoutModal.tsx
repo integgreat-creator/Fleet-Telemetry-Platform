@@ -46,6 +46,14 @@ interface Props {
   /// so returning customers don't retype it. All fields nullable for
   /// first-time customers and B2C users without a GSTIN.
   initialBilling?: BillingDetails;
+  /// Which billing cycle should be pre-selected when the modal opens.
+  /// Defaults to 'monthly' for first-time checkout. The post-unlock annual
+  /// teaser (Phase 3.12) opens the modal with `'annual'` so the customer
+  /// lands directly on the annual pricing they already opted into.
+  /// Ignored if the customer hasn't crossed the annual-unlock threshold —
+  /// the Annual tab is gated by `annualUnlocked` and falling back to
+  /// monthly is the right thing.
+  initialBillingCycle?: BillingCycle;
   onClose:       () => void;
   /// Persists customer billing identity (GSTIN, address, state code) BEFORE
   /// the Razorpay subscription is created — so the invoice that fires when
@@ -79,6 +87,7 @@ export default function PlanCheckoutModal({
   vehiclesUsed,
   annualUnlocked,
   initialBilling,
+  initialBillingCycle,
   onClose,
   onSaveBilling,
   onContinue,
@@ -91,7 +100,11 @@ export default function PlanCheckoutModal({
   const minCount = Math.max(plan.minVehicles, vehiclesUsed, 1);
 
   const [vehicleCount, setVehicleCount] = useState<number>(minCount);
-  const [billingCycle, setBillingCycle] = useState<BillingCycle>('monthly');
+  // Honor `initialBillingCycle` only when annual is actually selectable —
+  // otherwise the modal would open on a tab the customer can't activate.
+  const [billingCycle, setBillingCycle] = useState<BillingCycle>(
+    initialBillingCycle === 'annual' && annualUnlocked ? 'annual' : 'monthly',
+  );
 
   // ── GSTIN / billing-address capture (Phase 1.3.1) ────────────────────────
   // Auto-expanded if the customer already has details on file (so they
