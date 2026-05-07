@@ -2340,7 +2340,24 @@ export default function AdminPage() {
 
       {/* ── Cancel-subscription modal (Phase 3.2) ─────────────────────────── */}
       {showCancelModal && (
-        <CancelSubscriptionModal onClose={() => setShowCancelModal(false)} />
+        <CancelSubscriptionModal
+          onClose={() => setShowCancelModal(false)}
+          /* Save flow (Phase 3.14): when the customer picks
+             `temporary_pause` as their reason, the modal offers a
+             "Pause instead" CTA. We hand it through only when the
+             current sub state actually allows pausing — same gate as
+             the Subscription tab's pause-link footer. Mirroring that
+             gate here keeps us from offering an option the customer
+             can't take. */
+          onPauseInstead={
+            subscription?.status === 'active' && subscription.razorpay_subscription_id
+              ? () => {
+                  setShowCancelModal(false);
+                  setPauseModalAction('pause');
+                }
+              : undefined
+          }
+        />
       )}
 
       {/* ── Pause / resume modal (Phase 3.4) ─────────────────────────────── */}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, AlertTriangle, Loader2 } from 'lucide-react';
+import { X, AlertTriangle, Loader2, PauseCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { supabase } from '../lib/supabase';
 
@@ -25,6 +25,14 @@ interface Props {
   /// to refresh useSubscription afterwards (the realtime channel will pick
   /// up the row update from the webhook anyway).
   onClose: () => void;
+  /// Optional opt-in to the cancellation save flow (Phase 3.14). When the
+  /// customer picks `temporary_pause` as their reason, an inline
+  /// "Pause instead" suggestion appears. Clicking it calls this callback —
+  /// the parent is expected to close the cancel modal and open the pause
+  /// flow. If unset, the suggestion isn't rendered (e.g. for fleets whose
+  /// subscription state can't be paused — paused already, no Razorpay
+  /// subscription, etc.).
+  onPauseInstead?: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -36,7 +44,7 @@ interface Props {
 /// captures a reason for ops, calls the edge function. The actual
 /// status='inactive' flip happens at cycle end via Razorpay's
 /// subscription.cancelled webhook — the edge function only initiates.
-export default function CancelSubscriptionModal({ onClose }: Props) {
+export default function CancelSubscriptionModal({ onClose, onPauseInstead }: Props) {
   const { t } = useTranslation();
 
   const [reason,     setReason]     = useState<Reason>('too_expensive');
@@ -157,6 +165,40 @@ export default function CancelSubscriptionModal({ onClose }: Props) {
                   ))}
                 </select>
               </div>
+
+              {/* ── Save flow (Phase 3.14) ───────────────────────────────────
+                  Customer self-selected `temporary_pause` as their reason
+                  — that's a directly addressable retention case and we
+                  have a less-aggressive option that maps to it
+                  one-to-one. The whole point of the pause feature is
+                  that customers don't have to cancel; surface it
+                  explicitly when they're about to. Only render when the
+                  parent has wired up `onPauseInstead` (paid+active subs
+                  can pause; trial/expired/inactive can't, and we
+                  shouldn't tease an option the customer can't take). */}
+              {reason === 'temporary_pause' && onPauseInstead && (
+                <div className="rounded-lg bg-blue-950/40 border border-blue-900/60 p-4 flex items-start gap-3">
+                  <div className="p-1.5 rounded-md bg-blue-900/50 shrink-0">
+                    <PauseCircle size={16} className="text-blue-300" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-semibold text-white">
+                      {t('cancelSubscription.saveOffer.heading')}
+                    </h3>
+                    <p className="text-xs text-blue-100/80 mt-1 leading-relaxed">
+                      {t('cancelSubscription.saveOffer.body')}
+                    </p>
+                    <button
+                      onClick={onPauseInstead}
+                      disabled={submitting}
+                      className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white text-xs font-semibold rounded-md transition-colors"
+                    >
+                      <PauseCircle size={12} />
+                      {t('cancelSubscription.saveOffer.cta')}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Optional free-text. Capped at 500 chars on the server;
                   client lets them type more but trims silently. */}

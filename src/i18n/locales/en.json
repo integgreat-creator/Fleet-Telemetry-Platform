@@ -193,7 +193,12 @@
       "titleDone": "Cancellation submitted",
       "doneBody": "We've recorded your request. You'll keep access until the end of your current billing cycle, then your subscription will become inactive automatically. Thank you for being a customer.",
       "errorAuth": "Please sign in again to cancel your subscription.",
-      "footerTrigger": "Cancel subscription"
+      "footerTrigger": "Cancel subscription",
+      "saveOffer": {
+        "heading": "Pause instead?",
+        "body": "If you'll be back, you can pause billing at the end of your current cycle. No charges while paused, your data stays put, and you can resume in one click whenever you're ready.",
+        "cta": "Pause my subscription instead"
+      }
     },
     "annualUnlock": {
       "heading": "Annual billing — coming up",
