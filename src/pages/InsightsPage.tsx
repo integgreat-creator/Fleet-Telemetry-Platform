@@ -4,7 +4,7 @@ import {
   LineChart, Line, CartesianGrid,
   AreaChart, Area, Legend,
 } from 'recharts';
-import { TrendingUp, Loader2, AlertCircle, RefreshCw, Download } from 'lucide-react';
+import { TrendingUp, Loader2, AlertCircle, RefreshCw, Download, Clock } from 'lucide-react';
 import AdminSecretGate, { useAdminSecret } from '../components/AdminSecretGate';
 import { toCsv, downloadCsv, dateStampForCsv } from '../lib/csv';
 
@@ -68,6 +68,24 @@ interface CashbackRoi {
   pending_count:   number;
   pending_inr:     number;
   redemption_pct:  number;
+}
+
+/// One row of the lapsed-trial re-engagement surface. Phase 3.11.
+/// "Lapsed" = trial expired without ever converting (current_period_start
+/// IS NULL on the underlying sub). Engagement signals help ops triage:
+/// added_vehicles tells you whether the customer engaged with the
+/// product, trial_was_extended says they actively asked for more time.
+interface LapsedTrialRow {
+  fleet_id:           string;
+  fleet_name:         string | null;
+  manager_email:      string | null;
+  trial_plan:         string | null;
+  signed_up_at:       string;
+  trial_ended_at:     string;
+  grace_period_end:   string | null;
+  days_since_lapsed:  number;
+  added_vehicles:     boolean;
+  trial_was_extended: boolean;
 }
 
 /// One bucket of the cancellation-reasons aggregate. Phase 3.10.
@@ -148,6 +166,9 @@ interface SummaryResponse {
   /// comments. Empty arrays for fresh installs / quiet windows.
   cancellation_reasons:        CancellationReasonRow[];
   cancellation_recent_comments: CancellationCommentRow[];
+  /// Phase 3.11 — fleets whose trial lapsed without conversion in the
+  /// last 30 days. Re-engagement candidates for ops outreach.
+  lapsed_trials:               LapsedTrialRow[];
   generated_at:                string;
 }
 
@@ -559,6 +580,13 @@ function InsightsBody() {
           window so a healthy steady state shows nothing rather than an
           empty table. */}
       <FailedPaymentsSection rows={data.failed_payments} generatedAt={data.generated_at} />
+
+      {/* ── Lapsed trials (Phase 3.11) ───────────────────────────────────── */}
+      {/* Re-engagement surface: fleets whose trial expired without ever
+          converting in the last 30 days. Sits next to failed-payments
+          because they're both "ops outreach" surfaces, just for different
+          customer states. Hidden when there's nothing to show. */}
+      <LapsedTrialsSection rows={data.lapsed_trials} generatedAt={data.generated_at} />
 
       {/* ── Operator manual cashback grant (Phase 3.6) ───────────────────── */}
       {/* Lowest-priority section — utility for support, not insight. Sits
@@ -1553,6 +1581,145 @@ function FailureStatusBadge({ status }: { status: string | null }) {
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 text-[10px] font-semibold uppercase tracking-wide">
       {status ?? '—'}
     </span>
+  );
+}
+
+// ─── Lapsed trial re-engagement section (Phase 3.11) ──────────────────────
+
+/// Re-engagement surface for ops. The view returns fleets whose trial
+/// expired in the last 30 days without ever converting; the dashboard
+/// renders them with engagement signals so ops can pick the warmest
+/// candidates first. Like the failed-payments surface, this is hidden
+/// when empty — a healthy steady state shows nothing.
+function LapsedTrialsSection({
+  rows,
+  generatedAt,
+}: {
+  rows:        LapsedTrialRow[];
+  generatedAt: string;
+}) {
+  if (rows.length === 0) return null;
+
+  // Engagement-weighted segments for the subtitle: "warm" (engaged with
+  // the product OR explicitly extended trial) vs "cold" (no signs of
+  // life). Ops should triage the warm bucket first.
+  const warm = rows.filter(r => r.trial_was_extended || r.added_vehicles).length;
+  const cold = rows.length - warm;
+
+  const csv = toCsv(
+    rows.map(r => ({
+      lapsed_at:       r.trial_ended_at,
+      days_since:      r.days_since_lapsed,
+      fleet:           r.fleet_name ?? r.fleet_id,
+      manager_email:   r.manager_email ?? '',
+      trial_plan:      r.trial_plan ?? '',
+      signed_up_at:    r.signed_up_at,
+      added_vehicles:  r.added_vehicles ? 'yes' : 'no',
+      was_extended:    r.trial_was_extended ? 'yes' : 'no',
+    })),
+    [
+      'lapsed_at', 'days_since', 'fleet', 'manager_email', 'trial_plan',
+      'signed_up_at', 'added_vehicles', 'was_extended',
+    ],
+  );
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Clock size={14} className="text-yellow-400" />
+            Recent lapsed trials
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Last 30 days · {warm} warm · {cold} cold · {rows.length} total
+          </p>
+        </div>
+        <CsvButton
+          csv={csv}
+          filename={`lapsed-trials-${dateStampForCsv(generatedAt)}.csv`}
+        />
+      </div>
+
+      <div className="overflow-x-auto -mx-5 px-5">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+              <th className="font-medium pb-2 pr-3">Lapsed</th>
+              <th className="font-medium pb-2 pr-3">Fleet</th>
+              <th className="font-medium pb-2 pr-3">Contact</th>
+              <th className="font-medium pb-2 pr-3">Trial plan</th>
+              <th className="font-medium pb-2">Signals</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800">
+            {rows.map(r => {
+              // Cold leads (no engagement) get muted styling so ops eyes
+              // skip past them when triaging — the warm cohort is where
+              // outreach pays off.
+              const isWarm = r.trial_was_extended || r.added_vehicles;
+              return (
+                <tr key={r.fleet_id} className={isWarm ? '' : 'opacity-50'}>
+                  <td className="py-2.5 pr-3 text-gray-300 whitespace-nowrap">
+                    <div>{formatDayShort(r.trial_ended_at)}</div>
+                    <div className="text-[11px] text-gray-500">
+                      {r.days_since_lapsed === 0
+                        ? 'today'
+                        : r.days_since_lapsed === 1
+                          ? '1 day ago'
+                          : `${r.days_since_lapsed} days ago`}
+                    </div>
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-200">
+                    {r.fleet_name || <span className="text-gray-500 font-mono text-xs">{r.fleet_id}</span>}
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-300">
+                    {r.manager_email ? (
+                      <a
+                        href={`mailto:${r.manager_email}?subject=Welcome%20back%20to%20FTPGo`}
+                        className="text-blue-400 hover:text-blue-300 hover:underline"
+                      >
+                        {r.manager_email}
+                      </a>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-3 text-gray-300 capitalize">
+                    {r.trial_plan ?? <span className="text-gray-600">—</span>}
+                  </td>
+                  <td className="py-2.5">
+                    <div className="flex gap-1.5 flex-wrap">
+                      {r.trial_was_extended && (
+                        <span
+                          title="Customer asked for more trial time — strong intent signal."
+                          className="inline-flex items-center px-1.5 py-0.5 rounded bg-yellow-900/40 text-yellow-300 text-[10px] font-semibold uppercase tracking-wide"
+                        >
+                          Extended
+                        </span>
+                      )}
+                      {r.added_vehicles && (
+                        <span
+                          title="Customer added at least one vehicle to their fleet during trial."
+                          className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 text-[10px] font-semibold uppercase tracking-wide"
+                        >
+                          Engaged
+                        </span>
+                      )}
+                      {!r.trial_was_extended && !r.added_vehicles && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 text-[10px] font-semibold uppercase tracking-wide">
+                          Cold
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

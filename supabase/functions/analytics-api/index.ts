@@ -47,6 +47,12 @@
  *       cancellation_reasons:        [{reason, count, pct}, ...]
  *       cancellation_recent_comments:[{requested_at, reason, comment}, ...]
  *
+ *       // Phase 3.11 — lapsed trial re-engagement (last 30 days)
+ *       lapsed_trials:        [{fleet_id, fleet_name, manager_email,
+ *                               trial_plan, signed_up_at, trial_ended_at,
+ *                               days_since_lapsed, added_vehicles,
+ *                               trial_was_extended}, ...]
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -116,6 +122,7 @@ Deno.serve(async (req: Request) => {
       failedRes,
       cancelReasonsRes,
       cancelCommentsRes,
+      lapsedTrialsRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -155,6 +162,13 @@ Deno.serve(async (req: Request) => {
         .not('new_values->>comment', 'is', null)
         .order('created_at', { ascending: false })
         .limit(20),
+      // ── Lapsed trials (Phase 3.11) ──────────────────────────────────────
+      // The view already filters to status='expired' AND no paid period,
+      // and caps at the last 30 days. We just pull and enrich with manager
+      // email below (same pattern as failed-payments). 100-row hard cap
+      // matches the table — if a flood of lapsed trials happens we want to
+      // paginate the dashboard, not silently drop rows.
+      supabase.from('analytics_lapsed_trials').select('*').limit(100),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -168,6 +182,7 @@ Deno.serve(async (req: Request) => {
     if (failedRes.error)         return json({ error: failedRes.error.message },         500);
     if (cancelReasonsRes.error)  return json({ error: cancelReasonsRes.error.message },  500);
     if (cancelCommentsRes.error) return json({ error: cancelCommentsRes.error.message }, 500);
+    if (lapsedTrialsRes.error)   return json({ error: lapsedTrialsRes.error.message },   500);
 
     // ── Build failed_payments slice ───────────────────────────────────────
     // Resolve manager_email per row via auth.admin.getUserById. Cache by
@@ -245,6 +260,35 @@ Deno.serve(async (req: Request) => {
         days_since_failed:  Math.max(0, daysSince),
       };
     }));
+
+    // ── Build lapsed_trials slice (Phase 3.11) ────────────────────────────
+    // Same email-resolution path as failed_payments — the cache is shared
+    // across both surfaces, so a fleet that appears in both (rare but
+    // possible) only triggers one auth.admin lookup.
+    const lapsedRaw = (lapsedTrialsRes.data ?? []) as Array<{
+      fleet_id:           string;
+      fleet_name:         string | null;
+      manager_id:         string | null;
+      trial_plan:         string | null;
+      signed_up_at:       string;
+      trial_ended_at:     string;
+      grace_period_end:   string | null;
+      days_since_lapsed:  number;
+      added_vehicles:     boolean;
+      trial_was_extended: boolean;
+    }>;
+    const lapsedTrials = await Promise.all(lapsedRaw.map(async row => ({
+      fleet_id:           row.fleet_id,
+      fleet_name:         row.fleet_name,
+      manager_email:      await resolveEmail(row.manager_id),
+      trial_plan:         row.trial_plan,
+      signed_up_at:       row.signed_up_at,
+      trial_ended_at:     row.trial_ended_at,
+      grace_period_end:   row.grace_period_end,
+      days_since_lapsed:  Number(row.days_since_lapsed ?? 0),
+      added_vehicles:     !!row.added_vehicles,
+      trial_was_extended: !!row.trial_was_extended,
+    })));
 
     return json({
       // ── Global topline (Phase 2.1) ──────────────────────────────────────
@@ -364,6 +408,13 @@ Deno.serve(async (req: Request) => {
           comment:      String(v.comment ?? '').slice(0, 280),
         };
       }),
+
+      // ── Lapsed trials (Phase 3.11) ──────────────────────────────────────
+      // Re-engagement candidates: fleets whose free trial expired in the
+      // last 30 days without ever converting. Includes engagement signals
+      // (added_vehicles, trial_was_extended) so ops can prioritise. Sorted
+      // newest-first by the underlying view.
+      lapsed_trials: lapsedTrials,
 
       // Stamp the response so the dashboard can show "as of X" — these
       // views are computed live, so it's effectively the wall-clock at
