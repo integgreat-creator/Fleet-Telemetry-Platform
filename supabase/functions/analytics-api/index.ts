@@ -53,6 +53,12 @@
  *                               days_since_lapsed, added_vehicles,
  *                               trial_was_extended}, ...]
  *
+ *       // Phase 4.2 — acquisition-source breakdown
+ *       acquisition_breakdown: [{acquisition_source, total_fleets,
+ *                                trial_count, paid_active_count,
+ *                                churned_count, mrr_inr,
+ *                                paid_conversion_pct}, ...]
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -123,6 +129,7 @@ Deno.serve(async (req: Request) => {
       cancelReasonsRes,
       cancelCommentsRes,
       lapsedTrialsRes,
+      acquisitionRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -169,6 +176,13 @@ Deno.serve(async (req: Request) => {
       // matches the table — if a flood of lapsed trials happens we want to
       // paginate the dashboard, not silently drop rows.
       supabase.from('analytics_lapsed_trials').select('*').limit(100),
+      // ── Acquisition breakdown (Phase 4.2) ───────────────────────────────
+      // Per-bucket fleet counts + MRR contribution + paid-conversion rate.
+      // The view aggregates over ALL fleets (no time filter) — acquisition
+      // attribution is "how did everyone arrive", not "how did everyone
+      // who arrived this month arrive". Bucket count is bounded by the
+      // 7-value enum, so the response shape is tiny.
+      supabase.from('analytics_acquisition_breakdown').select('*'),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -183,6 +197,7 @@ Deno.serve(async (req: Request) => {
     if (cancelReasonsRes.error)  return json({ error: cancelReasonsRes.error.message },  500);
     if (cancelCommentsRes.error) return json({ error: cancelCommentsRes.error.message }, 500);
     if (lapsedTrialsRes.error)   return json({ error: lapsedTrialsRes.error.message },   500);
+    if (acquisitionRes.error)    return json({ error: acquisitionRes.error.message },    500);
 
     // ── Build failed_payments slice ───────────────────────────────────────
     // Resolve manager_email per row via auth.admin.getUserById. Cache by
@@ -415,6 +430,21 @@ Deno.serve(async (req: Request) => {
       // (added_vehicles, trial_was_extended) so ops can prioritise. Sorted
       // newest-first by the underlying view.
       lapsed_trials: lapsedTrials,
+
+      // ── Acquisition breakdown (Phase 4.2) ───────────────────────────────
+      // Per-source rollup: fleet counts by status, MRR contribution,
+      // paid-conversion rate. View orders by mrr_inr DESC so the
+      // dashboard renders source rows top-down by current revenue
+      // contribution.
+      acquisition_breakdown: (acquisitionRes.data ?? []).map(r => ({
+        acquisition_source:  r.acquisition_source as string,
+        total_fleets:        Number(r.total_fleets        ?? 0),
+        trial_count:         Number(r.trial_count         ?? 0),
+        paid_active_count:   Number(r.paid_active_count   ?? 0),
+        churned_count:       Number(r.churned_count       ?? 0),
+        mrr_inr:             Number(r.mrr_inr             ?? 0),
+        paid_conversion_pct: Number(r.paid_conversion_pct ?? 0),
+      })),
 
       // Stamp the response so the dashboard can show "as of X" — these
       // views are computed live, so it's effectively the wall-clock at
