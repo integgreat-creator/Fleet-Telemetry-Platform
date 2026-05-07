@@ -70,6 +70,25 @@ interface CashbackRoi {
   redemption_pct:  number;
 }
 
+/// One bucket of the cancellation-reasons aggregate. Phase 3.10.
+/// `reason` is one of the canonical enum values from RECOGNISED_REASONS
+/// (see razorpay-cancel-subscription); `pct` is share-of-cancellations
+/// already rounded to 2 decimals server-side so the dashboard can render
+/// bars without recomputing.
+interface CancellationReasonRow {
+  reason: string;
+  count:  number;
+  pct:    number;
+}
+
+/// Recent free-text cancellation comment. The buckets tell ops what; the
+/// comments tell them why. Capped at 280 chars on the wire.
+interface CancellationCommentRow {
+  requested_at: string;
+  reason:       string;
+  comment:      string;
+}
+
 /// One failed-payment row for the operator dunning surface. Phase 3.9.
 /// The audit log is the source of truth — analytics-api decorates each
 /// row with the joined fleet name, manager email, current sub status,
@@ -125,6 +144,10 @@ interface SummaryResponse {
   /// Phase 3.9 — last 30 days of payment.failed audit rows enriched with
   /// fleet + manager info + current sub status. Sorted newest-first.
   failed_payments:             FailedPaymentRow[];
+  /// Phase 3.10 — 90-day cancellation-reasons aggregate + recent free-text
+  /// comments. Empty arrays for fresh installs / quiet windows.
+  cancellation_reasons:        CancellationReasonRow[];
+  cancellation_recent_comments: CancellationCommentRow[];
   generated_at:                string;
 }
 
@@ -517,6 +540,17 @@ function InsightsBody() {
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
+
+      {/* ── Cancellation reasons (Phase 3.10) ─────────────────────────────── */}
+      {/* Why customers leave. Bucket bars + recent free-text comments.
+          Sits just below ROI/funnel because it's the natural counterpart
+          — the funnel says how many we lost, this says why. Hidden when
+          there's nothing to show. */}
+      <CancellationReasonsSection
+        rows={data.cancellation_reasons}
+        comments={data.cancellation_recent_comments}
+        generatedAt={data.generated_at}
+      />
 
       {/* ── Failed-payment dunning surface (Phase 3.9) ───────────────────── */}
       {/* Sits below the analytics views but above operator utilities — it's
@@ -1207,6 +1241,153 @@ function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
             </div>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── Cancellation reasons section (Phase 3.10) ────────────────────────────
+
+/// Reason labels for the dashboard. Mirrors the enum in
+/// razorpay-cancel-subscription (RECOGNISED_REASONS). The 'other' bucket is
+/// always last in display order so ops eyes land on the actionable signal
+/// (too_expensive, missing_features, switching_competitor) first.
+const REASON_LABELS: Record<string, string> = {
+  too_expensive:        'Too expensive',
+  missing_features:     'Missing features',
+  switching_competitor: 'Switching competitor',
+  temporary_pause:      'Temporary pause',
+  just_exploring:       'Just exploring',
+  other:                'Other',
+};
+
+/// Per-bucket bar tint. We avoid a single colour ramp because reasons
+/// aren't ordinal — too_expensive is not "more severe" than
+/// missing_features. Using distinct hues makes the stacked bar legible at
+/// a glance. Falls back to gray for unrecognised reasons (server-side
+/// normalisation should prevent this but the dashboard handles it
+/// gracefully anyway).
+const REASON_COLOR: Record<string, string> = {
+  too_expensive:        'bg-red-500',
+  missing_features:     'bg-orange-500',
+  switching_competitor: 'bg-yellow-500',
+  temporary_pause:      'bg-blue-500',
+  just_exploring:       'bg-purple-500',
+  other:                'bg-gray-500',
+};
+
+function reasonLabel(key: string): string {
+  return REASON_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
+function CancellationReasonsSection({
+  rows,
+  comments,
+  generatedAt,
+}: {
+  rows:        CancellationReasonRow[];
+  comments:    CancellationCommentRow[];
+  generatedAt: string;
+}) {
+  // Hide entirely when there's nothing in the window. Same pattern as the
+  // failed-payments card — no point in a "0 cancellations" empty state on
+  // a fresh install.
+  if (rows.length === 0 && comments.length === 0) return null;
+
+  const total = rows.reduce((sum, r) => sum + r.count, 0);
+
+  // Sort consistently for the bar + table: highest-count first, 'other'
+  // always last. Server already orders by count DESC, but normalise here
+  // so the rules are explicit at the render site.
+  const sortedRows = [...rows].sort((a, b) => {
+    if (a.reason === 'other') return 1;
+    if (b.reason === 'other') return -1;
+    return b.count - a.count;
+  });
+
+  const csv = toCsv(
+    sortedRows.map(r => ({
+      reason: reasonLabel(r.reason),
+      count:  r.count,
+      pct:    r.pct,
+    })),
+    ['reason', 'count', 'pct'],
+  );
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Cancellation reasons</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Last 90 days · {total} {total === 1 ? 'cancellation' : 'cancellations'}
+          </p>
+        </div>
+        <CsvButton
+          csv={csv}
+          filename={`cancellation-reasons-${dateStampForCsv(generatedAt)}.csv`}
+          disabled={rows.length === 0}
+        />
+      </div>
+
+      {rows.length > 0 && (
+        <>
+          {/* Stacked horizontal bar — at-a-glance distribution. Each
+              segment is sized by pct, no labels inline (would crowd at
+              small bucket counts); the table below carries the numbers. */}
+          <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-800 mb-3">
+            {sortedRows.map(r => (
+              <div
+                key={r.reason}
+                className={REASON_COLOR[r.reason] ?? 'bg-gray-500'}
+                style={{ width: `${r.pct}%` }}
+                title={`${reasonLabel(r.reason)}: ${r.count} (${r.pct}%)`}
+              />
+            ))}
+          </div>
+
+          {/* Per-bucket rows: dot + label + count + share. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+            {sortedRows.map(r => (
+              <div key={r.reason} className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${REASON_COLOR[r.reason] ?? 'bg-gray-500'}`} />
+                  <span className="text-gray-300 truncate">{reasonLabel(r.reason)}</span>
+                </div>
+                <div className="text-gray-400 tabular-nums whitespace-nowrap">
+                  <span className="text-white">{r.count}</span>
+                  <span className="text-gray-500 text-xs ml-1.5">({r.pct}%)</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Recent free-text comments — qualitative signal alongside the
+          quantitative buckets. Only render the section when at least one
+          customer left a non-empty comment in the window. */}
+      {comments.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-gray-800">
+          <h3 className="text-[11px] uppercase tracking-wide text-gray-500 font-medium mb-3">
+            Recent comments
+          </h3>
+          <div className="space-y-2.5">
+            {comments.map(c => (
+              <div key={c.requested_at + c.comment.slice(0, 16)} className="text-sm">
+                <div className="flex items-center gap-2 text-[11px] text-gray-500 mb-0.5">
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${REASON_COLOR[c.reason] ?? 'bg-gray-500'}`} />
+                  <span>{reasonLabel(c.reason)}</span>
+                  <span className="text-gray-600">·</span>
+                  <span>{formatDayShort(c.requested_at)}</span>
+                </div>
+                <blockquote className="text-gray-300 leading-relaxed pl-3 border-l-2 border-gray-700">
+                  {c.comment}
+                </blockquote>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

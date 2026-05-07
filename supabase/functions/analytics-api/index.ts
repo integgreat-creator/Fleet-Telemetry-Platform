@@ -43,6 +43,10 @@
  *                               amount_inr, error_code, error_description,
  *                               failed_at, current_status, days_since_failed}, ...]
  *
+ *       // Phase 3.10 — cancellation reasons (last 90 days)
+ *       cancellation_reasons:        [{reason, count, pct}, ...]
+ *       cancellation_recent_comments:[{requested_at, reason, comment}, ...]
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -110,6 +114,8 @@ Deno.serve(async (req: Request) => {
       mrrHistoryRes,
       mrrByPlanRes,
       failedRes,
+      cancelReasonsRes,
+      cancelCommentsRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -132,6 +138,23 @@ Deno.serve(async (req: Request) => {
         .gte('created_at', failedSinceIso)
         .order('created_at', { ascending: false })
         .limit(200),
+      // ── Cancellation reasons (Phase 3.10) ───────────────────────────────
+      // The aggregated bucket counts come from the view; recent free-text
+      // comments come from the same audit-log table directly. Comments
+      // are the qualitative signal — buckets tell ops what, comments tell
+      // them why. We reuse `failedSinceIso` as the comment lookback window
+      // by coincidence — the cancellation-reasons VIEW uses 90 days but
+      // we cap the comment surface at the same 30-day recency window so
+      // the dashboard shows freshly-relevant qualitative signal next to
+      // the quantitative aggregate.
+      supabase.from('analytics_cancellation_reasons').select('*'),
+      supabase.from('audit_logs')
+        .select('created_at, new_values')
+        .eq('action', 'subscription.cancellation_requested')
+        .gte('created_at', failedSinceIso)
+        .not('new_values->>comment', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(20),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -142,7 +165,9 @@ Deno.serve(async (req: Request) => {
     if (curvesRes.error)     return json({ error: curvesRes.error.message },     500);
     if (mrrHistoryRes.error) return json({ error: mrrHistoryRes.error.message }, 500);
     if (mrrByPlanRes.error)  return json({ error: mrrByPlanRes.error.message },  500);
-    if (failedRes.error)     return json({ error: failedRes.error.message },     500);
+    if (failedRes.error)         return json({ error: failedRes.error.message },         500);
+    if (cancelReasonsRes.error)  return json({ error: cancelReasonsRes.error.message },  500);
+    if (cancelCommentsRes.error) return json({ error: cancelCommentsRes.error.message }, 500);
 
     // ── Build failed_payments slice ───────────────────────────────────────
     // Resolve manager_email per row via auth.admin.getUserById. Cache by
@@ -317,6 +342,28 @@ Deno.serve(async (req: Request) => {
       // manager email, current subscription status, and days_since_failed.
       // Sorted newest-first so the dashboard table doesn't have to.
       failed_payments: failedPayments,
+
+      // ── Cancellation reasons (Phase 3.10) ───────────────────────────────
+      // 90-day aggregate: bucket counts + share, plus the most recent free-
+      // text comments customers wrote when cancelling. Buckets tell ops
+      // WHAT, comments tell them WHY. Empty arrays for fresh installs.
+      cancellation_reasons: (cancelReasonsRes.data ?? []).map(r => ({
+        reason: r.reason as string,
+        count:  Number(r.count ?? 0),
+        pct:    Number(r.pct   ?? 0),
+      })),
+      cancellation_recent_comments: (cancelCommentsRes.data ?? []).map(r => {
+        const v = (r.new_values ?? {}) as Record<string, unknown>;
+        return {
+          requested_at: r.created_at as string,
+          reason:       (v.reason  as string) ?? 'other',
+          // Cap at 280 chars on the wire — operators don't need novellas
+          // and a wide-open string field is a footgun if someone pastes a
+          // multi-page rant. The DB constraint is 500 already; we just
+          // shorten for the dashboard rendering.
+          comment:      String(v.comment ?? '').slice(0, 280),
+        };
+      }),
 
       // Stamp the response so the dashboard can show "as of X" — these
       // views are computed live, so it's effectively the wall-clock at
