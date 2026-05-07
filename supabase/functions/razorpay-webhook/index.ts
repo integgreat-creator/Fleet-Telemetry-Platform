@@ -19,6 +19,17 @@ const CASHBACK_MAX_INR        = 500;
 const CASHBACK_EXPIRY_DAYS    = 90;
 const CASHBACK_REASON         = 'first_charge_cashback';
 
+// ─── Referral program (Phase 4.6) ────────────────────────────────────────────
+// Flat ₹500 credit per successful referral, 90-day expiry. Granted to the
+// REFERRER on the referred fleet's first paid charge. Same expiry window
+// as first-charge cashback so customer expectations stay consistent. The
+// flat amount (vs % like cashback) keeps the math obvious in the customer-
+// facing share-link card and avoids "your friend signed up, you got
+// ₹47.30" awkwardness.
+const REFERRAL_CREDIT_INR     = 500;
+const REFERRAL_EXPIRY_DAYS    = 90;
+const REFERRAL_REASON         = 'referral_credit';
+
 // ─── GST invoice helpers (Phase 1.3.2) ──────────────────────────────────────
 // Single GST rate for B2B SaaS (HSN/SAC 998314). Split into 9% CGST + 9% SGST
 // for intra-state, or 18% IGST for inter-state. If you ever support multiple
@@ -328,6 +339,114 @@ async function maybeGrantFirstChargeCashback(
   }
 }
 
+/// Referral credit grant. Phase 4.6.
+///
+/// Idempotent two-step:
+///   1. Look up `fleets.acquisition_referrer_fleet_id` for the just-charged
+///      fleet. If null, the fleet wasn't referred — no-op.
+///   2. INSERT into `referrals(referred_fleet_id=<this>)`. The unique
+///      constraint on `referred_fleet_id` makes a webhook redelivery a
+///      23505 → no-op. The write is conditional on the credit grant
+///      succeeding to keep the two rows in sync.
+///
+/// Order matters: we INSERT the fleet_credits row FIRST, capture its id,
+/// then INSERT the referrals row referencing it. If the second insert
+/// fails (e.g. duplicate redelivery), we DELETE the credit we just
+/// created so we don't leave an orphan crediting the referrer twice.
+/// This is the only path with a manual rollback because the unique
+/// constraint we'd need to dedupe credits would couple them too tightly
+/// to referrals (one fleet can have many credit kinds).
+///
+/// Best-effort: any failure logs but doesn't roll back the subscription
+/// update — same approach as first-charge cashback. A missing referral
+/// credit is recoverable post-hoc; a stuck-suspended-on-the-customer's-
+/// successful-charge state is not.
+async function maybeGrantReferralCredit(
+  supabase: SupabaseClient,
+  opts: {
+    fleetId:    string;
+    paymentId:  string;
+  },
+): Promise<void> {
+  // 1. Resolve referrer for the just-paid fleet.
+  const { data: fleetRow, error: fleetErr } = await supabase
+    .from('fleets')
+    .select('acquisition_referrer_fleet_id')
+    .eq('id', opts.fleetId)
+    .maybeSingle();
+  if (fleetErr) {
+    console.error('[referral] fleet lookup failed', fleetErr, opts);
+    return;
+  }
+  const referrerId = fleetRow?.acquisition_referrer_fleet_id as string | null | undefined;
+  if (!referrerId) return;   // not a referred fleet
+
+  // 2. Pre-flight: was this fleet already credited as a referral? (Re-
+  // delivery, or some other writer.) Cheap exists-check that lets us
+  // skip the credit insert + rollback dance for the common no-op case.
+  const { data: existing } = await supabase
+    .from('referrals')
+    .select('id')
+    .eq('referred_fleet_id', opts.fleetId)
+    .maybeSingle();
+  if (existing) return;
+
+  // 3. Grant the credit to the REFERRER.
+  const expiresAt = new Date(Date.now() + REFERRAL_EXPIRY_DAYS * 86_400_000).toISOString();
+  const { data: credit, error: credErr } = await supabase
+    .from('fleet_credits')
+    .insert({
+      fleet_id:           referrerId,
+      amount_inr:         REFERRAL_CREDIT_INR,
+      reason:             REFERRAL_REASON,
+      expires_at:         expiresAt,
+      source_payment_id:  opts.paymentId,
+      notes: {
+        referred_fleet_id: opts.fleetId,
+        flat_inr:          REFERRAL_CREDIT_INR,
+        expires_in_days:   REFERRAL_EXPIRY_DAYS,
+      },
+    })
+    .select('id')
+    .single();
+  if (credErr || !credit) {
+    console.error('[referral] credit insert failed', credErr, opts);
+    return;
+  }
+
+  // 4. Record the referral, pointing at the just-created credit.
+  const { error: refErr } = await supabase
+    .from('referrals')
+    .insert({
+      referrer_fleet_id:   referrerId,
+      referred_fleet_id:   opts.fleetId,
+      fleet_credit_id:     credit.id,
+      credited_amount_inr: REFERRAL_CREDIT_INR,
+      payment_id:          opts.paymentId,
+    });
+  if (refErr) {
+    // 23505 = unique violation. The exists-check above should have
+    // caught this; if we still raced, roll the credit back so we don't
+    // double-credit the referrer.
+    if (refErr.code === '23505') {
+      await supabase.from('fleet_credits').delete().eq('id', credit.id);
+      return;
+    }
+    // Other errors: leave the credit (it's not double-spent — the
+    // referrals row just didn't land) but log loudly for ops.
+    console.error('[referral] referrals insert failed; orphan credit kept',
+      refErr, { referrerId, credit_id: credit.id, ...opts });
+    return;
+  }
+
+  console.info('[referral] credited', {
+    referrer_fleet_id: referrerId,
+    referred_fleet_id: opts.fleetId,
+    credit_id:         credit.id,
+    amount_inr:        REFERRAL_CREDIT_INR,
+  });
+}
+
 /// Walks unredeemed, unexpired credits for a fleet and applies them as
 /// partial refunds against the just-captured payment. Stops at the charge
 /// amount — we never refund more than the customer paid this cycle.
@@ -594,6 +713,21 @@ Deno.serve(async (req: Request) => {
                 fleetId,
                 paymentId,
                 amountInr: chargeAmountInr,
+              });
+              // Phase 4.6 — referral credit. Granted to the REFERRER on
+              // the referred fleet's first paid charge. Idempotent under
+              // webhook redelivery (UNIQUE on referrals.referred_fleet_id).
+              // No-op for fleets without an acquisition_referrer_fleet_id.
+              // Sequenced AFTER the first-charge cashback for the same
+              // reason redemption is sequenced FIRST: we don't want to
+              // grant a credit and immediately redeem it on the same
+              // payment. The first-charge cashback grants to THIS fleet;
+              // the referral grants to the REFERRER, so they don't
+              // collide on the redeem path either way — but the ordering
+              // keeps the chronology readable in the audit log.
+              await maybeGrantReferralCredit(supabase, {
+                fleetId,
+                paymentId,
               });
             }
           } else {
