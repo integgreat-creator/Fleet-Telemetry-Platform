@@ -59,6 +59,16 @@
  *                                churned_count, mrr_inr,
  *                                paid_conversion_pct}, ...]
  *
+ *       // Phase 4.8 — referral program ROI + top referrers
+ *       referral_program_roi: {total_referrals, granted_inr,
+ *                              redeemed_count, redeemed_inr,
+ *                              expired_count, expired_inr,
+ *                              pending_count, pending_inr,
+ *                              redemption_pct}
+ *       top_referrers:        [{fleet_id, fleet_name, referral_count,
+ *                               total_credited_inr, redeemed_count,
+ *                               expired_count, last_referral_at}, ...]
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -130,6 +140,8 @@ Deno.serve(async (req: Request) => {
       cancelCommentsRes,
       lapsedTrialsRes,
       acquisitionRes,
+      referralRoiRes,
+      topReferrersRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -183,6 +195,12 @@ Deno.serve(async (req: Request) => {
       // who arrived this month arrive". Bucket count is bounded by the
       // 7-value enum, so the response shape is tiny.
       supabase.from('analytics_acquisition_breakdown').select('*'),
+      // ── Referral program ROI + top referrers (Phase 4.8) ────────────────
+      // Single-row ROI aggregate + top-20 referrer list. Both are bounded
+      // and tiny — referrals table is small at our scale, top_referrers
+      // is hard-capped to 20 by the view itself.
+      supabase.from('analytics_referral_program_roi').select('*').single(),
+      supabase.from('analytics_top_referrers').select('*'),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -198,6 +216,8 @@ Deno.serve(async (req: Request) => {
     if (cancelCommentsRes.error) return json({ error: cancelCommentsRes.error.message }, 500);
     if (lapsedTrialsRes.error)   return json({ error: lapsedTrialsRes.error.message },   500);
     if (acquisitionRes.error)    return json({ error: acquisitionRes.error.message },    500);
+    if (referralRoiRes.error)    return json({ error: referralRoiRes.error.message },    500);
+    if (topReferrersRes.error)   return json({ error: topReferrersRes.error.message },   500);
 
     // ── Build failed_payments slice ───────────────────────────────────────
     // Resolve manager_email per row via auth.admin.getUserById. Cache by
@@ -444,6 +464,35 @@ Deno.serve(async (req: Request) => {
         churned_count:       Number(r.churned_count       ?? 0),
         mrr_inr:             Number(r.mrr_inr             ?? 0),
         paid_conversion_pct: Number(r.paid_conversion_pct ?? 0),
+      })),
+
+      // ── Referral program ROI (Phase 4.8) ────────────────────────────────
+      // Single-row ROI aggregate. INR-weighted redemption_pct matches
+      // the cashback ROI convention.
+      referral_program_roi: {
+        total_referrals: Number(referralRoiRes.data?.total_referrals ?? 0),
+        granted_inr:     Number(referralRoiRes.data?.granted_inr     ?? 0),
+        redeemed_count:  Number(referralRoiRes.data?.redeemed_count  ?? 0),
+        redeemed_inr:    Number(referralRoiRes.data?.redeemed_inr    ?? 0),
+        expired_count:   Number(referralRoiRes.data?.expired_count   ?? 0),
+        expired_inr:     Number(referralRoiRes.data?.expired_inr     ?? 0),
+        pending_count:   Number(referralRoiRes.data?.pending_count   ?? 0),
+        pending_inr:     Number(referralRoiRes.data?.pending_inr     ?? 0),
+        redemption_pct:  Number(referralRoiRes.data?.redemption_pct  ?? 0),
+      },
+
+      // ── Top referrers (Phase 4.8) ───────────────────────────────────────
+      // View hard-caps at 20 rows. Sorted by referral_count DESC,
+      // total_credited_inr DESC by the view, so the dashboard renders
+      // top contributors first without re-sorting.
+      top_referrers: (topReferrersRes.data ?? []).map(r => ({
+        fleet_id:           r.fleet_id           as string,
+        fleet_name:         (r.fleet_name        as string) ?? null,
+        referral_count:     Number(r.referral_count     ?? 0),
+        total_credited_inr: Number(r.total_credited_inr ?? 0),
+        redeemed_count:     Number(r.redeemed_count     ?? 0),
+        expired_count:      Number(r.expired_count      ?? 0),
+        last_referral_at:   r.last_referral_at   as string,
       })),
 
       // Stamp the response so the dashboard can show "as of X" — these
