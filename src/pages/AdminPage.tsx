@@ -36,6 +36,7 @@ import CashbackCard from '../components/CashbackCard';
 import AnnualUnlockCard from '../components/AnnualUnlockCard';
 import CancelSubscriptionModal from '../components/CancelSubscriptionModal';
 import SubscriptionHistoryCard from '../components/SubscriptionHistoryCard';
+import BillingDetailsCard from '../components/BillingDetailsCard';
 import PauseSubscriptionModal from '../components/PauseSubscriptionModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1546,6 +1547,15 @@ export default function AdminPage() {
                   relevant actions. Hides itself when there's nothing to
                   show — fresh fleets see no empty state. */}
               <SubscriptionHistoryCard hasFleet={!!fleetId} />
+
+              {/* Billing-details editor (Phase 3.8). Customers can update
+                  GSTIN / address / state code / invoice email after
+                  signup without re-doing checkout. Reuses the same
+                  admin-api action and i18n strings as PlanCheckoutModal. */}
+              <BillingDetailsCard
+                details={billingDetails}
+                onSave={handleSaveBillingDetails}
+              />
 
               {/* WhatsApp Notification Number */}
               <div className="bg-gray-800 rounded-xl p-5">

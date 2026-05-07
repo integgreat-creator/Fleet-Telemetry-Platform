@@ -128,6 +128,19 @@
       "errorAuth": "Please sign in again to extend your trial.",
       "trigger": "Need more time?"
     },
+    "billingDetailsCard": {
+      "heading": "Invoice details",
+      "subheading": "Used on every receipt and tax invoice we issue.",
+      "editButton": "Edit",
+      "saveButton": "Save",
+      "savingButton": "Saving…",
+      "cancelButton": "Cancel",
+      "fieldGstin": "GSTIN",
+      "fieldBillingAddress": "Billing address",
+      "fieldStateCode": "State code",
+      "fieldBillingEmail": "Invoice email",
+      "notSet": "Not set"
+    },
     "pauseSubscription": {
       "title": "Pause subscription?",
       "subtitle": "We'll pause at the end of your current billing cycle.",
