@@ -804,6 +804,7 @@ export default function AdminPage() {
         gstin:          (data?.gstin           as string | null) ?? null,
         billingAddress: (data?.billing_address as string | null) ?? null,
         stateCode:      (data?.state_code      as string | null) ?? null,
+        billingEmail:   (data?.billing_email   as string | null) ?? null,
       });
     } catch (e) {
       console.warn('[admin] billing-details load threw', e);
@@ -826,6 +827,7 @@ export default function AdminPage() {
         gstin:            details.gstin,
         billing_address:  details.billingAddress,
         state_code:       details.stateCode,
+        billing_email:    details.billingEmail,
       },
     });
     if (error) {

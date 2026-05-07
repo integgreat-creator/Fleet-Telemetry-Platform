@@ -157,7 +157,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'billing-details') {
       const { data, error: bdErr } = await adminClient
         .from('fleets')
-        .select('name, gstin, billing_address, state_code')
+        .select('name, gstin, billing_address, state_code, billing_email')
         .eq('id', fleet.id)
         .single();
       if (bdErr) return err(bdErr.message, 500);
@@ -166,6 +166,9 @@ Deno.serve(async (req: Request) => {
         gstin:            data.gstin            ?? null,
         billing_address:  data.billing_address  ?? null,
         state_code:       data.state_code       ?? null,
+        // Phase 3.7 — separate email for invoices / receipts. Null means
+        // fall back to the manager's auth email when sending.
+        billing_email:    data.billing_email    ?? null,
       });
     }
 
@@ -315,10 +318,14 @@ Deno.serve(async (req: Request) => {
       const hasGstin    = Object.prototype.hasOwnProperty.call(body, 'gstin');
       const hasAddress  = Object.prototype.hasOwnProperty.call(body, 'billing_address');
       const hasState    = Object.prototype.hasOwnProperty.call(body, 'state_code');
+      // Phase 3.7 — separate billing email field. Same null-clears-the-value
+      // contract as the others.
+      const hasEmail    = Object.prototype.hasOwnProperty.call(body, 'billing_email');
 
       const gstin    = hasGstin   ? (body.gstin           as string | null) : undefined;
       const address  = hasAddress ? (body.billing_address as string | null) : undefined;
       const state    = hasState   ? (body.state_code      as string | null) : undefined;
+      const email    = hasEmail   ? (body.billing_email   as string | null) : undefined;
 
       // GSTIN format: 2-digit state + 5 alpha (PAN org) + 4 digit + 1 alpha (PAN check)
       // + 1 digit (entity) + 1 alpha ('Z' for normal taxpayers) + 1 alphanumeric (checksum)
@@ -334,11 +341,26 @@ Deno.serve(async (req: Request) => {
         return err('state_code must be a 2-digit GST state code (e.g. "33").');
       }
 
+      // Email pattern: practical, not pedantic. The DB CHECK enforces the
+      // gross shape; this regex is the friendlier client-facing gate.
+      // Anything that contains a single @ with at least one dot in the
+      // domain part passes.
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (email !== undefined && email !== null) {
+        const trimmed = email.trim();
+        if (!emailPattern.test(trimmed)) {
+          return err('Invalid email format for billing_email.');
+        }
+        if (trimmed.length > 320) {
+          return err('billing_email is too long (max 320 chars).');
+        }
+      }
+
       // Cross-field consistency. We need the *resolved* values — if the
       // caller didn't include a field, fall back to the row's current value.
       const { data: current, error: curErr } = await adminClient
         .from('fleets')
-        .select('gstin, billing_address, state_code')
+        .select('gstin, billing_address, state_code, billing_email')
         .eq('id', fleet.id)
         .single();
       if (curErr) return err(curErr.message, 500);
@@ -354,6 +376,7 @@ Deno.serve(async (req: Request) => {
       if (gstin   !== undefined) updatePayload.gstin           = gstin === null ? null : gstin.toUpperCase().trim();
       if (address !== undefined) updatePayload.billing_address = address;
       if (state   !== undefined) updatePayload.state_code      = state;
+      if (email   !== undefined) updatePayload.billing_email   = email === null ? null : email.trim().toLowerCase();
 
       const { error: updErr } = await adminClient
         .from('fleets')
@@ -371,6 +394,7 @@ Deno.serve(async (req: Request) => {
           gstin:           current.gstin,
           billing_address: current.billing_address,
           state_code:      current.state_code,
+          billing_email:   current.billing_email,
         },
         new_values: updatePayload,
       });
@@ -380,6 +404,7 @@ Deno.serve(async (req: Request) => {
         gstin:           updatePayload.gstin           ?? current.gstin           ?? null,
         billing_address: updatePayload.billing_address ?? current.billing_address ?? null,
         state_code:      updatePayload.state_code      ?? current.state_code      ?? null,
+        billing_email:   updatePayload.billing_email   ?? current.billing_email   ?? null,
       });
     }
 

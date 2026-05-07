@@ -17,10 +17,20 @@ const SOFT_CAP_VEHICLES = 500;
 // the same rule (admin-api → update-billing-details).
 const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9]{1}[A-Z]{1}[0-9A-Z]{1}$/;
 
+// Pragmatic email check — matches the server's own pattern in admin-api's
+// update-billing-details handler. Not full RFC 5321 (that regex is famously
+// untenable), but catches every realistic typo while accepting the long
+// tail of legitimate corporate addresses (`+aliases`, `accounts.payable@`,
+// hyphenated TLDs, etc.). The DB CHECK is the third line of defence.
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export interface BillingDetails {
   gstin:           string | null;
   billingAddress:  string | null;
   stateCode:       string | null;
+  /// Optional finance-team email for invoices/receipts. NULL falls back to
+  /// the manager's auth email when invoices are dispatched. Phase 3.7.
+  billingEmail:    string | null;
 }
 
 interface Props {
@@ -91,10 +101,18 @@ export default function PlanCheckoutModal({
   const [gstin,           setGstin]          = useState<string>(initialBilling?.gstin          ?? '');
   const [billingAddress,  setBillingAddress] = useState<string>(initialBilling?.billingAddress ?? '');
   const [stateCode,       setStateCode]      = useState<string>(initialBilling?.stateCode      ?? '');
-  const [gstinExpanded,   setGstinExpanded]  = useState<boolean>(!!initialBilling?.gstin);
+  const [billingEmail,    setBillingEmail]   = useState<string>(initialBilling?.billingEmail   ?? '');
+  // Auto-expand the section if the customer has any of the GSTIN-section
+  // fields on file — including the new billing_email — so they can see what
+  // we'll print on the invoice without an extra click.
+  const [gstinExpanded,   setGstinExpanded]  = useState<boolean>(
+    !!(initialBilling?.gstin || initialBilling?.billingEmail),
+  );
 
   // Format error shown inline under the GSTIN input. Cleared on every keystroke.
   const [gstinError,      setGstinError]     = useState<string | null>(null);
+  // Format error shown inline under the billing-email input.
+  const [emailError,      setEmailError]     = useState<string | null>(null);
 
   // Set true while the parent's onContinue promise is in flight (Razorpay
   // subscription create + embedded checkout open). Disables the form so the
@@ -124,9 +142,10 @@ export default function PlanCheckoutModal({
     return (
       gstin           !== (initialBilling?.gstin          ?? '') ||
       billingAddress  !== (initialBilling?.billingAddress ?? '') ||
-      stateCode       !== (initialBilling?.stateCode      ?? '')
+      stateCode       !== (initialBilling?.stateCode      ?? '') ||
+      billingEmail    !== (initialBilling?.billingEmail   ?? '')
     );
-  }, [gstin, billingAddress, stateCode, initialBilling]);
+  }, [gstin, billingAddress, stateCode, billingEmail, initialBilling]);
 
   const handleContinue = async () => {
     if (submitting) return;
@@ -136,6 +155,16 @@ export default function PlanCheckoutModal({
     if (trimmedGstin && !GSTIN_PATTERN.test(trimmedGstin)) {
       setGstinExpanded(true);
       setGstinError(t('checkout.gstinFormatError'));
+      return;
+    }
+
+    // Validate billing-email format. Optional field, so empty is fine; if
+    // the customer typed something, it has to look like an email — server
+    // and DB will reject otherwise, and we'd rather catch it here.
+    const trimmedEmail = billingEmail.trim();
+    if (trimmedEmail && !EMAIL_PATTERN.test(trimmedEmail)) {
+      setGstinExpanded(true);
+      setEmailError(t('checkout.billingEmailFormatError'));
       return;
     }
 
@@ -151,6 +180,9 @@ export default function PlanCheckoutModal({
           gstin:          trimmedGstin || null,
           billingAddress: billingAddress.trim() || null,
           stateCode:      stateCode.trim()      || null,
+          // Lower-case to match how the admin-api stores it; keeps lookups
+          // case-insensitive without needing a citext column.
+          billingEmail:   trimmedEmail ? trimmedEmail.toLowerCase() : null,
         });
       }
 
@@ -430,6 +462,37 @@ export default function PlanCheckoutModal({
                     inputMode="numeric"
                     className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-center font-mono text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
                   />
+                </div>
+
+                {/* Billing email (Phase 3.7). Distinct from auth email — finance
+                    teams typically want invoices to land at accounts@company.com
+                    rather than the manager's personal address. NULL falls back
+                    to the auth email server-side. */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    {t('checkout.billingEmailLabel')} <span className="text-gray-600">{t('checkout.billingEmailHint')}</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={billingEmail}
+                    onChange={e => {
+                      setBillingEmail(e.target.value);
+                      setEmailError(null);
+                    }}
+                    placeholder={t('checkout.billingEmailPlaceholder')}
+                    spellCheck={false}
+                    autoComplete="off"
+                    inputMode="email"
+                    maxLength={320}
+                    className={`w-full bg-gray-800 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 ${
+                      emailError
+                        ? 'border-red-700 focus:ring-red-500/40'
+                        : 'border-gray-700 focus:ring-blue-500/40 focus:border-blue-500'
+                    }`}
+                  />
+                  {emailError && (
+                    <p className="mt-1 text-[11px] text-red-400">{emailError}</p>
+                  )}
                 </div>
               </div>
             )}
