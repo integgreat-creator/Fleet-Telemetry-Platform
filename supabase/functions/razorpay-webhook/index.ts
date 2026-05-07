@@ -662,6 +662,39 @@ Deno.serve(async (req: Request) => {
           .update({ status: 'suspended', updated_at: new Date().toISOString() })
           .eq('fleet_id', fleetId);
 
+        // ── Audit (Phase 3.9) ─────────────────────────────────────────────
+        // Capture the failure reason so the operator dunning view (analytics-
+        // api ?action=failed-payments) can show ops what broke. Razorpay
+        // typically populates `error_code` ("BAD_REQUEST_ERROR",
+        // "GATEWAY_ERROR", …), `error_description` (human-readable), and
+        // `error_reason` ("payment_failed", "card_declined"…). All three are
+        // optional in the payload; we store whatever's present rather than
+        // bail, because even a bare amount + timestamp is useful for triage.
+        // amount is paise — store INR for symmetry with the rest of the
+        // codebase. Razorpay always sends amount as integer paise.
+        const amountPaise   = Number(payment.amount) || 0;
+        const failedAtIso   = payment.created_at
+          ? new Date((payment.created_at as number) * 1000).toISOString()
+          : new Date().toISOString();
+        await supabase.from('audit_logs').insert({
+          fleet_id:      fleetId,
+          action:        'subscription.payment_failed',
+          resource_type: 'subscription',
+          new_values: {
+            payment_id:        payment.id        ?? null,
+            amount_inr:        Math.round(amountPaise / 100),
+            currency:          payment.currency  ?? 'INR',
+            error_code:        payment.error_code        ?? null,
+            error_description: payment.error_description ?? null,
+            error_reason:      payment.error_reason      ?? null,
+            failed_at:         failedAtIso,
+            // Status-after-event is the real signal for downstream readers:
+            // SubscriptionHistoryCard treats this as a critical event,
+            // analytics-api treats it as a "currently dunning" candidate.
+            status:            'suspended',
+          },
+        });
+
         // ── Out-of-app reminder (Phase 1.7.2) ─────────────────────────────
         // Fire a one-shot WhatsApp/email message via the subscription-reminders
         // function. The cron path can't deliver this — payment_suspended
@@ -675,9 +708,9 @@ Deno.serve(async (req: Request) => {
         // The in-app banner from Phase 1.4 always surfaces suspended state
         // visibly inside the dashboard, so a missed out-of-app reminder
         // isn't a hard failure.
-        const cycleAnchor = payment.created_at
-          ? new Date((payment.created_at as number) * 1000).toISOString()
-          : new Date().toISOString();
+        // Reuse the failed_at timestamp we already computed for the audit
+        // row above — same idempotency guarantee, one less Date construction.
+        const cycleAnchor = failedAtIso;
         try {
           const { error: dispatchErr } = await supabase.functions.invoke(
             'subscription-reminders',

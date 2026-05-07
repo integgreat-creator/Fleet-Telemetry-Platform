@@ -38,6 +38,11 @@
  *       mrr_history_by_plan:                 [{day, plan, mrr_inr, paid_active_subs}, ...],
  *       mrr_history_by_plan_materialized_at: ISO timestamp
  *
+ *       // Phase 3.9 — failed payment dunning surface
+ *       failed_payments:      [{audit_id, fleet_id, fleet_name, manager_email,
+ *                               amount_inr, error_code, error_description,
+ *                               failed_at, current_status, days_since_failed}, ...]
+ *
  *       generated_at:         ISO timestamp
  *     }
  *
@@ -89,12 +94,22 @@ Deno.serve(async (req: Request) => {
     // + cashback; 2.3 the cohort curves; 2.4 the MRR history; 2.5 the
     // per-plan MRR history. Folding them all into one response keeps the
     // dashboard a single fetch.
+    // ── Failed-payments lookback (Phase 3.9) ────────────────────────────
+    // Operator dunning view: surface every audit-log entry tagged
+    // subscription.payment_failed in the last 30 days. The webhook writes
+    // these, the dashboard renders them. 30 days matches the cron-driven
+    // grace window before a suspended sub becomes inactive.
+    const FAILED_LOOKBACK_DAYS = 30;
+    const failedSinceIso = new Date(
+      Date.now() - FAILED_LOOKBACK_DAYS * 86_400_000,
+    ).toISOString();
     const [
       globalRes, planRes, dailyRes,
       funnelRes, cashbackRes,
       curvesRes,
       mrrHistoryRes,
       mrrByPlanRes,
+      failedRes,
     ] = await Promise.all([
       supabase.from('analytics_global_mrr').select('*').single(),
       supabase.from('analytics_plan_distribution').select('*'),
@@ -104,6 +119,19 @@ Deno.serve(async (req: Request) => {
       supabase.from('analytics_cohort_retention_curves').select('*'),
       supabase.from('analytics_mrr_history').select('*'),
       supabase.from('analytics_mrr_history_by_plan').select('*'),
+      // Pull failed-payment audit rows + the joined fleet name. We don't
+      // join auth.users here because PostgREST can't traverse the auth
+      // schema via FK select, and we don't join subscriptions in the same
+      // statement either — the chain `audit_logs.fleet_id → fleets.id ←
+      // subscriptions.fleet_id` isn't a single foreign-key edge from the
+      // perspective of audit_logs. Both enrichments happen in cheap
+      // follow-up steps below.
+      supabase.from('audit_logs')
+        .select('id, fleet_id, new_values, created_at, fleets(name, manager_id)')
+        .eq('action', 'subscription.payment_failed')
+        .gte('created_at', failedSinceIso)
+        .order('created_at', { ascending: false })
+        .limit(200),
     ]);
 
     if (globalRes.error)     return json({ error: globalRes.error.message },     500);
@@ -114,6 +142,84 @@ Deno.serve(async (req: Request) => {
     if (curvesRes.error)     return json({ error: curvesRes.error.message },     500);
     if (mrrHistoryRes.error) return json({ error: mrrHistoryRes.error.message }, 500);
     if (mrrByPlanRes.error)  return json({ error: mrrByPlanRes.error.message },  500);
+    if (failedRes.error)     return json({ error: failedRes.error.message },     500);
+
+    // ── Build failed_payments slice ───────────────────────────────────────
+    // Resolve manager_email per row via auth.admin.getUserById. Cache by
+    // user_id so repeat fleets (multiple failures from the same fleet)
+    // don't double-fetch. The lookup is per-row but that's OK for ≤200
+    // rows in 30 days at our scale; if this ever gets hot, swap to a
+    // materialized analytics_failed_payments view that joins through
+    // a server-side function.
+    const emailCache = new Map<string, string | null>();
+    const resolveEmail = async (managerId: string | null): Promise<string | null> => {
+      if (!managerId) return null;
+      if (emailCache.has(managerId)) return emailCache.get(managerId)!;
+      try {
+        const { data: userRes } = await supabase.auth.admin.getUserById(managerId);
+        const email = userRes?.user?.email ?? null;
+        emailCache.set(managerId, email);
+        return email;
+      } catch {
+        emailCache.set(managerId, null);
+        return null;
+      }
+    };
+
+    const nowMs = Date.now();
+    const failedRaw = (failedRes.data ?? []) as unknown as Array<{
+      id:          string;
+      fleet_id:    string | null;
+      new_values:  Record<string, unknown> | null;
+      created_at:  string;
+      // PostgREST returns the joined row as an array when the FK is on the
+      // child side (fleets here is the parent — but the runtime shape can
+      // vary across supabase-js versions). Tolerate both for safety.
+      fleets:      { name: string | null; manager_id: string | null }
+                 | { name: string | null; manager_id: string | null }[]
+                 | null;
+    }>;
+
+    // Fetch current sub status for every distinct fleet that has a recent
+    // failure — one round trip, then look up by fleet_id. Lets the dashboard
+    // distinguish "still suspended" from "recovered after a retry".
+    const distinctFleetIds = Array.from(new Set(
+      failedRaw.map(r => r.fleet_id).filter((x): x is string => !!x),
+    ));
+    const subStatusByFleet = new Map<string, string>();
+    if (distinctFleetIds.length > 0) {
+      const { data: subRows } = await supabase
+        .from('subscriptions')
+        .select('fleet_id, status')
+        .in('fleet_id', distinctFleetIds);
+      for (const r of (subRows ?? []) as Array<{ fleet_id: string; status: string }>) {
+        subStatusByFleet.set(r.fleet_id, r.status);
+      }
+    }
+
+    const failedPayments = await Promise.all(failedRaw.map(async row => {
+      const v = row.new_values ?? {};
+      const fleetEntity = Array.isArray(row.fleets) ? row.fleets[0] ?? null : row.fleets;
+      const subStatus = row.fleet_id ? subStatusByFleet.get(row.fleet_id) ?? null : null;
+      const managerEmail = await resolveEmail(fleetEntity?.manager_id ?? null);
+      const failedAt = String(v.failed_at ?? row.created_at);
+      const daysSince = Math.floor((nowMs - new Date(failedAt).getTime()) / 86_400_000);
+      return {
+        audit_id:           row.id,
+        fleet_id:           row.fleet_id,
+        fleet_name:         fleetEntity?.name ?? null,
+        manager_email:      managerEmail,
+        amount_inr:         Number(v.amount_inr ?? 0),
+        currency:           (v.currency as string)          ?? 'INR',
+        error_code:         (v.error_code as string)        ?? null,
+        error_description:  (v.error_description as string) ?? null,
+        error_reason:       (v.error_reason as string)      ?? null,
+        payment_id:         (v.payment_id as string)        ?? null,
+        failed_at:          failedAt,
+        current_status:     subStatus,
+        days_since_failed:  Math.max(0, daysSince),
+      };
+    }));
 
     return json({
       // ── Global topline (Phase 2.1) ──────────────────────────────────────
@@ -205,6 +311,12 @@ Deno.serve(async (req: Request) => {
         pending_inr:     Number(cashbackRes.data?.pending_inr     ?? 0),
         redemption_pct:  Number(cashbackRes.data?.redemption_pct  ?? 0),
       },
+
+      // ── Failed payments (Phase 3.9) ─────────────────────────────────────
+      // Last 30 days of payment.failed audit rows enriched with fleet name,
+      // manager email, current subscription status, and days_since_failed.
+      // Sorted newest-first so the dashboard table doesn't have to.
+      failed_payments: failedPayments,
 
       // Stamp the response so the dashboard can show "as of X" — these
       // views are computed live, so it's effectively the wall-clock at
