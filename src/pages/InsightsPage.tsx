@@ -70,6 +70,21 @@ interface CashbackRoi {
   redemption_pct:  number;
 }
 
+/// One row of the acquisition-source rollup. Phase 4.2.
+/// Cardinality is bounded by the closed enum (7 buckets). The view
+/// returns rows ordered by mrr_inr DESC so the dashboard renders top
+/// revenue sources first. `paid_conversion_pct` is rounded server-side;
+/// treat it as a display value, not a computation input.
+interface AcquisitionRow {
+  acquisition_source:   string;
+  total_fleets:         number;
+  trial_count:          number;
+  paid_active_count:    number;
+  churned_count:        number;
+  mrr_inr:              number;
+  paid_conversion_pct:  number;
+}
+
 /// One row of the lapsed-trial re-engagement surface. Phase 3.11.
 /// "Lapsed" = trial expired without ever converting (current_period_start
 /// IS NULL on the underlying sub). Engagement signals help ops triage:
@@ -169,6 +184,9 @@ interface SummaryResponse {
   /// Phase 3.11 — fleets whose trial lapsed without conversion in the
   /// last 30 days. Re-engagement candidates for ops outreach.
   lapsed_trials:               LapsedTrialRow[];
+  /// Phase 4.2 — per-source rollup: how MRR + conversion split across
+  /// acquisition channels. One row per acquisition_source bucket.
+  acquisition_breakdown:       AcquisitionRow[];
   generated_at:                string;
 }
 
@@ -521,6 +539,16 @@ function InsightsBody() {
         rows={data.mrr_history_by_plan}
         generatedAt={data.generated_at}
         materializedAt={data.mrr_history_by_plan_materialized_at}
+      />
+
+      {/* ── Acquisition breakdown (Phase 4.2) ─────────────────────────── */}
+      {/* Where customers come from: per-source fleet counts + MRR
+          contribution + paid-conversion rate. Sits adjacent to the per-
+          plan composition because both answer "what's in our MRR" —
+          one decomposes by tier, the other by channel. */}
+      <AcquisitionBreakdownSection
+        rows={data.acquisition_breakdown}
+        generatedAt={data.generated_at}
       />
 
       {/* Plan distribution */}
@@ -1310,6 +1338,145 @@ function CohortHeatmapSection({
 /// Tiles + a small breakdown for the cashback program. Redemption rate is
 /// INR-weighted (not count-weighted) because cashback amounts vary by plan
 /// — a count rate would treat a ₹30 grant the same as a ₹500 one.
+// ─── Acquisition breakdown section (Phase 4.2) ─────────────────────────────
+
+/// Display labels for the acquisition_source enum buckets. Kept here
+/// (not in i18n) because the operator dashboard is English-only by design
+/// — its audience is one or two ops users, not the customer base.
+const ACQUISITION_LABELS: Record<string, string> = {
+  organic:      'Organic',
+  referral:     'Referral',
+  paid_search:  'Paid search',
+  paid_social:  'Paid social',
+  partner:      'Partner',
+  direct:       'Direct',
+  other:        'Other',
+};
+
+/// Per-bucket bar tints. Same hue rationale as the cancellation-reasons
+/// section: the buckets aren't ordinal (paid_social isn't "more severe"
+/// than referral), so a single colour ramp would mislead. Distinct hues
+/// make the row legible at a glance.
+const ACQUISITION_COLOR: Record<string, string> = {
+  organic:      'bg-emerald-500',
+  referral:     'bg-violet-500',
+  paid_search:  'bg-amber-500',
+  paid_social:  'bg-pink-500',
+  partner:      'bg-cyan-500',
+  direct:       'bg-gray-500',
+  other:        'bg-gray-600',
+};
+
+function acquisitionLabel(key: string): string {
+  return ACQUISITION_LABELS[key] ?? key.replace(/_/g, ' ');
+}
+
+function AcquisitionBreakdownSection({
+  rows,
+  generatedAt,
+}: {
+  rows:        AcquisitionRow[];
+  generatedAt: string;
+}) {
+  // Hide entirely when there are no fleets at all (genuinely-fresh
+  // install). At minimum the migration backfilled everyone to 'direct',
+  // so a non-empty database always has at least one row here.
+  if (rows.length === 0) return null;
+
+  const totalMrr     = rows.reduce((s, r) => s + r.mrr_inr,           0);
+  const totalActive  = rows.reduce((s, r) => s + r.paid_active_count, 0);
+  const totalFleets  = rows.reduce((s, r) => s + r.total_fleets,      0);
+
+  const csv = toCsv(
+    rows.map(r => ({
+      source:               acquisitionLabel(r.acquisition_source),
+      total_fleets:         r.total_fleets,
+      trial_count:          r.trial_count,
+      paid_active_count:    r.paid_active_count,
+      churned_count:        r.churned_count,
+      mrr_inr:              r.mrr_inr,
+      paid_conversion_pct:  r.paid_conversion_pct,
+    })),
+    ['source', 'total_fleets', 'trial_count', 'paid_active_count',
+     'churned_count', 'mrr_inr', 'paid_conversion_pct'],
+  );
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Acquisition breakdown</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {totalFleets} fleets · {totalActive} paid · {formatInr(totalMrr)} MRR
+          </p>
+        </div>
+        <CsvButton
+          csv={csv}
+          filename={`acquisition-breakdown-${dateStampForCsv(generatedAt)}.csv`}
+        />
+      </div>
+
+      {/* Stacked horizontal bar weighted by MRR. Trials/churns don't
+          appear here — the bar answers "where is current revenue
+          coming from", not "where do signups come from". The table
+          below carries the full counts. */}
+      {totalMrr > 0 && (
+        <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-800 mb-4">
+          {rows.filter(r => r.mrr_inr > 0).map(r => {
+            const pctOfMrr = (r.mrr_inr / totalMrr) * 100;
+            return (
+              <div
+                key={r.acquisition_source}
+                className={ACQUISITION_COLOR[r.acquisition_source] ?? 'bg-gray-500'}
+                style={{ width: `${pctOfMrr}%` }}
+                title={`${acquisitionLabel(r.acquisition_source)}: ${formatInr(r.mrr_inr)} (${pctOfMrr.toFixed(1)}% of MRR)`}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      <div className="overflow-x-auto -mx-5 px-5">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+              <th className="font-medium pb-2 pr-3">Source</th>
+              <th className="font-medium pb-2 pr-3 text-right">Trial</th>
+              <th className="font-medium pb-2 pr-3 text-right">Paid</th>
+              <th className="font-medium pb-2 pr-3 text-right">Churned</th>
+              <th className="font-medium pb-2 pr-3 text-right">MRR</th>
+              <th className="font-medium pb-2 text-right">Paid %</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800">
+            {rows.map(r => (
+              <tr key={r.acquisition_source}>
+                <td className="py-2.5 pr-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${ACQUISITION_COLOR[r.acquisition_source] ?? 'bg-gray-500'}`}
+                    />
+                    <span className="text-gray-200">{acquisitionLabel(r.acquisition_source)}</span>
+                  </div>
+                </td>
+                <td className="py-2.5 pr-3 text-right text-gray-400 tabular-nums">{r.trial_count}</td>
+                <td className="py-2.5 pr-3 text-right text-white tabular-nums font-medium">{r.paid_active_count}</td>
+                <td className="py-2.5 pr-3 text-right text-gray-500 tabular-nums">{r.churned_count}</td>
+                <td className="py-2.5 pr-3 text-right text-gray-200 tabular-nums font-mono">
+                  {formatInr(r.mrr_inr)}
+                </td>
+                <td className="py-2.5 text-right text-gray-300 tabular-nums">
+                  {r.total_fleets > 0 ? `${r.paid_conversion_pct.toFixed(1)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
   const noActivity = roi.granted_count === 0;
 
