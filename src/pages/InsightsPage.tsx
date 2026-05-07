@@ -85,6 +85,32 @@ interface AcquisitionRow {
   paid_conversion_pct:  number;
 }
 
+/// Referral program ROI single-row aggregate. Phase 4.8. Mirror of
+/// CashbackRoi's shape so the operator dashboard's two ROI sections feel
+/// consistent. `redemption_pct` is INR-weighted server-side.
+interface ReferralProgramRoi {
+  total_referrals: number;
+  granted_inr:     number;
+  redeemed_count:  number;
+  redeemed_inr:    number;
+  expired_count:   number;
+  expired_inr:     number;
+  pending_count:   number;
+  pending_inr:     number;
+  redemption_pct:  number;
+}
+
+/// One row of the top-referrers leaderboard. Phase 4.8.
+interface TopReferrerRow {
+  fleet_id:           string;
+  fleet_name:         string | null;
+  referral_count:     number;
+  total_credited_inr: number;
+  redeemed_count:     number;
+  expired_count:      number;
+  last_referral_at:   string;
+}
+
 /// One row of the lapsed-trial re-engagement surface. Phase 3.11.
 /// "Lapsed" = trial expired without ever converting (current_period_start
 /// IS NULL on the underlying sub). Engagement signals help ops triage:
@@ -187,6 +213,11 @@ interface SummaryResponse {
   /// Phase 4.2 — per-source rollup: how MRR + conversion split across
   /// acquisition channels. One row per acquisition_source bucket.
   acquisition_breakdown:       AcquisitionRow[];
+  /// Phase 4.8 — referral program ROI aggregate + top-referrers list.
+  /// Empty/zero-valued for fresh installs; the dashboard hides the
+  /// section when total_referrals = 0.
+  referral_program_roi:        ReferralProgramRoi;
+  top_referrers:               TopReferrerRow[];
   generated_at:                string;
 }
 
@@ -700,6 +731,18 @@ function InsightsBody() {
 
       {/* ── Cashback ROI (Phase 2.2) ─────────────────────────────────────── */}
       <CashbackRoiSection roi={data.cashback_roi} />
+
+      {/* ── Referral program ROI + top referrers (Phase 4.8) ─────────────── */}
+      {/* Sits next to cashback ROI because both are program-payout
+          surfaces — granted vs redeemed vs expired with the same
+          INR-weighted redemption_pct convention. Hidden when
+          total_referrals == 0 so a freshly-launched program shows
+          nothing rather than an empty card. */}
+      <ReferralProgramSection
+        roi={data.referral_program_roi}
+        topReferrers={data.top_referrers}
+        generatedAt={data.generated_at}
+      />
 
       {/* ── Cancellation reasons (Phase 3.10) ─────────────────────────────── */}
       {/* Why customers leave. Bucket bars + recent free-text comments.
@@ -1548,6 +1591,170 @@ function CashbackRoiSection({ roi }: { roi: CashbackRoi }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Referral program section (Phase 4.8) ─────────────────────────────────
+
+/// Operator-facing referral program rollup. Three pieces:
+///   - Top tile row: granted / redeemed / pending / expired INR
+///   - Stacked horizontal bar showing the INR distribution at a glance
+///   - Top-referrers leaderboard (max 20 rows by view limit)
+///
+/// Hidden entirely when total_referrals === 0 — the empty state for a
+/// freshly-launched program is "no data to show" rather than a placeholder.
+/// Once the program has any successful conversions, this card is the
+/// primary read for "is the referral program paying off."
+function ReferralProgramSection({
+  roi,
+  topReferrers,
+  generatedAt,
+}: {
+  roi:          ReferralProgramRoi;
+  topReferrers: TopReferrerRow[];
+  generatedAt:  string;
+}) {
+  if (roi.total_referrals === 0) return null;
+
+  const csv = toCsv(
+    topReferrers.map(r => ({
+      fleet:               r.fleet_name ?? r.fleet_id,
+      fleet_id:            r.fleet_id,
+      referral_count:      r.referral_count,
+      total_credited_inr:  r.total_credited_inr,
+      redeemed_count:      r.redeemed_count,
+      expired_count:       r.expired_count,
+      last_referral_at:    r.last_referral_at,
+    })),
+    ['fleet', 'fleet_id', 'referral_count', 'total_credited_inr',
+     'redeemed_count', 'expired_count', 'last_referral_at'],
+  );
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Referral program</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {roi.total_referrals} {roi.total_referrals === 1 ? 'referral' : 'referrals'}
+            {' · '}
+            {roi.redemption_pct.toFixed(1)}% redemption (INR-weighted)
+          </p>
+        </div>
+        <CsvButton
+          csv={csv}
+          filename={`top-referrers-${dateStampForCsv(generatedAt)}.csv`}
+          disabled={topReferrers.length === 0}
+        />
+      </div>
+
+      {/* ── Tiles ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <RoiTile label="Granted"  value={formatInr(roi.granted_inr)}  hint={`${roi.total_referrals} grants`} />
+        <RoiTile label="Redeemed" value={formatInr(roi.redeemed_inr)} hint={`${roi.redeemed_count} redeemed`} accent="positive" />
+        <RoiTile label="Pending"  value={formatInr(roi.pending_inr)}  hint={`${roi.pending_count} pending`} />
+        <RoiTile label="Expired"  value={formatInr(roi.expired_inr)}  hint={`${roi.expired_count} expired`} accent="muted" />
+      </div>
+
+      {/* ── INR-weighted distribution bar ─────────────────────────────── */}
+      {roi.granted_inr > 0 && (
+        <div className="mt-4">
+          <div className="flex h-2 rounded-full overflow-hidden bg-gray-800">
+            {(() => {
+              const seg = (val: number) => `${(val / roi.granted_inr) * 100}%`;
+              return (
+                <>
+                  <div className="bg-emerald-500" style={{ width: seg(roi.redeemed_inr) }} />
+                  <div className="bg-blue-500"    style={{ width: seg(roi.pending_inr)  }} />
+                  <div className="bg-gray-600"    style={{ width: seg(roi.expired_inr)  }} />
+                </>
+              );
+            })()}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-gray-500">
+            <span><span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1" />Redeemed</span>
+            <span><span className="inline-block w-2 h-2 rounded-full bg-blue-500 mr-1"    />Pending</span>
+            <span><span className="inline-block w-2 h-2 rounded-full bg-gray-600 mr-1"    />Expired</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top referrers leaderboard ─────────────────────────────────── */}
+      {topReferrers.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-gray-800">
+          <h3 className="text-[11px] uppercase tracking-wide text-gray-500 font-medium mb-3">
+            Top referrers
+          </h3>
+          <div className="overflow-x-auto -mx-5 px-5">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+                  <th className="font-medium pb-2 pr-3">Fleet</th>
+                  <th className="font-medium pb-2 pr-3 text-right">Referrals</th>
+                  <th className="font-medium pb-2 pr-3 text-right">Earned</th>
+                  <th className="font-medium pb-2 pr-3 text-right">Redeemed</th>
+                  <th className="font-medium pb-2 pr-3 text-right">Expired</th>
+                  <th className="font-medium pb-2">Last</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-800">
+                {topReferrers.map(r => (
+                  <tr key={r.fleet_id}>
+                    <td className="py-2.5 pr-3 text-gray-200">
+                      {r.fleet_name || (
+                        <span className="text-gray-500 font-mono text-xs">{r.fleet_id}</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-white tabular-nums font-medium">
+                      {r.referral_count}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-gray-200 tabular-nums font-mono">
+                      {formatInr(r.total_credited_inr)}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-emerald-400 tabular-nums">
+                      {r.redeemed_count}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right text-gray-500 tabular-nums">
+                      {r.expired_count}
+                    </td>
+                    <td className="py-2.5 text-gray-400 whitespace-nowrap">
+                      {formatDayShort(r.last_referral_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// Tiny ROI tile used by the referral section. Kept local so the public
+/// Tile component (which has the MoM-delta machinery) doesn't grow more
+/// optional knobs for a single-section use case.
+function RoiTile({
+  label,
+  value,
+  hint,
+  accent,
+}: {
+  label:   string;
+  value:   string;
+  hint?:   string;
+  accent?: 'positive' | 'muted';
+}) {
+  const valueClass =
+    accent === 'positive' ? 'text-emerald-300' :
+    accent === 'muted'    ? 'text-gray-400'    :
+                            'text-white';
+  return (
+    <div className="bg-gray-800/60 border border-gray-700/40 rounded-lg p-3">
+      <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">{label}</p>
+      <p className={`text-lg font-bold tabular-nums mt-0.5 ${valueClass}`}>{value}</p>
+      {hint && <p className="text-[10px] text-gray-500 mt-0.5">{hint}</p>}
     </div>
   );
 }
