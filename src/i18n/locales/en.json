@@ -201,6 +201,15 @@
       "bodyCountdown_other": "Annual billing unlocks in {{count}} days ({{date}}). Save {{pct}}% per year when you switch.",
       "bodyPending": "Annual billing unlocks on your next monthly renewal. Save {{pct}}% per year when you switch."
     },
+    "annualTeaser": {
+      "heading": "Save {{amount}}/year on annual billing",
+      "body": "You've unlocked annual pricing — switch now to lock in {{pct}}% off your current plan. Same plan, same vehicles, lower total.",
+      "labelMonthlyYear": "Monthly × 12",
+      "labelAnnualToday": "Annual today",
+      "cta": "Switch to annual",
+      "dismissTitle": "Hide for 2 weeks",
+      "dismissAria": "Dismiss annual upgrade teaser"
+    },
     "auth": {
       "appName": "FTPGo",
       "tagline": "Smart fleet management platform",
